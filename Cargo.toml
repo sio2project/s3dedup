@@ -1,0 +1,9 @@
+[package]
+name = "s3dedup"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+postgres = "0.19.10"
+rusqlite = { version = "0.34.0", features = ["bundled"] }
+redis = "0.29.1"
