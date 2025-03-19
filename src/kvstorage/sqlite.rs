@@ -1,7 +1,9 @@
 use rusqlite::{params, Connection};
+use serde::Deserialize;
 use crate::config::Config;
 use crate::kvstorage::KVStorage;
 
+#[derive(Debug, Clone, Deserialize)]
 pub struct SQLiteConfig {
     pub path: String,
 }
@@ -11,11 +13,12 @@ pub struct SQLite {
 }
 
 impl KVStorage for SQLite {
-    fn new(config: &Config) -> Result<Self, Box<dyn std::error::Error>> {
-        let conn = Connection::open(config.sqlite.path.as_str())?;
-        Ok(SQLite {
+    fn new(config: &Config) -> Result<Box<Self>, Box<dyn std::error::Error>> {
+        let sqlite_config = config.sqlite.as_ref().unwrap();
+        let conn = Connection::open(sqlite_config.path.as_str())?;
+        Ok(Box::new(SQLite {
             conn,
-        })
+        }))
     }
 
     fn setup(&mut self) -> Result<(), Box<dyn std::error::Error>> {

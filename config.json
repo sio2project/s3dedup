@@ -1,0 +1,7 @@
+{
+  "kvstorage_type": "sqlite",
+  "sqlite": {
+    "path": "sqlite.db"
+  },
+  "locks_type": "memory"
+}

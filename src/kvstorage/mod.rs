@@ -1,12 +1,23 @@
 use std::error::Error;
+use serde::Deserialize;
 use crate::config::Config;
 
 pub mod postgres;
 pub mod sqlite;
-pub mod redis;
 
-trait KVStorage: Sized {
-    fn new(config: &Config) -> Result<Self, Box<dyn Error>>;
+#[derive(Debug, Deserialize, Clone)]
+pub enum KVStorageType {
+    #[serde(rename = "postgres")]
+    Postgres,
+    #[serde(rename = "sqlite")]
+    SQLite,
+}
+
+pub(crate) trait KVStorage {
+    fn new(config: &Config) -> Result<Box<Self>, Box<dyn Error>>
+    where
+        Self: Sized;
+
     fn setup(&mut self) -> Result<(), Box<dyn Error>>;
     fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn Error>>;
     fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<(), Box<dyn Error>>;

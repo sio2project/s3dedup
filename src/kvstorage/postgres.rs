@@ -1,8 +1,10 @@
 use postgres::{Client};
 use std::error::Error;
+use serde::Deserialize;
 use crate::config::Config;
 use crate::kvstorage::KVStorage;
 
+#[derive(Debug, Clone, Deserialize)]
 pub struct PostgresConfig {
     pub host: String,
     pub port: u16,
@@ -16,21 +18,22 @@ pub struct Postgres {
 }
 
 impl KVStorage for Postgres {
-    fn new(config: &Config) -> Result<Self, Box<dyn Error>> {
+    fn new(config: &Config) -> Result<Box<Self>, Box<dyn Error>> {
+        let pg_config = config.postgres.as_ref().unwrap();
         let conn = Client::connect(
             format!(
                 "host={} port={} user={} password={} dbname={}",
-                config.postgres.host,
-                config.postgres.port,
-                config.postgres.user,
-                config.postgres.password,
-                config.postgres.dbname
+                pg_config.host,
+                pg_config.port,
+                pg_config.user,
+                pg_config.password,
+                pg_config.dbname
             ).as_str(),
             postgres::NoTls
         )?;
-        Ok(Postgres {
+        Ok(Box::new(Postgres {
             conn,
-        })
+        }))
     }
     fn setup(&mut self) -> Result<(), Box<dyn Error>> {
         self.conn.batch_execute(
