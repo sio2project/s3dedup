@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::error::Error;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, RwLock};
 use crate::locks::Locks;
 
 type LockMap = Arc<RwLock<HashMap<String, Arc<RwLock<()>>>>>;
+#[derive(Clone)]
 pub(crate) struct MemoryLocks {
     locks: LockMap,
 }

@@ -1,28 +1,32 @@
-use rusqlite::{params, Connection};
 use serde::Deserialize;
+use sqlx::SqlitePool;
 use crate::config::Config;
-use crate::kvstorage::KVStorage;
+use crate::kvstorage::KVStorageTrait;
+use crate::kvstorage::pooled::{RowModified, RowRefFile, RowRefcount};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SQLiteConfig {
     pub path: String,
+    pub pool_size: u32,
 }
 
+#[derive(Clone)]
 pub struct SQLite {
-    conn: Connection,
+    pool: SqlitePool,
 }
 
-impl KVStorage for SQLite {
-    fn new(config: &Config) -> Result<Box<Self>, Box<dyn std::error::Error>> {
+impl KVStorageTrait for SQLite {
+    async fn new(config: &Config) -> Result<Box<Self>, Box<dyn std::error::Error>> {
         let sqlite_config = config.sqlite.as_ref().unwrap();
-        let conn = Connection::open(sqlite_config.path.as_str())?;
+        let db_url = format!("sqlite://{}", sqlite_config.path);
+        let pool = SqlitePool::connect(&db_url).await?;
         Ok(Box::new(SQLite {
-            conn,
+            pool,
         }))
     }
 
-    fn setup(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.conn.execute_batch(
+    async fn setup(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query(
             "CREATE TABLE IF NOT EXISTS refcount (
                 bucket TEXT NOT NULL,
                 hash TEXT NOT NULL,
@@ -41,62 +45,87 @@ impl KVStorage for SQLite {
                 hash TEXT NOT NULL,
                 PRIMARY KEY (bucket, path)
             );"
-        )?;
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
-    fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn std::error::Error>> {
-        let mut stmt = self.conn.prepare("SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2")?;
-        let mut rows = stmt.query(params![&bucket, &hash])?;
-        if let Some(row) = rows.next()? {
-            Ok(row.get(0)?)
-        } else {
-            Ok(0)
-        }
+    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn std::error::Error>> {
+        sqlx::query_as("SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2")
+            .bind(bucket)
+            .bind(hash)
+            .fetch_one(&self.pool)
+            .await
+            .map(|row: RowRefcount| row.refcount)
+            .or(Ok(0))
     }
 
-    fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<(), Box<dyn std::error::Error>> {
-        self.conn.execute("INSERT OR REPLACE INTO refcount (bucket, hash, refcount) VALUES (?1, ?2, ?3)", params![&bucket, &hash, &ref_cnt])?;
+    async fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query("INSERT OR REPLACE INTO refcount (bucket, hash, refcount) VALUES (?1, ?2, ?3)")
+            .bind(bucket)
+            .bind(hash)
+            .bind(ref_cnt)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn std::error::Error>> {
-        let mut stmt = self.conn.prepare("SELECT modified FROM modified WHERE bucket = ?1 AND path = ?2")?;
-        let mut rows = stmt.query(params![&bucket, &path])?;
-        if let Some(row) = rows.next()? {
-            Ok(row.get(0)?)
-        } else {
-            Ok(0)
-        }
+    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn std::error::Error>> {
+        sqlx::query_as("SELECT modified FROM modified WHERE bucket = ?1 AND path = ?2")
+            .bind(bucket)
+            .bind(path)
+            .fetch_one(&self.pool)
+            .await
+            .map(|row: RowModified| row.modified)
+            .or(Ok(0))
     }
 
-    fn set_modified(&mut self, bucket: &str, path: &str, modified: i64) -> Result<(), Box<dyn std::error::Error>> {
-        self.conn.execute("INSERT OR REPLACE INTO modified (bucket, path, modified) VALUES (?1, ?2, ?3)", params![&bucket, &path, &modified])?;
+    async fn set_modified(&mut self, bucket: &str, path: &str, modified: i64) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query("INSERT OR REPLACE INTO modified (bucket, path, modified) VALUES (?1, ?2, ?3)")
+            .bind(bucket)
+            .bind(path)
+            .bind(modified)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.conn.execute("DELETE FROM modified WHERE bucket = ?1 AND path = ?2", params![&bucket, &path])?;
+    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query("DELETE FROM modified WHERE bucket = ?1 AND path = ?2")
+            .bind(bucket)
+            .bind(path)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String, Box<dyn std::error::Error>> {
-        let mut stmt = self.conn.prepare("SELECT hash FROM ref_file WHERE bucket = ?1 AND path = ?2")?;
-        let mut rows = stmt.query(params![&bucket, &path])?;
-        if let Some(row) = rows.next()? {
-            Ok(row.get(0)?)
-        } else {
-            Ok("".to_string())
-        }
+    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String, Box<dyn std::error::Error>> {
+        sqlx::query_as("SELECT hash FROM ref_file WHERE bucket = ?1 AND path = ?2")
+            .bind(bucket)
+            .bind(path)
+            .fetch_one(&self.pool)
+            .await
+            .map(|row: RowRefFile| row.hash)
+            .or(Ok("".to_string()))
     }
 
-    fn set_ref_file(&mut self, bucket: &str, path: &str, hash: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.conn.execute("INSERT OR REPLACE INTO ref_file (bucket, path, hash) VALUES (?1, ?2, ?3)", params![&bucket, &path, &hash])?;
+    async fn set_ref_file(&mut self, bucket: &str, path: &str, hash: &str) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query("INSERT OR REPLACE INTO ref_file (bucket, path, hash) VALUES (?1, ?2, ?3)")
+            .bind(bucket)
+            .bind(path)
+            .bind(hash)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.conn.execute("DELETE FROM ref_file WHERE bucket = ?1 AND path = ?2", params![&bucket, &path])?;
+    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query("DELETE FROM ref_file WHERE bucket = ?1 AND path = ?2")
+            .bind(bucket)
+            .bind(path)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 }
