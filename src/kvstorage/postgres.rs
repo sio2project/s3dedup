@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::BucketConfig;
 use crate::kvstorage::KVStorageTrait;
 use crate::kvstorage::pooled::{RowModified, RowRefFile, RowRefcount};
 use serde::Deserialize;
@@ -23,7 +23,7 @@ pub struct Postgres {
 }
 
 impl KVStorageTrait for Postgres {
-    async fn new(config: &Config) -> Result<Box<Self>, Box<dyn Error>> {
+    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn Error>> {
         let pg_config = config.postgres.as_ref().unwrap();
         let db_url = format!(
             "postgres://{}:{}@{}:{}/{}",

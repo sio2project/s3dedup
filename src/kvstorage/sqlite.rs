@@ -1,5 +1,5 @@
 use std::path::Path;
-use crate::config::Config;
+use crate::config::BucketConfig;
 use crate::kvstorage::KVStorageTrait;
 use crate::kvstorage::pooled::{RowModified, RowRefFile, RowRefcount};
 use serde::Deserialize;
@@ -19,7 +19,7 @@ pub struct SQLite {
 }
 
 impl KVStorageTrait for SQLite {
-    async fn new(config: &Config) -> Result<Box<Self>, Box<dyn std::error::Error>> {
+    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn std::error::Error>> {
         let sqlite_config = config.sqlite.as_ref().unwrap();
 
         if !Path::new(&sqlite_config.path).exists() {

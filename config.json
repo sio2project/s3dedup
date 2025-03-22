@@ -3,10 +3,17 @@
     "level": "debug",
     "json": false
   },
-  "kvstorage_type": "sqlite",
-  "sqlite": {
-    "path": "kv.db",
-    "pool_size": 10
-  },
-  "locks_type": "memory"
+  "buckets": [
+    {
+      "name": "bucket1",
+      "address": "0.0.0.0",
+      "port": 3000,
+      "kvstorage_type": "sqlite",
+      "sqlite": {
+        "path": "kv.db",
+        "pool_size": 10
+      },
+      "locks_type": "memory"
+    }
+  ]
 }

@@ -3,6 +3,14 @@ use tracing::{debug, info};
 
 pub mod memory;
 
+pub(crate) fn file_lock(bucket: &str, path: &str) -> String {
+    format!("file:{}:{}", bucket, path)
+}
+
+fn hash_lock(bucket: &str, hash: &str) -> String {
+    format!("hash:{}:{}", bucket, hash)
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) enum LocksType {
     #[serde(rename = "memory")]

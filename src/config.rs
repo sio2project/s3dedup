@@ -8,6 +8,14 @@ use crate::logging::LoggingConfig;
 #[derive(Debug, serde::Deserialize, Clone)]
 pub struct Config {
     pub logging: LoggingConfig,
+    pub buckets: Vec<BucketConfig>,
+}
+
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct BucketConfig {
+    pub name: String,
+    pub address: String,
+    pub port: u16,
 
     pub kvstorage_type: KVStorageType,
 
