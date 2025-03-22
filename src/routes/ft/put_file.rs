@@ -15,6 +15,7 @@ pub async fn ft_put_file(
 ) -> impl IntoResponse {
     debug!("timestamp: {}", query.last_modified);
     let timestamp = utils::conv_rfc2822_to_unix_timestamp(&query.last_modified);
+
     if let Err(e) = timestamp {
         error!("Failed to parse last_modified: {}", e);
         return Response::builder()
@@ -37,6 +38,7 @@ pub async fn ft_put_file(
     }
     let current_modified = current_modified.unwrap();
 
+    // If the uploaded file is younger than the current one, return 200 OK
     if current_modified >= timestamp {
         state.locks.release(&*locks::file_lock(&state.bucket_name, &path));
         return Response::builder()

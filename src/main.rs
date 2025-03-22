@@ -55,7 +55,7 @@ async fn main() {
         let app = Router::new()
             .route("/ft/version", get(ft_version))
             .route("/ft/files/{path}", put(ft_put_file))
-            .layer(
+            .layer( // Logging middleware
                 TraceLayer::new_for_http()
                     .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                     .on_response(DefaultOnResponse::new().level(Level::INFO)),

@@ -43,6 +43,9 @@ pub(crate) trait KVStorageTrait {
         hash: &str,
     ) -> Result<(), Box<dyn Error>> {
         let cnt = self.get_ref_count(bucket, hash).await?;
+        if cnt == 0 {
+            return Ok(());
+        }
         self.set_ref_count(bucket, hash, cnt - 1).await
     }
 
@@ -87,6 +90,9 @@ impl KVStorage {
         }
     }
 
+    /**
+     * Setup the KV storage.
+     */
     pub async fn setup(&mut self) -> Result<(), Box<dyn Error>> {
         match self {
             KVStorage::Postgres(storage) => storage.setup().await,
@@ -94,6 +100,10 @@ impl KVStorage {
         }
     }
 
+    /**
+     * Get the reference count for a hash.
+     * If the hash does not exist, return 0.
+     */
     pub async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn Error>> {
         debug!("Getting ref count for bucket: {}, hash: {}", bucket, hash);
         match self {
@@ -102,6 +112,9 @@ impl KVStorage {
         }
     }
 
+    /**
+     * Set the reference count for a hash.
+     */
     pub async fn set_ref_count(
         &mut self,
         bucket: &str,
@@ -118,6 +131,9 @@ impl KVStorage {
         }
     }
 
+    /**
+     * Increment the reference count for a hash.
+     */
     pub async fn increment_ref_count(
         &mut self,
         bucket: &str,
@@ -130,6 +146,10 @@ impl KVStorage {
         }
     }
 
+    /**
+     * Decrement the reference count for a hash.
+     * If the reference count is already 0, do nothing.
+     */
     pub async fn decrement_ref_count(
         &mut self,
         bucket: &str,
@@ -142,6 +162,10 @@ impl KVStorage {
         }
     }
 
+    /**
+     * Get the modified time for a path.
+     * If the path does not exist, return 0.
+     */
     pub async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn Error>> {
         debug!("Getting modified time for bucket: {}, path: {}", bucket, path);
         match self {
@@ -150,6 +174,9 @@ impl KVStorage {
         }
     }
 
+    /**
+     * Set the modified time for a path.
+     */
     pub async fn set_modified(
         &mut self,
         bucket: &str,
@@ -166,6 +193,9 @@ impl KVStorage {
         }
     }
 
+    /**
+     * Delete the modified time for a path.
+     */
     pub async fn delete_modified(
         &mut self,
         bucket: &str,
@@ -178,6 +208,10 @@ impl KVStorage {
         }
     }
 
+    /**
+     * Get the reference file for a path.
+     * If the path does not exist, return an empty string.
+     */
     pub async fn get_ref_file(
         &mut self,
         bucket: &str,
@@ -190,6 +224,9 @@ impl KVStorage {
         }
     }
 
+    /**
+     * Set the reference file for a path.
+     */
     pub async fn set_ref_file(
         &mut self,
         bucket: &str,
@@ -206,6 +243,9 @@ impl KVStorage {
         }
     }
 
+    /**
+     * Delete the reference file for a path.
+     */
     pub async fn delete_ref_file(
         &mut self,
         bucket: &str,

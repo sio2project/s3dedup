@@ -3,10 +3,16 @@ use tracing::{debug, info};
 
 pub mod memory;
 
+/**
+ * Get key for lock on file
+ */
 pub(crate) fn file_lock(bucket: &str, path: &str) -> String {
     format!("file:{}:{}", bucket, path)
 }
 
+/**
+ * Get key for lock on hash
+ */
 fn hash_lock(bucket: &str, hash: &str) -> String {
     format!("hash:{}:{}", bucket, hash)
 }
@@ -42,6 +48,9 @@ impl LocksStorage {
         }
     }
 
+    /**
+     * Acquire shared lock for key
+     */
     pub fn acquire_shared(&mut self, key: &str) {
         debug!("Acquiring shared lock for key: {}", key);
         match self {
@@ -51,6 +60,9 @@ impl LocksStorage {
         }
     }
 
+    /**
+     * Acquire exclusive lock for key
+     */
     pub fn acquire_exclusive(&mut self, key: &str) {
         debug!("Acquiring exclusive lock for key: {}", key);
         match self {
@@ -60,6 +72,9 @@ impl LocksStorage {
         }
     }
 
+    /**
+     * Release lock for key
+     */
     pub fn release(&mut self, key: &str) -> bool {
         debug!("Releasing lock for key: {}", key);
         match self {
