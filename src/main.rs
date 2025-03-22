@@ -1,5 +1,5 @@
-use crate::kvstorage::{KVStorage, KVStorageTrait};
-use crate::locks::{Locks, LocksStorage};
+use crate::kvstorage::KVStorage;
+use crate::locks::LocksStorage;
 use axum::Router;
 use axum::routing::put;
 use routes::ft::put_file::ft_put_file;
