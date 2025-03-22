@@ -1,7 +1,11 @@
 {
+  "logging": {
+    "level": "debug",
+    "json": false
+  },
   "kvstorage_type": "sqlite",
   "sqlite": {
-    "path": "sqlite.db",
+    "path": "kv.db",
     "pool_size": 10
   },
   "locks_type": "memory"

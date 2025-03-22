@@ -1,8 +1,11 @@
+use std::path::Path;
 use crate::config::Config;
 use crate::kvstorage::KVStorageTrait;
 use crate::kvstorage::pooled::{RowModified, RowRefFile, RowRefcount};
 use serde::Deserialize;
 use sqlx::SqlitePool;
+use tracing::debug;
+use tracing::field::debug;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SQLiteConfig {
@@ -18,7 +21,13 @@ pub struct SQLite {
 impl KVStorageTrait for SQLite {
     async fn new(config: &Config) -> Result<Box<Self>, Box<dyn std::error::Error>> {
         let sqlite_config = config.sqlite.as_ref().unwrap();
+
+        if !Path::new(&sqlite_config.path).exists() {
+            std::fs::File::create(&sqlite_config.path)?;
+        }
+
         let db_url = format!("sqlite://{}", sqlite_config.path);
+        debug!("Connecting to SQLite database: {}", db_url);
         let pool = SqlitePool::connect(&db_url).await?;
         Ok(Box::new(SQLite { pool }))
     }

@@ -5,6 +5,7 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 use std::error::Error;
+use tracing::debug;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PostgresConfig {
@@ -28,6 +29,7 @@ impl KVStorageTrait for Postgres {
             "postgres://{}:{}@{}:{}/{}",
             pg_config.user, pg_config.password, pg_config.host, pg_config.port, pg_config.dbname
         );
+        debug!("Connecting to Postgres database: {}", db_url);
         let pool = PgPoolOptions::new()
             .max_connections(pg_config.pool_size)
             .connect(&db_url)

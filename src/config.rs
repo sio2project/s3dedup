@@ -3,9 +3,12 @@ use crate::kvstorage::postgres::PostgresConfig;
 use crate::kvstorage::sqlite::SQLiteConfig;
 use crate::locks::LocksType;
 use std::error::Error;
+use crate::logging::LoggingConfig;
 
 #[derive(Debug, serde::Deserialize, Clone)]
 pub struct Config {
+    pub logging: LoggingConfig,
+
     pub kvstorage_type: KVStorageType,
 
     #[serde(default)]

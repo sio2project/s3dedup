@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use tracing::{debug, info};
 
 pub mod memory;
 
@@ -26,11 +27,15 @@ pub enum LocksStorage {
 impl LocksStorage {
     pub fn new(lock_type: &LocksType) -> Box<Self> {
         match lock_type {
-            LocksType::Memory => Box::new(LocksStorage::Memory(*memory::MemoryLocks::new())),
+            LocksType::Memory => {
+                info!("Using memory as locks storage");
+                Box::new(LocksStorage::Memory(*memory::MemoryLocks::new()))
+            },
         }
     }
 
     pub fn acquire_shared(&mut self, key: &str) {
+        debug!("Acquiring shared lock for key: {}", key);
         match self {
             LocksStorage::Memory(lock) => {
                 lock.acquire_shared(key);
@@ -39,6 +44,7 @@ impl LocksStorage {
     }
 
     pub fn acquire_exclusive(&mut self, key: &str) {
+        debug!("Acquiring exclusive lock for key: {}", key);
         match self {
             LocksStorage::Memory(lock) => {
                 lock.acquire_exclusive(key);
@@ -47,6 +53,7 @@ impl LocksStorage {
     }
 
     pub fn release(&mut self, key: &str) -> bool {
+        debug!("Releasing lock for key: {}", key);
         match self {
             LocksStorage::Memory(lock) => lock.release(key),
         }
