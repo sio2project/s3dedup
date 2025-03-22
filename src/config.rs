@@ -1,8 +1,8 @@
-use std::error::Error;
 use crate::kvstorage::KVStorageType;
 use crate::kvstorage::postgres::PostgresConfig;
 use crate::kvstorage::sqlite::SQLiteConfig;
 use crate::locks::LocksType;
+use std::error::Error;
 
 #[derive(Debug, serde::Deserialize, Clone)]
 pub struct Config {

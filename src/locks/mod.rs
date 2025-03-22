@@ -15,7 +15,7 @@ pub(crate) trait Locks {
 
     fn acquire_shared(&mut self, key: &str);
     fn acquire_exclusive(&mut self, key: &str);
-     fn release(&mut self, key: &str) -> bool;
+    fn release(&mut self, key: &str) -> bool;
 }
 
 #[derive(Clone)]
@@ -26,9 +26,7 @@ pub enum LocksStorage {
 impl LocksStorage {
     pub fn new(lock_type: &LocksType) -> Box<Self> {
         match lock_type {
-            LocksType::Memory => {
-                Box::new(LocksStorage::Memory(*memory::MemoryLocks::new()))
-            }
+            LocksType::Memory => Box::new(LocksStorage::Memory(*memory::MemoryLocks::new())),
         }
     }
 
@@ -50,9 +48,7 @@ impl LocksStorage {
 
     pub fn release(&mut self, key: &str) -> bool {
         match self {
-            LocksStorage::Memory(lock) => {
-                lock.release(key)
-            }
+            LocksStorage::Memory(lock) => lock.release(key),
         }
     }
 }

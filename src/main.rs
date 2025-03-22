@@ -1,13 +1,13 @@
-use std::error::Error;
-use std::sync::Arc;
+use crate::kvstorage::{KVStorage, KVStorageTrait};
+use crate::locks::{Locks, LocksStorage};
 use axum::Router;
 use axum::routing::put;
-use crate::kvstorage::{KVStorageTrait, KVStorage};
-use crate::locks::{Locks, LocksStorage};
 use routes::ft::put_file::ft_put_file;
+use std::error::Error;
+use std::sync::Arc;
 
-mod kvstorage;
 mod config;
+mod kvstorage;
 mod locks;
 mod routes;
 

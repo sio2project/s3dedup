@@ -1,6 +1,6 @@
+use crate::locks::Locks;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use crate::locks::Locks;
 
 type LockMap = Arc<RwLock<HashMap<String, Arc<RwLock<()>>>>>;
 #[derive(Clone)]
@@ -11,7 +11,10 @@ pub(crate) struct MemoryLocks {
 impl MemoryLocks {
     fn get_or_create_lock(&self, key: &str) -> Arc<RwLock<()>> {
         let mut locks = self.locks.write().unwrap();
-        locks.entry(key.to_string()).or_insert_with(|| Arc::new(RwLock::new(()))).clone()
+        locks
+            .entry(key.to_string())
+            .or_insert_with(|| Arc::new(RwLock::new(())))
+            .clone()
     }
 }
 

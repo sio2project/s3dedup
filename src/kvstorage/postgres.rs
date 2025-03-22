@@ -1,10 +1,10 @@
-use std::error::Error;
-use serde::Deserialize;
-use sqlx::PgPool;
-use sqlx::postgres::PgPoolOptions;
 use crate::config::Config;
 use crate::kvstorage::KVStorageTrait;
 use crate::kvstorage::pooled::{RowModified, RowRefFile, RowRefcount};
+use serde::Deserialize;
+use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
+use std::error::Error;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PostgresConfig {
@@ -26,11 +26,7 @@ impl KVStorageTrait for Postgres {
         let pg_config = config.postgres.as_ref().unwrap();
         let db_url = format!(
             "postgres://{}:{}@{}:{}/{}",
-            pg_config.user,
-            pg_config.password,
-            pg_config.host,
-            pg_config.port,
-            pg_config.dbname
+            pg_config.user, pg_config.password, pg_config.host, pg_config.port, pg_config.dbname
         );
         let pool = PgPoolOptions::new()
             .max_connections(pg_config.pool_size)
@@ -57,7 +53,7 @@ impl KVStorageTrait for Postgres {
                 path VARCHAR(255) NOT NULL,
                 hash VARCHAR(255) NOT NULL,
                 PRIMARY KEY (bucket, path)
-            );"
+            );",
         )
         .execute(&self.pool)
         .await?;
@@ -74,10 +70,15 @@ impl KVStorageTrait for Postgres {
             .or_else(|_| Ok(0))
     }
 
-    async fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<(), Box<dyn Error>> {
+    async fn set_ref_count(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+        ref_cnt: i32,
+    ) -> Result<(), Box<dyn Error>> {
         sqlx::query(
             "INSERT INTO refcount (bucket, hash, refcount) VALUES ($1, $2, $3)
-            ON CONFLICT (bucket, hash) DO UPDATE SET refcount = $3"
+            ON CONFLICT (bucket, hash) DO UPDATE SET refcount = $3",
         )
         .bind(bucket)
         .bind(hash)
@@ -97,10 +98,15 @@ impl KVStorageTrait for Postgres {
             .or_else(|_| Ok(0))
     }
 
-    async fn set_modified(&mut self, bucket: &str, path: &str, modified: i64) -> Result<(), Box<dyn Error>> {
+    async fn set_modified(
+        &mut self,
+        bucket: &str,
+        path: &str,
+        modified: i64,
+    ) -> Result<(), Box<dyn Error>> {
         sqlx::query(
             "INSERT INTO modified (bucket, path, modified) VALUES ($1, $2, $3)
-            ON CONFLICT (bucket, path) DO UPDATE SET modified = $3"
+            ON CONFLICT (bucket, path) DO UPDATE SET modified = $3",
         )
         .bind(bucket)
         .bind(path)
@@ -129,10 +135,15 @@ impl KVStorageTrait for Postgres {
             .or_else(|_| Ok("".to_string()))
     }
 
-    async fn set_ref_file(&mut self, bucket: &str, path: &str, hash: &str) -> Result<(), Box<dyn Error>> {
+    async fn set_ref_file(
+        &mut self,
+        bucket: &str,
+        path: &str,
+        hash: &str,
+    ) -> Result<(), Box<dyn Error>> {
         sqlx::query(
             "INSERT INTO ref_file (bucket, path, hash) VALUES ($1, $2, $3)
-            ON CONFLICT (bucket, path) DO UPDATE SET hash = $3"
+            ON CONFLICT (bucket, path) DO UPDATE SET hash = $3",
         )
         .bind(bucket)
         .bind(path)

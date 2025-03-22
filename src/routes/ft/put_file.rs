@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use axum::extract::{Path, State};
-use axum::Json;
 use crate::AppState;
+use axum::Json;
+use axum::extract::{Path, State};
+use std::sync::Arc;
 
 #[derive(Debug, serde::Serialize)]
 pub struct PutFileResponse {
@@ -11,7 +11,7 @@ pub struct PutFileResponse {
 
 pub async fn ft_put_file(
     State(state): State<Arc<AppState>>,
-    Path(path): Path<String>
+    Path(path): Path<String>,
 ) -> Json<PutFileResponse> {
     Json(PutFileResponse {
         success: true,
