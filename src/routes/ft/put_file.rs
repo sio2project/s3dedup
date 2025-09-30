@@ -1,8 +1,7 @@
 use crate::{locks, AppState};
-use axum::Json;
 use axum::extract::{Path, Query, State};
 use std::sync::Arc;
-use axum::http::{HeaderMap, Response, StatusCode};
+use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use tracing::{debug, error};
 use crate::routes::ft::{utils, LastModifiedQuery};
@@ -16,8 +15,8 @@ pub async fn ft_put_file(
     debug!("timestamp: {}", query.last_modified);
     let timestamp = utils::conv_rfc2822_to_unix_timestamp(&query.last_modified);
 
-    if let Err(e) = timestamp {
-        error!("Failed to parse last_modified: {}", e);
+    if timestamp.is_err() {
+        error!("Failed to parse last_modified");
         return Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .body("Failed to parse last_modified".to_string())
@@ -25,11 +24,12 @@ pub async fn ft_put_file(
     }
     let timestamp = timestamp.unwrap();
 
-    state.locks.acquire_exclusive(&*locks::file_lock(&state.bucket_name, &path));
-    let current_modified = state.kvstorage.get_modified(&state.bucket_name, &path).await;
-    if let Err(e) = current_modified {
-        error!("Failed to get current modified: {}", e);
-        state.locks.release(&*locks::file_lock(&state.bucket_name, &path));
+    let lock_key = locks::file_lock(&state.bucket_name, &path);
+    state.locks.lock().await.acquire_exclusive(&lock_key);
+    let current_modified = state.kvstorage.lock().await.get_modified(&state.bucket_name, &path).await;
+    if current_modified.is_err() {
+        error!("Failed to get current modified");
+        state.locks.lock().await.release(&lock_key);
 
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -40,7 +40,7 @@ pub async fn ft_put_file(
 
     // If the uploaded file is younger than the current one, return 200 OK
     if current_modified >= timestamp {
-        state.locks.release(&*locks::file_lock(&state.bucket_name, &path));
+        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::OK)
             .header("Last-Modified", query.last_modified)
@@ -48,7 +48,8 @@ pub async fn ft_put_file(
             .unwrap();
     }
 
-    // tmp
+    // tmp - release lock before returning
+    state.locks.lock().await.release(&lock_key);
     Response::builder()
         .status(StatusCode::OK)
         .body("".to_string())

@@ -23,7 +23,7 @@ pub struct Postgres {
 }
 
 impl KVStorageTrait for Postgres {
-    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn Error>> {
+    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn Error + Send + Sync>> {
         let pg_config = config.postgres.as_ref().unwrap();
         let db_url = format!(
             "postgres://{}:{}@{}:{}/{}",
@@ -36,7 +36,7 @@ impl KVStorageTrait for Postgres {
             .await?;
         Ok(Box::new(Postgres { pool }))
     }
-    async fn setup(&mut self) -> Result<(), Box<dyn Error>> {
+    async fn setup(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS refcount (
                 bucket VARCHAR(255) NOT NULL,
@@ -62,7 +62,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn Error>> {
+    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn Error + Send + Sync>> {
         sqlx::query_as("SELECT refcount FROM refcount WHERE bucket = $1 AND hash = $2")
             .bind(bucket)
             .bind(hash)
@@ -77,7 +77,7 @@ impl KVStorageTrait for Postgres {
         bucket: &str,
         hash: &str,
         ref_cnt: i32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         sqlx::query(
             "INSERT INTO refcount (bucket, hash, refcount) VALUES ($1, $2, $3)
             ON CONFLICT (bucket, hash) DO UPDATE SET refcount = $3",
@@ -90,7 +90,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn Error>> {
+    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn Error + Send + Sync>> {
         sqlx::query_as("SELECT modified FROM modified WHERE bucket = $1 AND path = $2")
             .bind(bucket)
             .bind(path)
@@ -105,7 +105,7 @@ impl KVStorageTrait for Postgres {
         bucket: &str,
         path: &str,
         modified: i64,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         sqlx::query(
             "INSERT INTO modified (bucket, path, modified) VALUES ($1, $2, $3)
             ON CONFLICT (bucket, path) DO UPDATE SET modified = $3",
@@ -118,7 +118,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error>> {
+    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         sqlx::query("DELETE FROM modified WHERE bucket = $1 AND path = $2")
             .bind(bucket)
             .bind(path)
@@ -127,7 +127,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String, Box<dyn Error>> {
+    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
         sqlx::query_as("SELECT hash FROM ref_file WHERE bucket = $1 AND path = $2")
             .bind(bucket)
             .bind(path)
@@ -142,7 +142,7 @@ impl KVStorageTrait for Postgres {
         bucket: &str,
         path: &str,
         hash: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         sqlx::query(
             "INSERT INTO ref_file (bucket, path, hash) VALUES ($1, $2, $3)
             ON CONFLICT (bucket, path) DO UPDATE SET hash = $3",
@@ -155,7 +155,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error>> {
+    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         sqlx::query("DELETE FROM ref_file WHERE bucket = $1 AND path = $2")
             .bind(bucket)
             .bind(path)

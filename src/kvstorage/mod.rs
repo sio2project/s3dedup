@@ -16,23 +16,23 @@ pub enum KVStorageType {
 }
 
 pub(crate) trait KVStorageTrait {
-    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn Error>>
+    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn Error + Send + Sync>>
     where
         Self: Sized;
 
-    async fn setup(&mut self) -> Result<(), Box<dyn Error>>;
-    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn Error>>;
+    async fn setup(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn Error + Send + Sync>>;
     async fn set_ref_count(
         &mut self,
         bucket: &str,
         hash: &str,
         ref_cnt: i32,
-    ) -> Result<(), Box<dyn Error>>;
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn increment_ref_count(
         &mut self,
         bucket: &str,
         hash: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let cnt = self.get_ref_count(bucket, hash).await?;
         self.set_ref_count(bucket, hash, cnt + 1).await
     }
@@ -41,7 +41,7 @@ pub(crate) trait KVStorageTrait {
         &mut self,
         bucket: &str,
         hash: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let cnt = self.get_ref_count(bucket, hash).await?;
         if cnt == 0 {
             return Ok(());
@@ -49,23 +49,23 @@ pub(crate) trait KVStorageTrait {
         self.set_ref_count(bucket, hash, cnt - 1).await
     }
 
-    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn Error>>;
+    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn Error + Send + Sync>>;
     async fn set_modified(
         &mut self,
         bucket: &str,
         path: &str,
         modified: i64,
-    ) -> Result<(), Box<dyn Error>>;
-    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error>>;
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
 
-    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String, Box<dyn Error>>;
+    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String, Box<dyn Error + Send + Sync>>;
     async fn set_ref_file(
         &mut self,
         bucket: &str,
         path: &str,
         hash: &str,
-    ) -> Result<(), Box<dyn Error>>;
-    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error>>;
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
 #[derive(Clone)]
@@ -75,7 +75,7 @@ pub enum KVStorage {
 }
 
 impl KVStorage {
-    pub async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn Error>> {
+    pub async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn Error + Send + Sync>> {
         match config.kvstorage_type {
             KVStorageType::Postgres => {
                 info!("Using Postgres as KV storage");
@@ -93,7 +93,7 @@ impl KVStorage {
     /**
      * Setup the KV storage.
      */
-    pub async fn setup(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn setup(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         match self {
             KVStorage::Postgres(storage) => storage.setup().await,
             KVStorage::SQLite(storage) => storage.setup().await,
@@ -104,7 +104,7 @@ impl KVStorage {
      * Get the reference count for a hash.
      * If the hash does not exist, return 0.
      */
-    pub async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn Error>> {
+    pub async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn Error + Send + Sync>> {
         debug!("Getting ref count for bucket: {}, hash: {}", bucket, hash);
         match self {
             KVStorage::Postgres(storage) => storage.get_ref_count(bucket, hash).await,
@@ -120,7 +120,7 @@ impl KVStorage {
         bucket: &str,
         hash: &str,
         ref_cnt: i32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!(
             "Setting ref count for bucket: {}, hash: {} to {}",
             bucket, hash, ref_cnt
@@ -138,7 +138,7 @@ impl KVStorage {
         &mut self,
         bucket: &str,
         hash: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!("Incrementing ref count for bucket: {}, hash: {}", bucket, hash);
         match self {
             KVStorage::Postgres(storage) => storage.increment_ref_count(bucket, hash).await,
@@ -154,7 +154,7 @@ impl KVStorage {
         &mut self,
         bucket: &str,
         hash: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!("Decrementing ref count for bucket: {}, hash: {}", bucket, hash);
         match self {
             KVStorage::Postgres(storage) => storage.decrement_ref_count(bucket, hash).await,
@@ -166,7 +166,7 @@ impl KVStorage {
      * Get the modified time for a path.
      * If the path does not exist, return 0.
      */
-    pub async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn Error>> {
+    pub async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn Error + Send + Sync>> {
         debug!("Getting modified time for bucket: {}, path: {}", bucket, path);
         match self {
             KVStorage::Postgres(storage) => storage.get_modified(bucket, path).await,
@@ -182,7 +182,7 @@ impl KVStorage {
         bucket: &str,
         path: &str,
         modified: i64,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!(
             "Setting modified time for bucket: {}, path: {} to {}",
             bucket, path, modified
@@ -200,7 +200,7 @@ impl KVStorage {
         &mut self,
         bucket: &str,
         path: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!("Deleting modified time for bucket: {}, path: {}", bucket, path);
         match self {
             KVStorage::Postgres(storage) => storage.delete_modified(bucket, path).await,
@@ -216,7 +216,7 @@ impl KVStorage {
         &mut self,
         bucket: &str,
         path: &str,
-    ) -> Result<String, Box<dyn Error>> {
+    ) -> Result<String, Box<dyn Error + Send + Sync>> {
         debug!("Getting ref file for bucket: {}, path: {}", bucket, path);
         match self {
             KVStorage::Postgres(storage) => storage.get_ref_file(bucket, path).await,
@@ -232,7 +232,7 @@ impl KVStorage {
         bucket: &str,
         path: &str,
         hash: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!(
             "Setting ref file for bucket: {}, path: {} to {}",
             bucket, path, hash
@@ -250,7 +250,7 @@ impl KVStorage {
         &mut self,
         bucket: &str,
         path: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!("Deleting ref file for bucket: {}, path: {}", bucket, path);
         match self {
             KVStorage::Postgres(storage) => storage.delete_ref_file(bucket, path).await,

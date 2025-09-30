@@ -5,7 +5,6 @@ use crate::kvstorage::pooled::{RowModified, RowRefFile, RowRefcount};
 use serde::Deserialize;
 use sqlx::SqlitePool;
 use tracing::debug;
-use tracing::field::debug;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SQLiteConfig {
@@ -19,7 +18,7 @@ pub struct SQLite {
 }
 
 impl KVStorageTrait for SQLite {
-    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn std::error::Error>> {
+    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn std::error::Error + Send + Sync>> {
         let sqlite_config = config.sqlite.as_ref().unwrap();
 
         if !Path::new(&sqlite_config.path).exists() {
@@ -32,7 +31,7 @@ impl KVStorageTrait for SQLite {
         Ok(Box::new(SQLite { pool }))
     }
 
-    async fn setup(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn setup(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS refcount (
                 bucket TEXT NOT NULL,
@@ -62,7 +61,7 @@ impl KVStorageTrait for SQLite {
         &mut self,
         bucket: &str,
         hash: &str,
-    ) -> Result<i32, Box<dyn std::error::Error>> {
+    ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
         sqlx::query_as("SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2")
             .bind(bucket)
             .bind(hash)
@@ -77,7 +76,7 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         hash: &str,
         ref_cnt: i32,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sqlx::query("INSERT OR REPLACE INTO refcount (bucket, hash, refcount) VALUES (?1, ?2, ?3)")
             .bind(bucket)
             .bind(hash)
@@ -91,7 +90,7 @@ impl KVStorageTrait for SQLite {
         &mut self,
         bucket: &str,
         path: &str,
-    ) -> Result<i64, Box<dyn std::error::Error>> {
+    ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
         sqlx::query_as("SELECT modified FROM modified WHERE bucket = ?1 AND path = ?2")
             .bind(bucket)
             .bind(path)
@@ -106,7 +105,7 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         path: &str,
         modified: i64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sqlx::query("INSERT OR REPLACE INTO modified (bucket, path, modified) VALUES (?1, ?2, ?3)")
             .bind(bucket)
             .bind(path)
@@ -120,7 +119,7 @@ impl KVStorageTrait for SQLite {
         &mut self,
         bucket: &str,
         path: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sqlx::query("DELETE FROM modified WHERE bucket = ?1 AND path = ?2")
             .bind(bucket)
             .bind(path)
@@ -133,7 +132,7 @@ impl KVStorageTrait for SQLite {
         &mut self,
         bucket: &str,
         path: &str,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         sqlx::query_as("SELECT hash FROM ref_file WHERE bucket = ?1 AND path = ?2")
             .bind(bucket)
             .bind(path)
@@ -148,7 +147,7 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         path: &str,
         hash: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sqlx::query("INSERT OR REPLACE INTO ref_file (bucket, path, hash) VALUES (?1, ?2, ?3)")
             .bind(bucket)
             .bind(path)
@@ -162,7 +161,7 @@ impl KVStorageTrait for SQLite {
         &mut self,
         bucket: &str,
         path: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sqlx::query("DELETE FROM ref_file WHERE bucket = ?1 AND path = ?2")
             .bind(bucket)
             .bind(path)

@@ -6,6 +6,7 @@ use routes::ft::put_file::ft_put_file;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::{info, Level};
 use crate::routes::ft::version::ft_version;
@@ -17,20 +18,20 @@ mod routes;
 mod logging;
 
 #[derive(Clone)]
-struct AppState {
-    bucket_name: String,
-    kvstorage: Box<KVStorage>,
-    locks: Box<LocksStorage>,
+pub struct AppState {
+    pub bucket_name: String,
+    pub kvstorage: Arc<Mutex<Box<KVStorage>>>,
+    pub locks: Arc<Mutex<Box<LocksStorage>>>,
 }
 
 impl AppState {
-    async fn new(config: &config::BucketConfig) -> Result<Self, Box<dyn Error>> {
+    async fn new(config: &config::BucketConfig) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let kvstorage = KVStorage::new(&config).await?;
         let locks = LocksStorage::new(&config.locks_type);
         Ok(Self {
             bucket_name: config.name.clone(),
-            kvstorage,
-            locks,
+            kvstorage: Arc::new(Mutex::new(kvstorage)),
+            locks: Arc::new(Mutex::new(locks)),
         })
     }
 }
@@ -49,8 +50,8 @@ async fn main() {
     for bucket in config.buckets.iter() {
         info!("Starting server for bucket: {}", bucket.name);
 
-        let mut app_state = AppState::new(bucket).await.unwrap();
-        app_state.kvstorage.setup().await.unwrap();
+        let app_state = AppState::new(bucket).await.unwrap();
+        app_state.kvstorage.lock().await.setup().await.unwrap();
 
         let app = Router::new()
             .route("/ft/version", get(ft_version))
