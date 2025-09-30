@@ -50,6 +50,12 @@ impl KVStorageTrait for SQLite {
                 path TEXT NOT NULL,
                 hash TEXT NOT NULL,
                 PRIMARY KEY (bucket, path)
+            );
+            CREATE TABLE IF NOT EXISTS logical_size (
+                bucket TEXT NOT NULL,
+                hash TEXT NOT NULL,
+                logical_size INTEGER NOT NULL,
+                PRIMARY KEY (bucket, hash)
             );",
         )
         .execute(&self.pool)
@@ -165,6 +171,40 @@ impl KVStorageTrait for SQLite {
         sqlx::query("DELETE FROM ref_file WHERE bucket = ?1 AND path = ?2")
             .bind(bucket)
             .bind(path)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+        let result: Result<(i64,), sqlx::Error> = sqlx::query_as(
+            "SELECT logical_size FROM logical_size WHERE bucket = ?1 AND hash = ?2"
+        )
+        .bind(bucket)
+        .bind(hash)
+        .fetch_one(&self.pool)
+        .await;
+
+        match result {
+            Ok((size,)) => Ok(size as usize),
+            Err(_) => Ok(0), // Default to 0 if not found
+        }
+    }
+
+    async fn set_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+        size: usize,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        sqlx::query("INSERT OR REPLACE INTO logical_size (bucket, hash, logical_size) VALUES (?1, ?2, ?3)")
+            .bind(bucket)
+            .bind(hash)
+            .bind(size as i64)
             .execute(&self.pool)
             .await?;
         Ok(())

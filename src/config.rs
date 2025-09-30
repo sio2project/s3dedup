@@ -2,6 +2,8 @@ use crate::kvstorage::KVStorageType;
 use crate::kvstorage::postgres::PostgresConfig;
 use crate::kvstorage::sqlite::SQLiteConfig;
 use crate::locks::LocksType;
+use crate::s3storage::S3StorageType;
+use crate::s3storage::minio::MinIOConfig;
 use std::error::Error;
 use crate::logging::LoggingConfig;
 
@@ -26,6 +28,11 @@ pub struct BucketConfig {
     pub sqlite: Option<SQLiteConfig>,
 
     pub locks_type: LocksType,
+
+    pub s3storage_type: S3StorageType,
+
+    #[serde(default)]
+    pub minio: Option<MinIOConfig>,
 }
 
 impl Config {

@@ -1,5 +1,6 @@
 use crate::kvstorage::KVStorage;
 use crate::locks::LocksStorage;
+use crate::s3storage::S3Storage;
 use axum::Router;
 use axum::routing::{get, put};
 use routes::ft::put_file::ft_put_file;
@@ -16,22 +17,26 @@ mod kvstorage;
 mod locks;
 mod routes;
 mod logging;
+mod s3storage;
 
 #[derive(Clone)]
 pub struct AppState {
     pub bucket_name: String,
     pub kvstorage: Arc<Mutex<Box<KVStorage>>>,
     pub locks: Arc<Mutex<Box<LocksStorage>>>,
+    pub s3storage: Arc<Mutex<Box<S3Storage>>>,
 }
 
 impl AppState {
     async fn new(config: &config::BucketConfig) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let kvstorage = KVStorage::new(&config).await?;
         let locks = LocksStorage::new(&config.locks_type);
+        let s3storage = S3Storage::new(&config).await?;
         Ok(Self {
             bucket_name: config.name.clone(),
             kvstorage: Arc::new(Mutex::new(kvstorage)),
             locks: Arc::new(Mutex::new(locks)),
+            s3storage: Arc::new(Mutex::new(s3storage)),
         })
     }
 }
@@ -55,7 +60,7 @@ async fn main() {
 
         let app = Router::new()
             .route("/ft/version", get(ft_version))
-            .route("/ft/files/{path}", put(ft_put_file))
+            .route("/ft/files/{*path}", put(ft_put_file))
             .layer( // Logging middleware
                 TraceLayer::new_for_http()
                     .make_span_with(DefaultMakeSpan::new().level(Level::INFO))

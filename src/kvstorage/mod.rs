@@ -66,6 +66,9 @@ pub(crate) trait KVStorageTrait {
         hash: &str,
     ) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
+
+    async fn get_logical_size(&mut self, bucket: &str, hash: &str) -> Result<usize, Box<dyn Error + Send + Sync>>;
+    async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
 #[derive(Clone)]
@@ -255,6 +258,38 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.delete_ref_file(bucket, path).await,
             KVStorage::SQLite(storage) => storage.delete_ref_file(bucket, path).await,
+        }
+    }
+
+    /**
+     * Get the logical size for a hash.
+     * If the hash does not exist, return 0.
+     */
+    pub async fn get_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<usize, Box<dyn Error + Send + Sync>> {
+        debug!("Getting logical size for bucket: {}, hash: {}", bucket, hash);
+        match self {
+            KVStorage::Postgres(storage) => storage.get_logical_size(bucket, hash).await,
+            KVStorage::SQLite(storage) => storage.get_logical_size(bucket, hash).await,
+        }
+    }
+
+    /**
+     * Set the logical size for a hash.
+     */
+    pub async fn set_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+        size: usize,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        debug!("Setting logical size for bucket: {}, hash: {} to {}", bucket, hash, size);
+        match self {
+            KVStorage::Postgres(storage) => storage.set_logical_size(bucket, hash, size).await,
+            KVStorage::SQLite(storage) => storage.set_logical_size(bucket, hash, size).await,
         }
     }
 }

@@ -13,7 +13,14 @@
         "path": "kv.db",
         "pool_size": 10
       },
-      "locks_type": "memory"
+      "locks_type": "memory",
+      "s3storage_type": "minio",
+      "minio": {
+        "endpoint": "http://localhost:9000",
+        "access_key": "minioadmin",
+        "secret_key": "minioadmin",
+        "force_path_style": true
+      }
     }
   ]
 }
