@@ -241,3 +241,85 @@ pub async fn ft_put_file(
         .body("".to_string())
         .unwrap()
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::routes::ft::utils;
+
+    #[tokio::test]
+    async fn test_timestamp_conversion() {
+        let timestamp = "Mon, 01 Jan 2024 12:00:00 GMT";
+        let result = utils::conv_rfc2822_to_unix_timestamp(timestamp);
+        assert!(result.is_ok());
+
+        let invalid_timestamp = "invalid-timestamp";
+        let result = utils::conv_rfc2822_to_unix_timestamp(invalid_timestamp);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_path_processing() {
+        // Test path processing logic
+        let path = "/test.txt";
+        let stripped = path.strip_prefix('/').unwrap_or(&path);
+        assert_eq!(stripped, "test.txt");
+
+        let path = "test.txt";
+        let stripped = path.strip_prefix('/').unwrap_or(&path);
+        assert_eq!(stripped, "test.txt");
+
+        // Test subdirectory paths
+        let path = "/subdir/deep/test.txt";
+        let stripped = path.strip_prefix('/').unwrap_or(&path);
+        assert_eq!(stripped, "subdir/deep/test.txt");
+    }
+
+    #[tokio::test]
+    async fn test_header_parsing() {
+        // Test header parsing logic similar to what's in the PUT handler
+        use axum::http::HeaderMap;
+
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", "gzip".parse().unwrap());
+        headers.insert("sha256-checksum", "abc123".parse().unwrap());
+        headers.insert("logical-size", "1024".parse().unwrap());
+
+        let compressed = headers.get("content-encoding")
+            .map(|v| v.to_str().unwrap_or("") == "gzip")
+            .unwrap_or(false);
+        assert!(compressed);
+
+        let provided_digest = headers.get("sha256-checksum")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        assert_eq!(provided_digest, Some("abc123".to_string()));
+
+        let provided_logical_size = headers.get("logical-size")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<usize>().ok());
+        assert_eq!(provided_logical_size, Some(1024));
+    }
+
+    #[tokio::test]
+    async fn test_storage_helpers() {
+        use crate::routes::ft::storage_helpers;
+
+        let test_data = b"Hello, World! This is test data for compression.";
+
+        // Test SHA256 computation
+        let hash = storage_helpers::compute_sha256(test_data);
+        assert_eq!(hash.len(), 64); // SHA256 produces 64 hex characters
+        assert!(!hash.is_empty());
+
+        // Test compression and decompression
+        let compressed = storage_helpers::compress_gzip(test_data).unwrap();
+        assert!(compressed.len() < test_data.len() + 100); // Should be reasonable size
+
+        let decompressed = storage_helpers::decompress_gzip(&compressed).unwrap();
+        assert_eq!(decompressed, test_data);
+
+        // Test idempotency - same data should produce same hash
+        let hash2 = storage_helpers::compute_sha256(test_data);
+        assert_eq!(hash, hash2);
+    }
+}
