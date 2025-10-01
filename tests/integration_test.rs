@@ -22,8 +22,11 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     use s3dedup::s3storage::S3Storage;
     use tokio::sync::Mutex;
 
-    // Create temporary test database
-    let test_db = format!("test_{}.db", std::process::id());
+    // Create temporary test database (unique per test)
+    let test_db = format!("test_{}_{}.db", std::process::id(), std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos());
 
     let config = BucketConfig {
         name: "test-bucket".to_string(),
@@ -59,6 +62,8 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     app_state.kvstorage.lock().await.setup().await.unwrap();
 
     let router = Router::new()
+        .route("/ft/list/", get(s3dedup::routes::ft::list_files::ft_list_files))
+        .route("/ft/list/{*path}", get(s3dedup::routes::ft::list_files::ft_list_files))
         .route("/ft/files/{*path}",
             get(s3dedup::routes::ft::get_file::ft_get_file)
             .head(s3dedup::routes::ft::get_file::ft_get_file)
@@ -910,4 +915,242 @@ async fn test_dedup_update_same_path() {
     let body_bytes = to_bytes(get_response.into_body(), usize::MAX).await.unwrap();
     let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
     assert_eq!(decompressed, content_v2);
+}
+
+#[tokio::test]
+async fn test_list_files_empty() {
+    let app = create_test_app().await;
+
+    // List files in empty prefix
+    let response = app.oneshot(
+            Request::builder()
+                .uri("/ft/list/empty/")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+    assert_eq!(body_str, "");
+}
+
+#[tokio::test]
+async fn test_list_files_basic() {
+    use tower::Service;
+    let mut app = create_test_app().await;
+
+    // Upload three files
+    use s3dedup::routes::ft::storage_helpers;
+    let content1 = b"File 1 content";
+    let content2 = b"File 2 content";
+    let content3 = b"File 3 content";
+
+    let compressed1 = storage_helpers::compress_gzip(content1).unwrap();
+    let sha1 = storage_helpers::compute_sha256(content1);
+    let compressed2 = storage_helpers::compress_gzip(content2).unwrap();
+    let sha2 = storage_helpers::compute_sha256(content2);
+    let compressed3 = storage_helpers::compress_gzip(content3).unwrap();
+    let sha3 = storage_helpers::compute_sha256(content3);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // Upload to different paths
+    let put1 = app.call(
+            Request::builder()
+                .uri(format!("/ft/files/dir/file1.txt?last_modified={}", encoded_timestamp))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha1)
+                .header("Logical-Size", content1.len().to_string())
+                .body(Body::from(compressed1))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put1.status(), StatusCode::OK);
+
+    let put2 = app.call(
+            Request::builder()
+                .uri(format!("/ft/files/dir/file2.txt?last_modified={}", encoded_timestamp))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha2)
+                .header("Logical-Size", content2.len().to_string())
+                .body(Body::from(compressed2))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put2.status(), StatusCode::OK);
+
+    let put3 = app.call(
+            Request::builder()
+                .uri(format!("/ft/files/other/file3.txt?last_modified={}", encoded_timestamp))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha3)
+                .header("Logical-Size", content3.len().to_string())
+                .body(Body::from(compressed3))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put3.status(), StatusCode::OK);
+
+    // List files under "dir/" - should get 2 files
+    let list_response = app.call(
+            Request::builder()
+                .uri("/ft/list/dir/")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(list_response.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(list_response.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+    let files: Vec<&str> = body_str.trim().split('\n').collect();
+    assert_eq!(files.len(), 2);
+    assert!(files.contains(&"dir/file1.txt"));
+    assert!(files.contains(&"dir/file2.txt"));
+
+    // List files under "other/" - should get 1 file
+    let list_response2 = app.call(
+            Request::builder()
+                .uri("/ft/list/other/")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response2.status(), StatusCode::OK);
+
+    let body_bytes2 = to_bytes(list_response2.into_body(), usize::MAX).await.unwrap();
+    let body_str2 = String::from_utf8(body_bytes2.to_vec()).unwrap();
+    assert_eq!(body_str2.trim(), "other/file3.txt");
+
+    // List all files - should get 3 files
+    let list_response3 = app.call(
+            Request::builder()
+                .uri("/ft/list/")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response3.status(), StatusCode::OK);
+
+    let body_bytes3 = to_bytes(list_response3.into_body(), usize::MAX).await.unwrap();
+    let body_str3 = String::from_utf8(body_bytes3.to_vec()).unwrap();
+    let all_files: Vec<&str> = body_str3.trim().split('\n').collect();
+    assert_eq!(all_files.len(), 3);
+}
+
+#[tokio::test]
+async fn test_list_files_with_timestamp() {
+    use tower::Service;
+    let mut app = create_test_app().await;
+
+    use s3dedup::routes::ft::storage_helpers;
+    let content1 = b"Old file";
+    let content2 = b"New file";
+
+    let compressed1 = storage_helpers::compress_gzip(content1).unwrap();
+    let sha1 = storage_helpers::compute_sha256(content1);
+    let compressed2 = storage_helpers::compress_gzip(content2).unwrap();
+    let sha2 = storage_helpers::compute_sha256(content2);
+
+    // Upload first file with old timestamp
+    let old_time = chrono::Utc::now() - chrono::Duration::seconds(3600);
+    let old_timestamp = old_time.to_rfc2822();
+    let encoded_old = urlencoding::encode(&old_timestamp);
+
+    let put1 = app.call(
+            Request::builder()
+                .uri(format!("/ft/files/test/old.txt?last_modified={}", encoded_old))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha1)
+                .header("Logical-Size", content1.len().to_string())
+                .body(Body::from(compressed1))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put1.status(), StatusCode::OK);
+
+    // Upload second file with recent timestamp
+    let new_time = chrono::Utc::now();
+    let new_timestamp = new_time.to_rfc2822();
+    let encoded_new = urlencoding::encode(&new_timestamp);
+
+    let put2 = app.call(
+            Request::builder()
+                .uri(format!("/ft/files/test/new.txt?last_modified={}", encoded_new))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha2)
+                .header("Logical-Size", content2.len().to_string())
+                .body(Body::from(compressed2))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put2.status(), StatusCode::OK);
+
+    // List files with timestamp in the middle - should only get old file
+    let middle_time = chrono::Utc::now() - chrono::Duration::seconds(1800);
+    let middle_timestamp = middle_time.to_rfc2822();
+    let encoded_middle = urlencoding::encode(&middle_timestamp);
+
+    let list_response = app.call(
+            Request::builder()
+                .uri(format!("/ft/list/test/?last_modified={}", encoded_middle))
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(list_response.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+    assert_eq!(body_str.trim(), "test/old.txt");
+
+    // List files with current timestamp - should get both files
+    let current_timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_current = urlencoding::encode(&current_timestamp);
+
+    let list_response2 = app.call(
+            Request::builder()
+                .uri(format!("/ft/list/test/?last_modified={}", encoded_current))
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list_response2.status(), StatusCode::OK);
+
+    let body_bytes2 = to_bytes(list_response2.into_body(), usize::MAX).await.unwrap();
+    let body_str2 = String::from_utf8(body_bytes2.to_vec()).unwrap();
+    let files: Vec<&str> = body_str2.trim().split('\n').collect();
+    assert_eq!(files.len(), 2);
+    assert!(files.contains(&"test/old.txt"));
+    assert!(files.contains(&"test/new.txt"));
 }

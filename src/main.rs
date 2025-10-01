@@ -2,6 +2,7 @@ use axum::Router;
 use axum::routing::{delete, get, head};
 use s3dedup::routes::ft::delete_file::ft_delete_file;
 use s3dedup::routes::ft::get_file::ft_get_file;
+use s3dedup::routes::ft::list_files::ft_list_files;
 use s3dedup::routes::ft::put_file::ft_put_file;
 use s3dedup::routes::ft::version::ft_version;
 use s3dedup::config;
@@ -30,6 +31,8 @@ async fn main() {
 
         let app = Router::new()
             .route("/ft/version", get(ft_version))
+            .route("/ft/list/", get(ft_list_files))
+            .route("/ft/list/{*path}", get(ft_list_files))
             .route("/ft/files/{*path}",
                 get(ft_get_file)
                 .head(ft_get_file)

@@ -194,4 +194,23 @@ impl KVStorageTrait for Postgres {
             .await?;
         Ok(())
     }
+
+    async fn list_files(
+        &mut self,
+        bucket: &str,
+        path_prefix: &str,
+        timestamp: i64,
+    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+        let pattern = format!("{}%", path_prefix);
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT path FROM modified WHERE bucket = $1 AND path LIKE $2 AND modified <= $3 ORDER BY path"
+        )
+        .bind(bucket)
+        .bind(pattern)
+        .bind(timestamp)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|(path,)| path).collect())
+    }
 }

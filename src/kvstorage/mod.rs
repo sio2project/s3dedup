@@ -69,6 +69,9 @@ pub(crate) trait KVStorageTrait {
 
     async fn get_logical_size(&mut self, bucket: &str, hash: &str) -> Result<usize, Box<dyn Error + Send + Sync>>;
     async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<(), Box<dyn Error + Send + Sync>>;
+
+    /// List all files under a given path prefix that were modified at or before the given timestamp
+    async fn list_files(&mut self, bucket: &str, path_prefix: &str, timestamp: i64) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
 }
 
 #[derive(Clone)]
@@ -290,6 +293,22 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.set_logical_size(bucket, hash, size).await,
             KVStorage::SQLite(storage) => storage.set_logical_size(bucket, hash, size).await,
+        }
+    }
+
+    /**
+     * List all files under a given path prefix that were modified at or before the given timestamp.
+     */
+    pub async fn list_files(
+        &mut self,
+        bucket: &str,
+        path_prefix: &str,
+        timestamp: i64,
+    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+        debug!("Listing files for bucket: {}, prefix: {}, timestamp: {}", bucket, path_prefix, timestamp);
+        match self {
+            KVStorage::Postgres(storage) => storage.list_files(bucket, path_prefix, timestamp).await,
+            KVStorage::SQLite(storage) => storage.list_files(bucket, path_prefix, timestamp).await,
         }
     }
 }
