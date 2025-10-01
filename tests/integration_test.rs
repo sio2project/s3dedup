@@ -23,7 +23,8 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     use tokio::sync::Mutex;
 
     // Create temporary test database (unique per test)
-    let test_db = format!("test_{}_{}.db", std::process::id(), std::time::SystemTime::now()
+    std::fs::create_dir_all("db").ok();
+    let test_db = format!("db/test_{}_{}.db", std::process::id(), std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos());
