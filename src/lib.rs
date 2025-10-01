@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+pub mod cleaner;
 pub mod config;
 pub mod kvstorage;
 pub mod locks;

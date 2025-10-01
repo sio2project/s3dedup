@@ -256,4 +256,84 @@ impl KVStorageTrait for SQLite {
 
         Ok(rows.into_iter().map(|(path,)| path).collect())
     }
+
+    async fn list_ref_files_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<(String, String)>, Box<dyn std::error::Error + Send + Sync>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT path, hash FROM ref_file WHERE bucket = ?1 ORDER BY path LIMIT ?2 OFFSET ?3"
+        )
+        .bind(bucket)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
+    async fn list_refcounts_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<(String, i32)>, Box<dyn std::error::Error + Send + Sync>> {
+        let rows: Vec<(String, i32)> = sqlx::query_as(
+            "SELECT hash, refcount FROM refcount WHERE bucket = ?1 ORDER BY hash LIMIT ?2 OFFSET ?3"
+        )
+        .bind(bucket)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
+    async fn list_logical_sizes_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT hash FROM logical_size WHERE bucket = ?1 ORDER BY hash LIMIT ?2 OFFSET ?3"
+        )
+        .bind(bucket)
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|(hash,)| hash).collect())
+    }
+
+    async fn delete_refcount(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        sqlx::query("DELETE FROM refcount WHERE bucket = ?1 AND hash = ?2")
+            .bind(bucket)
+            .bind(hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        sqlx::query("DELETE FROM logical_size WHERE bucket = ?1 AND hash = ?2")
+            .bind(bucket)
+            .bind(hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }

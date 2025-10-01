@@ -325,4 +325,97 @@ impl KVStorageTrait for Postgres {
 
         Ok(rows.into_iter().map(|(path,)| path).collect())
     }
+
+    async fn list_ref_files_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<(String, String)>, Box<dyn Error + Send + Sync>> {
+        let table = self.table_name("ref_file");
+        let query = format!(
+            "SELECT path, hash FROM {} WHERE bucket = $1 ORDER BY path LIMIT $2 OFFSET $3",
+            table
+        );
+        let rows: Vec<(String, String)> = sqlx::query_as(&query)
+            .bind(bucket)
+            .bind(limit as i64)
+            .bind(offset as i64)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows)
+    }
+
+    async fn list_refcounts_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<(String, i32)>, Box<dyn Error + Send + Sync>> {
+        let table = self.table_name("refcount");
+        let query = format!(
+            "SELECT hash, refcount FROM {} WHERE bucket = $1 ORDER BY hash LIMIT $2 OFFSET $3",
+            table
+        );
+        let rows: Vec<(String, i32)> = sqlx::query_as(&query)
+            .bind(bucket)
+            .bind(limit as i64)
+            .bind(offset as i64)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows)
+    }
+
+    async fn list_logical_sizes_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+        let table = self.table_name("logical_size");
+        let query = format!(
+            "SELECT hash FROM {} WHERE bucket = $1 ORDER BY hash LIMIT $2 OFFSET $3",
+            table
+        );
+        let rows: Vec<(String,)> = sqlx::query_as(&query)
+            .bind(bucket)
+            .bind(limit as i64)
+            .bind(offset as i64)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows.into_iter().map(|(hash,)| hash).collect())
+    }
+
+    async fn delete_refcount(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let table = self.table_name("refcount");
+        let query = format!("DELETE FROM {} WHERE bucket = $1 AND hash = $2", table);
+        sqlx::query(&query)
+            .bind(bucket)
+            .bind(hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let table = self.table_name("logical_size");
+        let query = format!("DELETE FROM {} WHERE bucket = $1 AND hash = $2", table);
+        sqlx::query(&query)
+            .bind(bucket)
+            .bind(hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }

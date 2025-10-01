@@ -171,6 +171,40 @@ impl S3StorageTrait for MinIOClient {
             }
         }
     }
+
+    async fn list_objects(
+        &self,
+        continuation_token: Option<String>,
+    ) -> Result<(Vec<String>, Option<String>), Box<dyn Error + Send + Sync>> {
+        debug!(
+            "Listing objects with continuation_token: {:?}",
+            continuation_token
+        );
+
+        let mut request = self.client.list_objects_v2().bucket(&self.bucket);
+
+        if let Some(token) = continuation_token {
+            request = request.continuation_token(token);
+        }
+
+        let resp = request.send().await?;
+
+        let keys: Vec<String> = resp
+            .contents()
+            .iter()
+            .filter_map(|obj| obj.key().map(|k| k.to_string()))
+            .collect();
+
+        let next_token = resp.next_continuation_token().map(|t| t.to_string());
+
+        debug!(
+            "Listed {} objects, has more: {}",
+            keys.len(),
+            next_token.is_some()
+        );
+
+        Ok((keys, next_token))
+    }
 }
 
 impl MinIOClient {

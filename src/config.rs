@@ -1,3 +1,4 @@
+use crate::cleaner::CleanerConfig;
 use crate::logging::LoggingConfig;
 use std::error::Error;
 
@@ -34,6 +35,9 @@ pub struct BucketConfig {
 
     #[serde(default)]
     pub minio: Option<MinIOConfig>,
+
+    #[serde(default)]
+    pub cleaner: CleanerConfig,
 }
 
 impl Config {

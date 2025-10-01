@@ -20,6 +20,12 @@
         "access_key": "minioadmin",
         "secret_key": "minioadmin",
         "force_path_style": true
+      },
+      "cleaner": {
+        "enabled": false,
+        "interval_seconds": 3600,
+        "batch_size": 1000,
+        "max_deletes_per_run": 10000
       }
     }
   ]

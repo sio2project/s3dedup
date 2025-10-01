@@ -28,6 +28,13 @@ pub(crate) trait S3StorageTrait {
     async fn get_object(&self, key: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>>;
     async fn delete_object(&self, key: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn object_exists(&self, key: &str) -> Result<bool, Box<dyn Error + Send + Sync>>;
+
+    /// List objects in batches with continuation support
+    /// Returns (keys, continuation_token)
+    async fn list_objects(
+        &self,
+        continuation_token: Option<String>,
+    ) -> Result<(Vec<String>, Option<String>), Box<dyn Error + Send + Sync>>;
 }
 
 #[derive(Clone)]
@@ -79,6 +86,16 @@ impl S3Storage {
         debug!("Checking if object exists with key: {}", key);
         match self {
             S3Storage::MinIO(client) => client.object_exists(key).await,
+        }
+    }
+
+    pub async fn list_objects(
+        &self,
+        continuation_token: Option<String>,
+    ) -> Result<(Vec<String>, Option<String>), Box<dyn Error + Send + Sync>> {
+        debug!("Listing objects with continuation_token: {:?}", continuation_token);
+        match self {
+            S3Storage::MinIO(client) => client.list_objects(continuation_token).await,
         }
     }
 }

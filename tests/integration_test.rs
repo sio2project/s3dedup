@@ -82,6 +82,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
             secret_key: "minioadmin".to_string(),
             force_path_style: true,
         }),
+        cleaner: s3dedup::cleaner::CleanerConfig::default(),
     };
 
     let kvstorage = KVStorage::new(&config).await.unwrap();

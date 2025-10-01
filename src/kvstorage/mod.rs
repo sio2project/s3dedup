@@ -106,6 +106,45 @@ pub(crate) trait KVStorageTrait {
         path_prefix: &str,
         timestamp: i64,
     ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
+
+    // Batched methods for cleaner
+    /// List ref_file entries in batches (path, hash)
+    async fn list_ref_files_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<(String, String)>, Box<dyn Error + Send + Sync>>;
+
+    /// List refcount entries in batches (hash, count)
+    async fn list_refcounts_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<(String, i32)>, Box<dyn Error + Send + Sync>>;
+
+    /// List logical_size entries in batches (hash)
+    async fn list_logical_sizes_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
+
+    /// Delete a refcount entry
+    async fn delete_refcount(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
+
+    /// Delete a logical_size entry
+    async fn delete_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
 #[derive(Clone)]
@@ -374,6 +413,72 @@ impl KVStorage {
                 storage.list_files(bucket, path_prefix, timestamp).await
             }
             KVStorage::SQLite(storage) => storage.list_files(bucket, path_prefix, timestamp).await,
+        }
+    }
+
+    pub async fn list_ref_files_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<(String, String)>, Box<dyn Error + Send + Sync>> {
+        match self {
+            KVStorage::Postgres(storage) => {
+                storage.list_ref_files_batch(bucket, limit, offset).await
+            }
+            KVStorage::SQLite(storage) => storage.list_ref_files_batch(bucket, limit, offset).await,
+        }
+    }
+
+    pub async fn list_refcounts_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<(String, i32)>, Box<dyn Error + Send + Sync>> {
+        match self {
+            KVStorage::Postgres(storage) => {
+                storage.list_refcounts_batch(bucket, limit, offset).await
+            }
+            KVStorage::SQLite(storage) => storage.list_refcounts_batch(bucket, limit, offset).await,
+        }
+    }
+
+    pub async fn list_logical_sizes_batch(
+        &mut self,
+        bucket: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+        match self {
+            KVStorage::Postgres(storage) => {
+                storage.list_logical_sizes_batch(bucket, limit, offset).await
+            }
+            KVStorage::SQLite(storage) => {
+                storage.list_logical_sizes_batch(bucket, limit, offset).await
+            }
+        }
+    }
+
+    pub async fn delete_refcount(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        match self {
+            KVStorage::Postgres(storage) => storage.delete_refcount(bucket, hash).await,
+            KVStorage::SQLite(storage) => storage.delete_refcount(bucket, hash).await,
+        }
+    }
+
+    pub async fn delete_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        match self {
+            KVStorage::Postgres(storage) => storage.delete_logical_size(bucket, hash).await,
+            KVStorage::SQLite(storage) => storage.delete_logical_size(bucket, hash).await,
         }
     }
 }

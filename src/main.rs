@@ -1,5 +1,6 @@
 use axum::Router;
 use axum::routing::get;
+use s3dedup::cleaner::Cleaner;
 use s3dedup::AppState;
 use s3dedup::config;
 use s3dedup::routes::ft::delete_file::ft_delete_file;
@@ -28,6 +29,15 @@ async fn main() {
 
         let app_state = AppState::new(bucket).await.unwrap();
         app_state.kvstorage.lock().await.setup().await.unwrap();
+
+        // Start cleaner for this bucket
+        let cleaner = Arc::new(Cleaner::new(
+            bucket.name.clone(),
+            app_state.kvstorage.clone(),
+            app_state.s3storage.clone(),
+            bucket.cleaner.clone(),
+        ));
+        cleaner.start();
 
         let app = Router::new()
             .route("/ft/version", get(ft_version))
