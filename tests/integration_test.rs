@@ -25,12 +25,21 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     // Determine which KV storage to use from environment
     let use_postgres = std::env::var("DATABASE_URL").is_ok();
 
-    // Create temporary test database (unique per test)
+    // Create unique identifiers for this test (database and bucket)
     std::fs::create_dir_all("db").ok();
-    let test_db = format!("db/test_{}_{}.db", std::process::id(), std::time::SystemTime::now()
+
+    // Use thread ID and nanosecond timestamp to ensure uniqueness across parallel tests
+    let thread_id = std::thread::current().id();
+    let thread_id_str = format!("{:?}", thread_id).replace("ThreadId(", "").replace(")", "");
+    let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_nanos());
+        .as_nanos();
+    let unique_id = format!("{}{}{}", std::process::id(), thread_id_str, nanos);
+
+    let test_db = format!("db/test_{}.db", unique_id);
+    // S3 bucket names must be lowercase and can only contain letters, numbers, and hyphens
+    let test_bucket = format!("test-{}", unique_id.to_lowercase());
 
     let (kvstorage_type, sqlite_config, postgres_config) = if use_postgres {
         (
@@ -57,7 +66,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     };
 
     let config = BucketConfig {
-        name: "test-bucket".to_string(),
+        name: test_bucket.clone(),
         address: "127.0.0.1".to_string(),
         port: 3001,
         kvstorage_type,
