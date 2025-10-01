@@ -1,5 +1,6 @@
 use axum::Router;
 use axum::routing::get;
+use clap::{Parser, Subcommand};
 use s3dedup::cleaner::Cleaner;
 use s3dedup::AppState;
 use s3dedup::config;
@@ -13,14 +14,43 @@ use std::sync::Arc;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::{Level, info};
 
+#[derive(Parser)]
+#[command(name = "s3dedup")]
+#[command(about = "S3 deduplication proxy server", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start the S3 deduplication server
+    Server {
+        /// Path to configuration file
+        #[arg(short, long, default_value = "config.json")]
+        config: String,
+    },
+    /// Migrate data from old filetracker to s3dedup
+    Migrate {
+        /// Path to configuration file
+        #[arg(short, long, default_value = "config.json")]
+        config: String,
+    },
+    /// Perform live migration while server is running
+    LiveMigrate {
+        /// Path to configuration file
+        #[arg(short, long, default_value = "config.json")]
+        config: String,
+    },
+}
+
 async fn run_server(addr: SocketAddr, app: Router) {
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
-#[tokio::main]
-async fn main() {
-    let config = config::Config::new("config.json").unwrap();
+async fn run_s3dedup_server(config_path: &str) {
+    let config = config::Config::new(config_path).unwrap();
     s3dedup::logging::setup(&config.logging).unwrap();
     let mut handles = vec![];
 
@@ -66,5 +96,44 @@ async fn main() {
 
     for handle in handles {
         handle.await.unwrap();
+    }
+}
+
+async fn run_migrate(config_path: &str) {
+    let config = config::Config::new(config_path).unwrap();
+    s3dedup::logging::setup(&config.logging).unwrap();
+
+    info!("Starting migration from old filetracker to s3dedup");
+    info!("Using config file: {}", config_path);
+
+    // TODO: Implement migration logic
+    println!("Migration not yet implemented");
+}
+
+async fn run_live_migrate(config_path: &str) {
+    let config = config::Config::new(config_path).unwrap();
+    s3dedup::logging::setup(&config.logging).unwrap();
+
+    info!("Starting live migration from old filetracker to s3dedup");
+    info!("Using config file: {}", config_path);
+
+    // TODO: Implement live migration logic
+    println!("Live migration not yet implemented");
+}
+
+#[tokio::main]
+async fn main() {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Server { config } => {
+            run_s3dedup_server(&config).await;
+        }
+        Commands::Migrate { config } => {
+            run_migrate(&config).await;
+        }
+        Commands::LiveMigrate { config } => {
+            run_live_migrate(&config).await;
+        }
     }
 }
