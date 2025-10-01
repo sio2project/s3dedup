@@ -1,6 +1,6 @@
 use crate::{locks, AppState};
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, Response, StatusCode};
+use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::body::Body;
 use std::sync::Arc;

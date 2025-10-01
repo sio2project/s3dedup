@@ -4,7 +4,7 @@ use axum::{
 };
 use tower::ServiceExt;
 use axum::Router;
-use axum::routing::{delete, get, head, put};
+use axum::routing::get;
 use std::sync::Arc;
 
 // Helper to create test app state

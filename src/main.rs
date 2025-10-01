@@ -1,5 +1,5 @@
 use axum::Router;
-use axum::routing::{delete, get, head};
+use axum::routing::get;
 use s3dedup::routes::ft::delete_file::ft_delete_file;
 use s3dedup::routes::ft::get_file::ft_get_file;
 use s3dedup::routes::ft::list_files::ft_list_files;
