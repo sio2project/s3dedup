@@ -12,7 +12,7 @@ use s3dedup::routes::ft::version::ft_version;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
-use tracing::{Level, info};
+use tracing::{Level, error, info, warn};
 
 #[derive(Parser)]
 #[command(name = "s3dedup")]
@@ -35,12 +35,22 @@ enum Commands {
         /// Path to configuration file
         #[arg(short, long, default_value = "config.json")]
         config: String,
+        /// URL of the old filetracker server
+        #[arg(short, long)]
+        filetracker_url: String,
+        /// Maximum number of concurrent migration workers
+        #[arg(short, long, default_value = "10")]
+        max_concurrency: usize,
     },
     /// Perform live migration while server is running
+    /// Each bucket can specify its own filetracker_url in the config file
     LiveMigrate {
         /// Path to configuration file
         #[arg(short, long, default_value = "config.json")]
         config: String,
+        /// Maximum number of concurrent migration workers per bucket
+        #[arg(short, long, default_value = "10")]
+        max_concurrency: usize,
     },
 }
 
@@ -99,26 +109,182 @@ async fn run_s3dedup_server(config_path: &str) {
     }
 }
 
-async fn run_migrate(config_path: &str) {
+async fn run_migrate(config_path: &str, filetracker_url: &str, max_concurrency: usize) {
     let config = config::Config::new(config_path).unwrap();
     s3dedup::logging::setup(&config.logging).unwrap();
 
-    info!("Starting migration from old filetracker to s3dedup");
-    info!("Using config file: {}", config_path);
+    info!("Starting offline migration from old filetracker to s3dedup");
+    info!("Config file: {}", config_path);
+    info!("Filetracker URL: {}", filetracker_url);
+    info!("Max concurrency: {}", max_concurrency);
 
-    // TODO: Implement migration logic
-    println!("Migration not yet implemented");
+    // For offline migration, we only migrate the first bucket
+    if config.buckets.is_empty() {
+        error!("No buckets configured");
+        return;
+    }
+
+    let bucket_config = &config.buckets[0];
+    info!("Migrating to bucket: {}", bucket_config.name);
+
+    // Initialize AppState
+    let app_state = match AppState::new(bucket_config).await {
+        Ok(state) => Arc::new(state),
+        Err(e) => {
+            error!("Failed to initialize app state: {}", e);
+            return;
+        }
+    };
+
+    // Setup KV storage
+    if let Err(e) = app_state.kvstorage.lock().await.setup().await {
+        error!("Failed to setup KV storage: {}", e);
+        return;
+    }
+
+    // Initialize filetracker client
+    let filetracker_client =
+        Arc::new(s3dedup::filetracker_client::FiletrackerClient::new(filetracker_url.to_string()));
+
+    // Run migration with specified concurrency
+    match s3dedup::migration::migrate_all_files(filetracker_client, app_state, max_concurrency)
+        .await
+    {
+        Ok(stats) => {
+            info!("Migration completed successfully");
+            info!("Total files: {}", stats.total_files);
+            info!("Migrated: {}", stats.migrated);
+            info!("Skipped: {}", stats.skipped);
+            info!("Failed: {}", stats.failed);
+
+            if stats.failed > 0 {
+                warn!("{} files failed to migrate", stats.failed);
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            error!("Migration failed: {}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
-async fn run_live_migrate(config_path: &str) {
+async fn run_live_migrate(config_path: &str, max_concurrency: usize) {
     let config = config::Config::new(config_path).unwrap();
     s3dedup::logging::setup(&config.logging).unwrap();
+    let mut handles = vec![];
 
     info!("Starting live migration from old filetracker to s3dedup");
-    info!("Using config file: {}", config_path);
+    info!("Config file: {}", config_path);
+    info!("Max concurrency per bucket: {}", max_concurrency);
 
-    // TODO: Implement live migration logic
-    println!("Live migration not yet implemented");
+    for bucket in config.buckets.iter() {
+        // Check if this bucket has a filetracker URL configured
+        let filetracker_url = match &bucket.filetracker_url {
+            Some(url) => url.clone(),
+            None => {
+                info!(
+                    "Bucket '{}' has no filetracker_url configured, starting in normal mode",
+                    bucket.name
+                );
+                // Start server without migration for this bucket
+                let app_state = AppState::new(bucket).await.unwrap();
+                app_state.kvstorage.lock().await.setup().await.unwrap();
+
+                let cleaner = Arc::new(s3dedup::cleaner::Cleaner::new(
+                    bucket.name.clone(),
+                    app_state.kvstorage.clone(),
+                    app_state.s3storage.clone(),
+                    bucket.cleaner.clone(),
+                ));
+                cleaner.start();
+
+                let app = Router::new()
+                    .route("/ft/version", get(s3dedup::routes::ft::version::ft_version))
+                    .route("/ft/list/", get(s3dedup::routes::ft::list_files::ft_list_files))
+                    .route("/ft/list/{*path}", get(s3dedup::routes::ft::list_files::ft_list_files))
+                    .route(
+                        "/ft/files/{*path}",
+                        get(s3dedup::routes::ft::get_file::ft_get_file)
+                            .head(s3dedup::routes::ft::get_file::ft_get_file)
+                            .put(s3dedup::routes::ft::put_file::ft_put_file)
+                            .delete(s3dedup::routes::ft::delete_file::ft_delete_file),
+                    )
+                    .layer(
+                        TraceLayer::new_for_http()
+                            .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                            .on_response(DefaultOnResponse::new().level(Level::INFO)),
+                    )
+                    .with_state(Arc::new(app_state));
+
+                let address: SocketAddr = format!("{}:{}", bucket.address, bucket.port)
+                    .parse()
+                    .unwrap();
+                let handle = tokio::spawn(run_server(address, app));
+                handles.push(handle);
+                continue;
+            }
+        };
+
+        info!(
+            "Starting server with live migration for bucket: {} (filetracker: {})",
+            bucket.name, filetracker_url
+        );
+
+        let app_state = AppState::new_with_filetracker(bucket, filetracker_url)
+            .await
+            .unwrap();
+        app_state.kvstorage.lock().await.setup().await.unwrap();
+
+        // Start cleaner for this bucket
+        let cleaner = Arc::new(s3dedup::cleaner::Cleaner::new(
+            bucket.name.clone(),
+            app_state.kvstorage.clone(),
+            app_state.s3storage.clone(),
+            bucket.cleaner.clone(),
+        ));
+        cleaner.start();
+
+        // Start background migration worker
+        let migration_app_state = app_state.clone();
+        let migration_client = app_state.filetracker_client.clone().unwrap();
+        tokio::spawn(async move {
+            s3dedup::migration::live_migration_worker(
+                migration_client,
+                Arc::new(migration_app_state),
+                max_concurrency,
+            )
+            .await;
+        });
+
+        let app = Router::new()
+            .route("/ft/version", get(s3dedup::routes::ft::version::ft_version))
+            .route("/ft/list/", get(s3dedup::routes::ft::list_files::ft_list_files))
+            .route("/ft/list/{*path}", get(s3dedup::routes::ft::list_files::ft_list_files))
+            .route(
+                "/ft/files/{*path}",
+                get(s3dedup::routes::ft::get_file::ft_get_file)
+                    .head(s3dedup::routes::ft::get_file::ft_get_file)
+                    .put(s3dedup::routes::ft::put_file::ft_put_file)
+                    .delete(s3dedup::routes::ft::delete_file::ft_delete_file),
+            )
+            .layer(
+                TraceLayer::new_for_http()
+                    .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                    .on_response(DefaultOnResponse::new().level(Level::INFO)),
+            )
+            .with_state(Arc::new(app_state));
+
+        let address: SocketAddr = format!("{}:{}", bucket.address, bucket.port)
+            .parse()
+            .unwrap();
+        let handle = tokio::spawn(run_server(address, app));
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.await.unwrap();
+    }
 }
 
 #[tokio::main]
@@ -129,11 +295,18 @@ async fn main() {
         Commands::Server { config } => {
             run_s3dedup_server(&config).await;
         }
-        Commands::Migrate { config } => {
-            run_migrate(&config).await;
+        Commands::Migrate {
+            config,
+            filetracker_url,
+            max_concurrency,
+        } => {
+            run_migrate(&config, &filetracker_url, max_concurrency).await;
         }
-        Commands::LiveMigrate { config } => {
-            run_live_migrate(&config).await;
+        Commands::LiveMigrate {
+            config,
+            max_concurrency,
+        } => {
+            run_live_migrate(&config, max_concurrency).await;
         }
     }
 }

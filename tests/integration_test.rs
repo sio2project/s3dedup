@@ -83,6 +83,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
             force_path_style: true,
         }),
         cleaner: s3dedup::cleaner::CleanerConfig::default(),
+        filetracker_url: None,
     };
 
     let kvstorage = KVStorage::new(&config).await.unwrap();
@@ -94,6 +95,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         kvstorage: Arc::new(Mutex::new(kvstorage)),
         locks: Arc::new(Mutex::new(locks)),
         s3storage: Arc::new(Mutex::new(s3storage)),
+        filetracker_client: None,
     });
 
     app_state.kvstorage.lock().await.setup().await.unwrap();

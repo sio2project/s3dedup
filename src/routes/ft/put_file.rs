@@ -175,12 +175,12 @@ pub async fn ft_put_file(
     // Update reference count and store blob if needed (matching original transaction order)
     if !blob_exists {
         debug!("Creating new blob.");
-        // Store blob in S3
+        // Store blob in S3 (clone data before moving it in case we need it for dual-write)
         if let Err(e) = state
             .s3storage
             .lock()
             .await
-            .put_object(s3_key, final_data)
+            .put_object(s3_key, final_data.clone())
             .await
         {
             error!("Failed to store object in S3: {}", e);
@@ -297,7 +297,32 @@ pub async fn ft_put_file(
 
     debug!("Created link {}.", path);
 
-    // 9. Release lock and return (matching original response format)
+    // 9. Dual-write to filetracker if in live migration mode
+    if let Some(filetracker_client) = &state.filetracker_client {
+        debug!("Live migration mode: also writing to filetracker");
+
+        // Reconstruct the data that needs to be sent to filetracker
+        // We need to use the final_data (compressed) that was stored
+        let result = filetracker_client
+            .put_file(
+                path,
+                final_data.clone(),
+                timestamp,
+                logical_size,
+                &digest,
+                true, // Always compressed in storage
+            )
+            .await;
+
+        if let Err(e) = result {
+            error!("Failed to write to filetracker during live migration: {}", e);
+            // Continue anyway - s3dedup is primary storage
+        } else {
+            debug!("Successfully wrote to filetracker");
+        }
+    }
+
+    // 10. Release lock and return (matching original response format)
     state.locks.lock().await.release(&lock_key);
 
     Response::builder()

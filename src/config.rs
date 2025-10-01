@@ -38,6 +38,10 @@ pub struct BucketConfig {
 
     #[serde(default)]
     pub cleaner: CleanerConfig,
+
+    /// Optional filetracker URL for live migration mode
+    #[serde(default)]
+    pub filetracker_url: Option<String>,
 }
 
 impl Config {

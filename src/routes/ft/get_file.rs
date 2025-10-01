@@ -36,8 +36,63 @@ pub async fn ft_get_file(
     }
     let modified_time = modified_time.unwrap();
 
-    // If file doesn't exist (modified time is 0), return 404
+    // If file doesn't exist (modified time is 0), check filetracker if in live migration mode
     if modified_time == 0 {
+        if let Some(filetracker_client) = &state.filetracker_client {
+            debug!("File {} not found in s3dedup, checking filetracker", path);
+
+            // Try to get file from filetracker
+            match filetracker_client.get_file(path).await {
+                Ok(file_metadata) => {
+                    debug!("File {} found in filetracker, migrating on-the-fly", path);
+
+                    // Migrate the file on-the-fly using migration logic
+                    let result = crate::migration::migrate_single_file_from_metadata(
+                        &state,
+                        path,
+                        file_metadata.clone(),
+                    )
+                    .await;
+
+                    if let Err(e) = result {
+                        error!("Failed to migrate file on-the-fly: {}", e);
+                        state.locks.lock().await.release(&lock_key);
+                        return Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::empty())
+                            .unwrap();
+                    }
+
+                    // Release lock
+                    state.locks.lock().await.release(&lock_key);
+
+                    // Serve the file directly from filetracker response
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/octet-stream")
+                        .header("Content-Length", file_metadata.data.len().to_string())
+                        .header(
+                            "Content-Encoding",
+                            if file_metadata.is_compressed {
+                                "gzip"
+                            } else {
+                                "identity"
+                            },
+                        )
+                        .header(
+                            "Last-Modified",
+                            utils::format_rfc2822_timestamp(file_metadata.last_modified),
+                        )
+                        .header("Logical-Size", file_metadata.logical_size.to_string())
+                        .body(Body::from(file_metadata.data))
+                        .unwrap();
+                }
+                Err(e) => {
+                    debug!("File {} not found in filetracker either: {}", path, e);
+                }
+            }
+        }
+
         debug!("File {} not found", path);
         state.locks.lock().await.release(&lock_key);
         return Response::builder()

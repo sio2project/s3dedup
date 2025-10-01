@@ -170,7 +170,21 @@ pub async fn ft_delete_file(
 
     debug!("Deleted file {}", path);
 
-    // 9. Release lock and return
+    // 9. Dual-delete from filetracker if in live migration mode
+    if let Some(filetracker_client) = &state.filetracker_client {
+        debug!("Live migration mode: also deleting from filetracker");
+
+        let result = filetracker_client.delete_file(path, timestamp).await;
+
+        if let Err(e) = result {
+            error!("Failed to delete from filetracker during live migration: {}", e);
+            // Continue anyway - s3dedup is primary storage
+        } else {
+            debug!("Successfully deleted from filetracker");
+        }
+    }
+
+    // 10. Release lock and return
     state.locks.lock().await.release(&lock_key);
 
     Response::builder()
