@@ -16,11 +16,14 @@ async fn create_test_app() -> Router {
 // Helper to create test app with access to app state for S3 verification
 async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     use s3dedup::{AppState};
-    use s3dedup::config::{BucketConfig, KVStorageType, SQLiteConfig, MinIOConfig};
+    use s3dedup::config::{BucketConfig, KVStorageType, SQLiteConfig, PostgresConfig, MinIOConfig};
     use s3dedup::kvstorage::KVStorage;
     use s3dedup::locks::LocksStorage;
     use s3dedup::s3storage::S3Storage;
     use tokio::sync::Mutex;
+
+    // Determine which KV storage to use from environment
+    let use_postgres = std::env::var("DATABASE_URL").is_ok();
 
     // Create temporary test database (unique per test)
     std::fs::create_dir_all("db").ok();
@@ -29,16 +32,37 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         .unwrap()
         .as_nanos());
 
+    let (kvstorage_type, sqlite_config, postgres_config) = if use_postgres {
+        (
+            KVStorageType::Postgres,
+            None,
+            Some(PostgresConfig {
+                host: "localhost".to_string(),
+                port: 5432,
+                user: "postgres".to_string(),
+                password: "postgres".to_string(),
+                dbname: "s3dedup_test".to_string(),
+                pool_size: 10,
+            })
+        )
+    } else {
+        (
+            KVStorageType::SQLite,
+            Some(SQLiteConfig {
+                path: test_db.clone(),
+                pool_size: 50,
+            }),
+            None
+        )
+    };
+
     let config = BucketConfig {
         name: "test-bucket".to_string(),
         address: "127.0.0.1".to_string(),
         port: 3001,
-        kvstorage_type: KVStorageType::SQLite,
-        sqlite: Some(SQLiteConfig {
-            path: test_db.clone(),
-            pool_size: 50,
-        }),
-        postgres: None,
+        kvstorage_type,
+        sqlite: sqlite_config,
+        postgres: postgres_config,
         locks_type: s3dedup::locks::LocksType::Memory,
         s3storage_type: s3dedup::s3storage::S3StorageType::MinIO,
         minio: Some(MinIOConfig {
