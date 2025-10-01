@@ -4,7 +4,7 @@ use axum::{
 };
 use tower::ServiceExt;
 use axum::Router;
-use axum::routing::{get, head, put};
+use axum::routing::{delete, get, head, put};
 use std::sync::Arc;
 
 // Helper to create test app state
@@ -53,7 +53,11 @@ async fn create_test_app() -> Router {
     app_state.kvstorage.lock().await.setup().await.unwrap();
 
     Router::new()
-        .route("/ft/files/{*path}", get(s3dedup::routes::ft::get_file::ft_get_file).head(s3dedup::routes::ft::get_file::ft_get_file).put(s3dedup::routes::ft::put_file::ft_put_file))
+        .route("/ft/files/{*path}",
+            get(s3dedup::routes::ft::get_file::ft_get_file)
+            .head(s3dedup::routes::ft::get_file::ft_get_file)
+            .put(s3dedup::routes::ft::put_file::ft_put_file)
+            .delete(s3dedup::routes::ft::delete_file::ft_delete_file))
         .with_state(Arc::new(app_state))
 }
 
@@ -366,4 +370,87 @@ async fn test_head_existing_file() {
     use axum::body::to_bytes;
     let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(body_bytes.len(), 0);
+}
+
+
+#[tokio::test]
+async fn test_delete_nonexistent_file() {
+    let app = create_test_app().await;
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/ft/files/nonexistent.txt?last_modified={}", encoded_timestamp))
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_delete_file() {
+    let app = create_test_app().await;
+
+    let test_content = b"Test content to be deleted";
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(test_content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // PUT the file first
+    let put_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/ft/files/delete/test.txt?last_modified={}", encoded_timestamp))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(put_response.status(), StatusCode::OK);
+
+    // DELETE the file
+    let delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/ft/files/delete/test.txt?last_modified={}", encoded_timestamp))
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(delete_response.status(), StatusCode::OK);
+
+    // Verify file is gone
+    let get_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/ft/files/delete/test.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
 }

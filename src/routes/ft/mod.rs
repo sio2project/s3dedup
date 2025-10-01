@@ -1,3 +1,4 @@
+pub mod delete_file;
 pub mod get_file;
 pub mod put_file;
 pub mod version;

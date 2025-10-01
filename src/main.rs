@@ -1,5 +1,6 @@
 use axum::Router;
-use axum::routing::{get, head};
+use axum::routing::{delete, get, head};
+use s3dedup::routes::ft::delete_file::ft_delete_file;
 use s3dedup::routes::ft::get_file::ft_get_file;
 use s3dedup::routes::ft::put_file::ft_put_file;
 use s3dedup::routes::ft::version::ft_version;
@@ -29,7 +30,11 @@ async fn main() {
 
         let app = Router::new()
             .route("/ft/version", get(ft_version))
-            .route("/ft/files/{*path}", get(ft_get_file).head(ft_get_file).put(ft_put_file))
+            .route("/ft/files/{*path}",
+                get(ft_get_file)
+                .head(ft_get_file)
+                .put(ft_put_file)
+                .delete(ft_delete_file))
             .layer( // Logging middleware
                 TraceLayer::new_for_http()
                     .make_span_with(DefaultMakeSpan::new().level(Level::INFO))

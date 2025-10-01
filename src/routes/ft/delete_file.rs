@@ -1,0 +1,142 @@
+use crate::{locks, AppState};
+use axum::extract::{Path, Query, State};
+use axum::http::{Response, StatusCode};
+use axum::response::IntoResponse;
+use std::sync::Arc;
+use tracing::{debug, error, info};
+use crate::routes::ft::{utils, LastModifiedQuery};
+
+pub async fn ft_delete_file(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+    Query(query): Query<LastModifiedQuery>,
+) -> impl IntoResponse {
+    // Remove leading slash from wildcard path
+    let path = path.strip_prefix('/').unwrap_or(&path);
+
+    // 1. Parse and validate timestamp
+    let timestamp = utils::conv_rfc2822_to_unix_timestamp(&query.last_modified);
+    if timestamp.is_err() {
+        error!("Failed to parse last_modified");
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body("Failed to parse last_modified".to_string())
+            .unwrap();
+    }
+    let timestamp = timestamp.unwrap();
+
+    debug!("Handling DELETE {}@{}", path, timestamp);
+
+    // 2. Acquire file lock (exclusive for write operation)
+    let lock_key = locks::file_lock(&state.bucket_name, &path);
+    state.locks.lock().await.acquire_exclusive(&lock_key);
+
+    // 3. Check if file exists
+    let current_modified = state.kvstorage.lock().await.get_modified(&state.bucket_name, &path).await;
+    if current_modified.is_err() {
+        error!("Failed to get current modified");
+        state.locks.lock().await.release(&lock_key);
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to get current modified".to_string())
+            .unwrap();
+    }
+    let current_modified = current_modified.unwrap();
+
+    // If file doesn't exist, return 404
+    if current_modified == 0 {
+        debug!("File {} not found", path);
+        state.locks.lock().await.release(&lock_key);
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body("File not found".to_string())
+            .unwrap();
+    }
+
+    // 4. If trying to delete newer version, ignore (return 200 but don't delete)
+    if current_modified > timestamp {
+        info!(
+            "Tried to delete newer version of {} ({} < {}), ignoring.",
+            path, timestamp, current_modified
+        );
+        state.locks.lock().await.release(&lock_key);
+        return Response::builder()
+            .status(StatusCode::OK)
+            .body("".to_string())
+            .unwrap();
+    }
+
+    // 5. Get the hash for this path
+    let hash = state.kvstorage.lock().await.get_ref_file(&state.bucket_name, &path).await;
+    if hash.is_err() {
+        error!("Failed to get ref file");
+        state.locks.lock().await.release(&lock_key);
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to get ref file".to_string())
+            .unwrap();
+    }
+    let hash = hash.unwrap();
+
+    if hash.is_empty() {
+        error!("File {} has no hash reference", path);
+        state.locks.lock().await.release(&lock_key);
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body("File has no hash reference".to_string())
+            .unwrap();
+    }
+
+    // 6. Decrement reference count
+    if let Err(e) = state.kvstorage.lock().await.decrement_ref_count(&state.bucket_name, &hash).await {
+        error!("Failed to decrement ref count: {}", e);
+        state.locks.lock().await.release(&lock_key);
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to decrement ref count".to_string())
+            .unwrap();
+    }
+
+    // 7. Check if we should delete the blob (ref count is now 0)
+    let ref_count = state.kvstorage.lock().await.get_ref_count(&state.bucket_name, &hash).await;
+    if ref_count.is_ok() && ref_count.unwrap() <= 0 {
+        debug!("Deleting blob with hash: {}", hash);
+        // Delete blob from S3
+        if let Err(e) = state.s3storage.lock().await.delete_object(&hash).await {
+            error!("Failed to delete object from S3: {}", e);
+            // Continue anyway - metadata cleanup is more important
+        }
+
+        // Delete logical size metadata
+        let _ = state.kvstorage.lock().await.set_logical_size(&state.bucket_name, &hash, 0).await;
+    }
+
+    // 8. Delete file metadata (path -> hash mapping and timestamp)
+    if let Err(e) = state.kvstorage.lock().await.delete_ref_file(&state.bucket_name, &path).await {
+        error!("Failed to delete ref file: {}", e);
+        state.locks.lock().await.release(&lock_key);
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to delete ref file".to_string())
+            .unwrap();
+    }
+
+    if let Err(e) = state.kvstorage.lock().await.delete_modified(&state.bucket_name, &path).await {
+        error!("Failed to delete modified time: {}", e);
+        state.locks.lock().await.release(&lock_key);
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to delete modified time".to_string())
+            .unwrap();
+    }
+
+    debug!("Deleted file {}", path);
+
+    // 9. Release lock and return
+    state.locks.lock().await.release(&lock_key);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .body("".to_string())
+        .unwrap()
+}
