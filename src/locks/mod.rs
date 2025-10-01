@@ -13,6 +13,7 @@ pub(crate) fn file_lock(bucket: &str, path: &str) -> String {
 /**
  * Get key for lock on hash
  */
+#[allow(dead_code)]
 fn hash_lock(bucket: &str, hash: &str) -> String {
     format!("hash:{}:{}", bucket, hash)
 }
@@ -33,6 +34,7 @@ pub(crate) trait Locks {
     fn release(&mut self, key: &str) -> bool;
 }
 
+#[allow(private_interfaces)]
 #[derive(Clone)]
 pub enum LocksStorage {
     Memory(memory::MemoryLocks),
@@ -44,7 +46,7 @@ impl LocksStorage {
             LocksType::Memory => {
                 info!("Using memory as locks storage");
                 Box::new(LocksStorage::Memory(*memory::MemoryLocks::new()))
-            },
+            }
         }
     }
 

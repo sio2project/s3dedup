@@ -1,5 +1,5 @@
-use std::error::Error;
 use chrono::{DateTime, TimeZone, Utc};
+use std::error::Error;
 
 pub fn conv_rfc2822_to_unix_timestamp(rfc2822: &str) -> Result<i64, Box<dyn Error + Send + Sync>> {
     let dt = DateTime::parse_from_rfc2822(rfc2822)?;

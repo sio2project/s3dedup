@@ -1,11 +1,11 @@
-use crate::{locks, AppState};
+use crate::routes::ft::utils;
+use crate::{AppState, locks};
+use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
-use axum::body::Body;
 use std::sync::Arc;
 use tracing::{debug, error};
-use crate::routes::ft::utils;
 
 pub async fn ft_get_file(
     State(state): State<Arc<AppState>>,
@@ -16,11 +16,16 @@ pub async fn ft_get_file(
     debug!("Handling GET for path: {}", path);
 
     // 1. Acquire file lock (shared lock for read operation)
-    let lock_key = locks::file_lock(&state.bucket_name, &path);
+    let lock_key = locks::file_lock(&state.bucket_name, path);
     state.locks.lock().await.acquire_shared(&lock_key);
 
     // 2. Check if file exists and get metadata
-    let modified_time = state.kvstorage.lock().await.get_modified(&state.bucket_name, &path).await;
+    let modified_time = state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&state.bucket_name, path)
+        .await;
     if modified_time.is_err() {
         error!("Failed to get modified time");
         state.locks.lock().await.release(&lock_key);
@@ -42,7 +47,12 @@ pub async fn ft_get_file(
     }
 
     // 3. Get the hash for this path
-    let hash = state.kvstorage.lock().await.get_ref_file(&state.bucket_name, &path).await;
+    let hash = state
+        .kvstorage
+        .lock()
+        .await
+        .get_ref_file(&state.bucket_name, path)
+        .await;
     if hash.is_err() {
         error!("Failed to get ref file");
         state.locks.lock().await.release(&lock_key);
@@ -63,7 +73,12 @@ pub async fn ft_get_file(
     }
 
     // 4. Get logical size
-    let logical_size = state.kvstorage.lock().await.get_logical_size(&state.bucket_name, &hash).await;
+    let logical_size = state
+        .kvstorage
+        .lock()
+        .await
+        .get_logical_size(&state.bucket_name, &hash)
+        .await;
     if logical_size.is_err() {
         error!("Failed to get logical size");
         state.locks.lock().await.release(&lock_key);
@@ -95,7 +110,10 @@ pub async fn ft_get_file(
         .header("Content-Type", "application/octet-stream")
         .header("Content-Length", blob_data.len().to_string())
         .header("Content-Encoding", "gzip")
-        .header("Last-Modified", utils::format_rfc2822_timestamp(modified_time))
+        .header(
+            "Last-Modified",
+            utils::format_rfc2822_timestamp(modified_time),
+        )
         .header("Logical-Size", logical_size.to_string())
         .body(Body::from(blob_data))
         .unwrap()

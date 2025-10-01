@@ -1,8 +1,8 @@
-use std::path::Path;
 use crate::config::BucketConfig;
 use crate::kvstorage::KVStorageTrait;
 use serde::Deserialize;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use std::path::Path;
 use tracing::debug;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -17,7 +17,9 @@ pub struct SQLite {
 }
 
 impl KVStorageTrait for SQLite {
-    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn new(
+        config: &BucketConfig,
+    ) -> Result<Box<Self>, Box<dyn std::error::Error + Send + Sync>> {
         let sqlite_config = config.sqlite.as_ref().unwrap();
 
         if !Path::new(&sqlite_config.path).exists() {
@@ -81,13 +83,12 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         hash: &str,
     ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
-        let result: Result<(i32,), sqlx::Error> = sqlx::query_as(
-            "SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2"
-        )
-        .bind(bucket)
-        .bind(hash)
-        .fetch_one(&self.pool)
-        .await;
+        let result: Result<(i32,), sqlx::Error> =
+            sqlx::query_as("SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2")
+                .bind(bucket)
+                .bind(hash)
+                .fetch_one(&self.pool)
+                .await;
 
         match result {
             Ok((count,)) => Ok(count),
@@ -115,13 +116,12 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         path: &str,
     ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
-        let result: Result<(i64,), sqlx::Error> = sqlx::query_as(
-            "SELECT modified FROM modified WHERE bucket = ?1 AND path = ?2"
-        )
-        .bind(bucket)
-        .bind(path)
-        .fetch_one(&self.pool)
-        .await;
+        let result: Result<(i64,), sqlx::Error> =
+            sqlx::query_as("SELECT modified FROM modified WHERE bucket = ?1 AND path = ?2")
+                .bind(bucket)
+                .bind(path)
+                .fetch_one(&self.pool)
+                .await;
 
         match result {
             Ok((modified,)) => Ok(modified),
@@ -162,13 +162,12 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         path: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let result: Result<(String,), sqlx::Error> = sqlx::query_as(
-            "SELECT hash FROM ref_file WHERE bucket = ?1 AND path = ?2"
-        )
-        .bind(bucket)
-        .bind(path)
-        .fetch_one(&self.pool)
-        .await;
+        let result: Result<(String,), sqlx::Error> =
+            sqlx::query_as("SELECT hash FROM ref_file WHERE bucket = ?1 AND path = ?2")
+                .bind(bucket)
+                .bind(path)
+                .fetch_one(&self.pool)
+                .await;
 
         match result {
             Ok((hash,)) => Ok(hash),
@@ -209,13 +208,12 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         hash: &str,
     ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-        let result: Result<(i64,), sqlx::Error> = sqlx::query_as(
-            "SELECT logical_size FROM logical_size WHERE bucket = ?1 AND hash = ?2"
-        )
-        .bind(bucket)
-        .bind(hash)
-        .fetch_one(&self.pool)
-        .await;
+        let result: Result<(i64,), sqlx::Error> =
+            sqlx::query_as("SELECT logical_size FROM logical_size WHERE bucket = ?1 AND hash = ?2")
+                .bind(bucket)
+                .bind(hash)
+                .fetch_one(&self.pool)
+                .await;
 
         match result {
             Ok((size,)) => Ok(size as usize),
@@ -229,12 +227,14 @@ impl KVStorageTrait for SQLite {
         hash: &str,
         size: usize,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        sqlx::query("INSERT OR REPLACE INTO logical_size (bucket, hash, logical_size) VALUES (?1, ?2, ?3)")
-            .bind(bucket)
-            .bind(hash)
-            .bind(size as i64)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO logical_size (bucket, hash, logical_size) VALUES (?1, ?2, ?3)",
+        )
+        .bind(bucket)
+        .bind(hash)
+        .bind(size as i64)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

@@ -1,5 +1,5 @@
 use tracing::dispatcher::SetGlobalDefaultError;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct LoggingConfig {
@@ -16,9 +16,7 @@ pub fn setup(logging_config: &LoggingConfig) -> Result<(), SetGlobalDefaultError
             .finish();
         tracing::subscriber::set_global_default(subscriber)
     } else {
-        let subscriber = fmt::Subscriber::builder()
-            .with_env_filter(filter)
-            .finish();
+        let subscriber = fmt::Subscriber::builder().with_env_filter(filter).finish();
         tracing::subscriber::set_global_default(subscriber)
     }
 }

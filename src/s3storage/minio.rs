@@ -70,7 +70,11 @@ impl S3StorageTrait for MinIOClient {
         Ok(Box::new(minio_client))
     }
 
-    async fn put_object(&self, key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn put_object(
+        &self,
+        key: &str,
+        data: Vec<u8>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!("Putting object: {} (size: {} bytes)", key, data.len());
 
         self.client
@@ -89,7 +93,8 @@ impl S3StorageTrait for MinIOClient {
     async fn get_object(&self, key: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         debug!("Getting object: {}", key);
 
-        let resp = self.client
+        let resp = self
+            .client
             .get_object()
             .bucket(&self.bucket)
             .key(key)
@@ -97,14 +102,19 @@ impl S3StorageTrait for MinIOClient {
             .await?;
 
         let data = resp.body.collect().await?.into_bytes().to_vec();
-        debug!("Successfully got object: {} (size: {} bytes)", key, data.len());
+        debug!(
+            "Successfully got object: {} (size: {} bytes)",
+            key,
+            data.len()
+        );
         Ok(data)
     }
 
     async fn delete_object(&self, key: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!("Deleting object: {}", key);
 
-        let delete_future = self.client
+        let delete_future = self
+            .client
             .delete_object()
             .bucket(&self.bucket)
             .key(key)
@@ -130,7 +140,8 @@ impl S3StorageTrait for MinIOClient {
     async fn object_exists(&self, key: &str) -> Result<bool, Box<dyn Error + Send + Sync>> {
         debug!("Checking if object exists: {}", key);
 
-        match self.client
+        match self
+            .client
             .head_object()
             .bucket(&self.bucket)
             .key(key)
@@ -145,8 +156,12 @@ impl S3StorageTrait for MinIOClient {
                 let err_string = err.to_string();
                 debug!("Head object error: {}", err_string);
 
-                if err_string.contains("NotFound") || err_string.contains("404") || err_string.contains("NoSuchKey") ||
-                   format!("{:?}", err).contains("NotFound") || format!("{:?}", err).contains("NoSuchKey") {
+                if err_string.contains("NotFound")
+                    || err_string.contains("404")
+                    || err_string.contains("NoSuchKey")
+                    || format!("{:?}", err).contains("NotFound")
+                    || format!("{:?}", err).contains("NoSuchKey")
+                {
                     debug!("Object does not exist: {}", key);
                     Ok(false)
                 } else {
@@ -175,12 +190,22 @@ impl MinIOClient {
                 debug!("Head bucket error: {}", err_string);
                 debug!("Head bucket error debug: {:?}", err);
 
-                if err_string.contains("NotFound") || err_string.contains("404") || err_string.contains("NoSuchBucket") ||
-                   format!("{:?}", err).contains("NotFound") || format!("{:?}", err).contains("NoSuchBucket") {
+                if err_string.contains("NotFound")
+                    || err_string.contains("404")
+                    || err_string.contains("NoSuchBucket")
+                    || format!("{:?}", err).contains("NotFound")
+                    || format!("{:?}", err).contains("NoSuchBucket")
+                {
                     debug!("Bucket does not exist, creating: {}", self.bucket);
 
                     // Create the bucket
-                    match self.client.create_bucket().bucket(&self.bucket).send().await {
+                    match self
+                        .client
+                        .create_bucket()
+                        .bucket(&self.bucket)
+                        .send()
+                        .await
+                    {
                         Ok(_) => {
                             debug!("Successfully created bucket: {}", self.bucket);
                             Ok(())
@@ -189,7 +214,9 @@ impl MinIOClient {
                             // Check if bucket was created by another process concurrently
                             let create_err_string = create_err.to_string();
                             debug!("Create bucket error: {}", create_err_string);
-                            if create_err_string.contains("BucketAlreadyExists") || create_err_string.contains("BucketAlreadyOwnedByYou") {
+                            if create_err_string.contains("BucketAlreadyExists")
+                                || create_err_string.contains("BucketAlreadyOwnedByYou")
+                            {
                                 debug!("Bucket was created concurrently: {}", self.bucket);
                                 Ok(())
                             } else {

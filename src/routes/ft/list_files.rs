@@ -2,9 +2,9 @@ use crate::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
+use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{debug, error};
-use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
@@ -22,23 +22,28 @@ pub async fn ft_list_files(
     Query(query): Query<ListQuery>,
 ) -> impl IntoResponse {
     // Extract path or use empty string for root
-    let path_str = path.map(|Path(p)| p).unwrap_or_else(|| String::new());
+    let path_str = path.map(|Path(p)| p).unwrap_or_default();
     let path = path_str.strip_prefix('/').unwrap_or(&path_str);
 
     // Parse the timestamp
-    let timestamp = match crate::routes::ft::utils::conv_rfc2822_to_unix_timestamp(&query.last_modified) {
-        Ok(ts) => ts,
-        Err(_) => {
-            // If parsing fails, use current time
-            chrono::Utc::now().timestamp()
-        }
-    };
+    let timestamp =
+        match crate::routes::ft::utils::conv_rfc2822_to_unix_timestamp(&query.last_modified) {
+            Ok(ts) => ts,
+            Err(_) => {
+                // If parsing fails, use current time
+                chrono::Utc::now().timestamp()
+            }
+        };
 
     debug!("Handling GET /list/{} (@{})", path, timestamp);
 
     // Get all files under this path prefix
-    let files_result = state.kvstorage.lock().await
-        .list_files(&state.bucket_name, path, timestamp).await;
+    let files_result = state
+        .kvstorage
+        .lock()
+        .await
+        .list_files(&state.bucket_name, path, timestamp)
+        .await;
 
     match files_result {
         Ok(files) => {

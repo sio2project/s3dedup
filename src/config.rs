@@ -1,5 +1,5 @@
-use std::error::Error;
 use crate::logging::LoggingConfig;
+use std::error::Error;
 
 pub use crate::kvstorage::KVStorageType;
 pub use crate::kvstorage::postgres::PostgresConfig;

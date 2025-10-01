@@ -21,7 +21,11 @@ pub(crate) trait KVStorageTrait {
         Self: Sized;
 
     async fn setup(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
-    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn Error + Send + Sync>>;
+    async fn get_ref_count(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<i32, Box<dyn Error + Send + Sync>>;
     async fn set_ref_count(
         &mut self,
         bucket: &str,
@@ -49,29 +53,59 @@ pub(crate) trait KVStorageTrait {
         self.set_ref_count(bucket, hash, cnt - 1).await
     }
 
-    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn Error + Send + Sync>>;
+    async fn get_modified(
+        &mut self,
+        bucket: &str,
+        path: &str,
+    ) -> Result<i64, Box<dyn Error + Send + Sync>>;
     async fn set_modified(
         &mut self,
         bucket: &str,
         path: &str,
         modified: i64,
     ) -> Result<(), Box<dyn Error + Send + Sync>>;
-    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn delete_modified(
+        &mut self,
+        bucket: &str,
+        path: &str,
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
 
-    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String, Box<dyn Error + Send + Sync>>;
+    async fn get_ref_file(
+        &mut self,
+        bucket: &str,
+        path: &str,
+    ) -> Result<String, Box<dyn Error + Send + Sync>>;
     async fn set_ref_file(
         &mut self,
         bucket: &str,
         path: &str,
         hash: &str,
     ) -> Result<(), Box<dyn Error + Send + Sync>>;
-    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn delete_ref_file(
+        &mut self,
+        bucket: &str,
+        path: &str,
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
 
-    async fn get_logical_size(&mut self, bucket: &str, hash: &str) -> Result<usize, Box<dyn Error + Send + Sync>>;
-    async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn get_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<usize, Box<dyn Error + Send + Sync>>;
+    async fn set_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+        size: usize,
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
 
     /// List all files under a given path prefix that were modified at or before the given timestamp
-    async fn list_files(&mut self, bucket: &str, path_prefix: &str, timestamp: i64) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
+    async fn list_files(
+        &mut self,
+        bucket: &str,
+        path_prefix: &str,
+        timestamp: i64,
+    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
 }
 
 #[derive(Clone)]
@@ -110,7 +144,11 @@ impl KVStorage {
      * Get the reference count for a hash.
      * If the hash does not exist, return 0.
      */
-    pub async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn Error + Send + Sync>> {
+    pub async fn get_ref_count(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<i32, Box<dyn Error + Send + Sync>> {
         debug!("Getting ref count for bucket: {}, hash: {}", bucket, hash);
         match self {
             KVStorage::Postgres(storage) => storage.get_ref_count(bucket, hash).await,
@@ -145,7 +183,10 @@ impl KVStorage {
         bucket: &str,
         hash: &str,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        debug!("Incrementing ref count for bucket: {}, hash: {}", bucket, hash);
+        debug!(
+            "Incrementing ref count for bucket: {}, hash: {}",
+            bucket, hash
+        );
         match self {
             KVStorage::Postgres(storage) => storage.increment_ref_count(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.increment_ref_count(bucket, hash).await,
@@ -161,7 +202,10 @@ impl KVStorage {
         bucket: &str,
         hash: &str,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        debug!("Decrementing ref count for bucket: {}, hash: {}", bucket, hash);
+        debug!(
+            "Decrementing ref count for bucket: {}, hash: {}",
+            bucket, hash
+        );
         match self {
             KVStorage::Postgres(storage) => storage.decrement_ref_count(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.decrement_ref_count(bucket, hash).await,
@@ -172,8 +216,15 @@ impl KVStorage {
      * Get the modified time for a path.
      * If the path does not exist, return 0.
      */
-    pub async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn Error + Send + Sync>> {
-        debug!("Getting modified time for bucket: {}, path: {}", bucket, path);
+    pub async fn get_modified(
+        &mut self,
+        bucket: &str,
+        path: &str,
+    ) -> Result<i64, Box<dyn Error + Send + Sync>> {
+        debug!(
+            "Getting modified time for bucket: {}, path: {}",
+            bucket, path
+        );
         match self {
             KVStorage::Postgres(storage) => storage.get_modified(bucket, path).await,
             KVStorage::SQLite(storage) => storage.get_modified(bucket, path).await,
@@ -207,7 +258,10 @@ impl KVStorage {
         bucket: &str,
         path: &str,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        debug!("Deleting modified time for bucket: {}, path: {}", bucket, path);
+        debug!(
+            "Deleting modified time for bucket: {}, path: {}",
+            bucket, path
+        );
         match self {
             KVStorage::Postgres(storage) => storage.delete_modified(bucket, path).await,
             KVStorage::SQLite(storage) => storage.delete_modified(bucket, path).await,
@@ -273,7 +327,10 @@ impl KVStorage {
         bucket: &str,
         hash: &str,
     ) -> Result<usize, Box<dyn Error + Send + Sync>> {
-        debug!("Getting logical size for bucket: {}, hash: {}", bucket, hash);
+        debug!(
+            "Getting logical size for bucket: {}, hash: {}",
+            bucket, hash
+        );
         match self {
             KVStorage::Postgres(storage) => storage.get_logical_size(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.get_logical_size(bucket, hash).await,
@@ -289,7 +346,10 @@ impl KVStorage {
         hash: &str,
         size: usize,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        debug!("Setting logical size for bucket: {}, hash: {} to {}", bucket, hash, size);
+        debug!(
+            "Setting logical size for bucket: {}, hash: {} to {}",
+            bucket, hash, size
+        );
         match self {
             KVStorage::Postgres(storage) => storage.set_logical_size(bucket, hash, size).await,
             KVStorage::SQLite(storage) => storage.set_logical_size(bucket, hash, size).await,
@@ -305,9 +365,14 @@ impl KVStorage {
         path_prefix: &str,
         timestamp: i64,
     ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
-        debug!("Listing files for bucket: {}, prefix: {}, timestamp: {}", bucket, path_prefix, timestamp);
+        debug!(
+            "Listing files for bucket: {}, prefix: {}, timestamp: {}",
+            bucket, path_prefix, timestamp
+        );
         match self {
-            KVStorage::Postgres(storage) => storage.list_files(bucket, path_prefix, timestamp).await,
+            KVStorage::Postgres(storage) => {
+                storage.list_files(bucket, path_prefix, timestamp).await
+            }
             KVStorage::SQLite(storage) => storage.list_files(bucket, path_prefix, timestamp).await,
         }
     }

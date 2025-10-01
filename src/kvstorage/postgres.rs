@@ -61,7 +61,8 @@ impl KVStorageTrait for Postgres {
                 hash VARCHAR(255) NOT NULL,
                 refcount INT NOT NULL,
                 PRIMARY KEY (bucket, hash)
-            )", refcount_table
+            )",
+            refcount_table
         ))
         .execute(&self.pool)
         .await?;
@@ -72,7 +73,8 @@ impl KVStorageTrait for Postgres {
                 path VARCHAR(255) NOT NULL,
                 modified BIGINT NOT NULL,
                 PRIMARY KEY (bucket, path)
-            )", modified_table
+            )",
+            modified_table
         ))
         .execute(&self.pool)
         .await?;
@@ -83,7 +85,8 @@ impl KVStorageTrait for Postgres {
                 path VARCHAR(255) NOT NULL,
                 hash VARCHAR(255) NOT NULL,
                 PRIMARY KEY (bucket, path)
-            )", ref_file_table
+            )",
+            ref_file_table
         ))
         .execute(&self.pool)
         .await?;
@@ -94,7 +97,8 @@ impl KVStorageTrait for Postgres {
                 hash VARCHAR(255) NOT NULL,
                 logical_size BIGINT NOT NULL,
                 PRIMARY KEY (bucket, hash)
-            )", logical_size_table
+            )",
+            logical_size_table
         ))
         .execute(&self.pool)
         .await?;
@@ -102,9 +106,16 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32, Box<dyn Error + Send + Sync>> {
+    async fn get_ref_count(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<i32, Box<dyn Error + Send + Sync>> {
         let table = self.table_name("refcount");
-        let query = format!("SELECT refcount FROM {} WHERE bucket = $1 AND hash = $2", table);
+        let query = format!(
+            "SELECT refcount FROM {} WHERE bucket = $1 AND hash = $2",
+            table
+        );
         let result: Result<(i32,), sqlx::Error> = sqlx::query_as(&query)
             .bind(bucket)
             .bind(hash)
@@ -126,20 +137,28 @@ impl KVStorageTrait for Postgres {
         let table = self.table_name("refcount");
         let query = format!(
             "INSERT INTO {} (bucket, hash, refcount) VALUES ($1, $2, $3)
-            ON CONFLICT (bucket, hash) DO UPDATE SET refcount = $3", table
+            ON CONFLICT (bucket, hash) DO UPDATE SET refcount = $3",
+            table
         );
         sqlx::query(&query)
-        .bind(bucket)
-        .bind(hash)
-        .bind(ref_cnt)
-        .execute(&self.pool)
-        .await?;
+            .bind(bucket)
+            .bind(hash)
+            .bind(ref_cnt)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64, Box<dyn Error + Send + Sync>> {
+    async fn get_modified(
+        &mut self,
+        bucket: &str,
+        path: &str,
+    ) -> Result<i64, Box<dyn Error + Send + Sync>> {
         let table = self.table_name("modified");
-        let query = format!("SELECT modified FROM {} WHERE bucket = $1 AND path = $2", table);
+        let query = format!(
+            "SELECT modified FROM {} WHERE bucket = $1 AND path = $2",
+            table
+        );
         let result: Result<(i64,), sqlx::Error> = sqlx::query_as(&query)
             .bind(bucket)
             .bind(path)
@@ -161,18 +180,23 @@ impl KVStorageTrait for Postgres {
         let table = self.table_name("modified");
         let query = format!(
             "INSERT INTO {} (bucket, path, modified) VALUES ($1, $2, $3)
-            ON CONFLICT (bucket, path) DO UPDATE SET modified = $3", table
+            ON CONFLICT (bucket, path) DO UPDATE SET modified = $3",
+            table
         );
         sqlx::query(&query)
-        .bind(bucket)
-        .bind(path)
-        .bind(modified)
-        .execute(&self.pool)
-        .await?;
+            .bind(bucket)
+            .bind(path)
+            .bind(modified)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn delete_modified(
+        &mut self,
+        bucket: &str,
+        path: &str,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let table = self.table_name("modified");
         let query = format!("DELETE FROM {} WHERE bucket = $1 AND path = $2", table);
         sqlx::query(&query)
@@ -183,7 +207,11 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
+    async fn get_ref_file(
+        &mut self,
+        bucket: &str,
+        path: &str,
+    ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let table = self.table_name("ref_file");
         let query = format!("SELECT hash FROM {} WHERE bucket = $1 AND path = $2", table);
         let result: Result<(String,), sqlx::Error> = sqlx::query_as(&query)
@@ -207,18 +235,23 @@ impl KVStorageTrait for Postgres {
         let table = self.table_name("ref_file");
         let query = format!(
             "INSERT INTO {} (bucket, path, hash) VALUES ($1, $2, $3)
-            ON CONFLICT (bucket, path) DO UPDATE SET hash = $3", table
+            ON CONFLICT (bucket, path) DO UPDATE SET hash = $3",
+            table
         );
         sqlx::query(&query)
-        .bind(bucket)
-        .bind(path)
-        .bind(hash)
-        .execute(&self.pool)
-        .await?;
+            .bind(bucket)
+            .bind(path)
+            .bind(hash)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn delete_ref_file(
+        &mut self,
+        bucket: &str,
+        path: &str,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let table = self.table_name("ref_file");
         let query = format!("DELETE FROM {} WHERE bucket = $1 AND path = $2", table);
         sqlx::query(&query)
@@ -229,14 +262,21 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_logical_size(&mut self, bucket: &str, hash: &str) -> Result<usize, Box<dyn Error + Send + Sync>> {
+    async fn get_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+    ) -> Result<usize, Box<dyn Error + Send + Sync>> {
         let table = self.table_name("logical_size");
-        let query = format!("SELECT logical_size FROM {} WHERE bucket = $1 AND hash = $2", table);
+        let query = format!(
+            "SELECT logical_size FROM {} WHERE bucket = $1 AND hash = $2",
+            table
+        );
         let result: Result<(i64,), sqlx::Error> = sqlx::query_as(&query)
-        .bind(bucket)
-        .bind(hash)
-        .fetch_one(&self.pool)
-        .await;
+            .bind(bucket)
+            .bind(hash)
+            .fetch_one(&self.pool)
+            .await;
 
         match result {
             Ok((size,)) => Ok(size as usize),
@@ -244,7 +284,12 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn set_logical_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+        size: usize,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let table = self.table_name("logical_size");
         let query = format!(
             "INSERT INTO {} (bucket, hash, logical_size) VALUES ($1, $2, $3) ON CONFLICT (bucket, hash) DO UPDATE SET logical_size = $3",
@@ -272,11 +317,11 @@ impl KVStorageTrait for Postgres {
             table
         );
         let rows: Vec<(String,)> = sqlx::query_as(&query)
-        .bind(bucket)
-        .bind(pattern)
-        .bind(timestamp)
-        .fetch_all(&self.pool)
-        .await?;
+            .bind(bucket)
+            .bind(pattern)
+            .bind(timestamp)
+            .fetch_all(&self.pool)
+            .await?;
 
         Ok(rows.into_iter().map(|(path,)| path).collect())
     }

@@ -20,7 +20,11 @@ pub(crate) trait S3StorageTrait {
     where
         Self: Sized;
 
-    async fn put_object(&self, key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn put_object(
+        &self,
+        key: &str,
+        data: Vec<u8>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn get_object(&self, key: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>>;
     async fn delete_object(&self, key: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn object_exists(&self, key: &str) -> Result<bool, Box<dyn Error + Send + Sync>>;
@@ -46,7 +50,11 @@ impl S3Storage {
         }
     }
 
-    pub async fn put_object(&self, key: &str, data: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn put_object(
+        &self,
+        key: &str,
+        data: Vec<u8>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!("Putting object with key: {}", key);
         match self {
             S3Storage::MinIO(client) => client.put_object(key, data).await,

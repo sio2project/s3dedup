@@ -1,16 +1,16 @@
 use axum::Router;
 use axum::routing::get;
+use s3dedup::AppState;
+use s3dedup::config;
 use s3dedup::routes::ft::delete_file::ft_delete_file;
 use s3dedup::routes::ft::get_file::ft_get_file;
 use s3dedup::routes::ft::list_files::ft_list_files;
 use s3dedup::routes::ft::put_file::ft_put_file;
 use s3dedup::routes::ft::version::ft_version;
-use s3dedup::config;
-use s3dedup::AppState;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
-use tracing::{info, Level};
+use tracing::{Level, info};
 
 async fn run_server(addr: SocketAddr, app: Router) {
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
@@ -33,18 +33,23 @@ async fn main() {
             .route("/ft/version", get(ft_version))
             .route("/ft/list/", get(ft_list_files))
             .route("/ft/list/{*path}", get(ft_list_files))
-            .route("/ft/files/{*path}",
+            .route(
+                "/ft/files/{*path}",
                 get(ft_get_file)
-                .head(ft_get_file)
-                .put(ft_put_file)
-                .delete(ft_delete_file))
-            .layer( // Logging middleware
+                    .head(ft_get_file)
+                    .put(ft_put_file)
+                    .delete(ft_delete_file),
+            )
+            .layer(
+                // Logging middleware
                 TraceLayer::new_for_http()
                     .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                     .on_response(DefaultOnResponse::new().level(Level::INFO)),
             )
             .with_state(Arc::new(app_state));
-        let address: SocketAddr = format!("{}:{}", bucket.address, bucket.port).parse().unwrap();
+        let address: SocketAddr = format!("{}:{}", bucket.address, bucket.port)
+            .parse()
+            .unwrap();
         let handle = tokio::spawn(run_server(address, app));
         handles.push(handle);
     }

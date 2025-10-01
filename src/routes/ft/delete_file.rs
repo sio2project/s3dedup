@@ -1,10 +1,10 @@
-use crate::{locks, AppState};
+use crate::routes::ft::{LastModifiedQuery, utils};
+use crate::{AppState, locks};
 use axum::extract::{Path, Query, State};
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use std::sync::Arc;
 use tracing::{debug, error, info};
-use crate::routes::ft::{utils, LastModifiedQuery};
 
 pub async fn ft_delete_file(
     State(state): State<Arc<AppState>>,
@@ -28,11 +28,16 @@ pub async fn ft_delete_file(
     debug!("Handling DELETE {}@{}", path, timestamp);
 
     // 2. Acquire file lock (exclusive for write operation)
-    let lock_key = locks::file_lock(&state.bucket_name, &path);
+    let lock_key = locks::file_lock(&state.bucket_name, path);
     state.locks.lock().await.acquire_exclusive(&lock_key);
 
     // 3. Check if file exists
-    let current_modified = state.kvstorage.lock().await.get_modified(&state.bucket_name, &path).await;
+    let current_modified = state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&state.bucket_name, path)
+        .await;
     if current_modified.is_err() {
         error!("Failed to get current modified");
         state.locks.lock().await.release(&lock_key);
@@ -67,7 +72,12 @@ pub async fn ft_delete_file(
     }
 
     // 5. Get the hash for this path
-    let hash = state.kvstorage.lock().await.get_ref_file(&state.bucket_name, &path).await;
+    let hash = state
+        .kvstorage
+        .lock()
+        .await
+        .get_ref_file(&state.bucket_name, path)
+        .await;
     if hash.is_err() {
         error!("Failed to get ref file");
         state.locks.lock().await.release(&lock_key);
@@ -88,7 +98,13 @@ pub async fn ft_delete_file(
     }
 
     // 6. Decrement reference count
-    if let Err(e) = state.kvstorage.lock().await.decrement_ref_count(&state.bucket_name, &hash).await {
+    if let Err(e) = state
+        .kvstorage
+        .lock()
+        .await
+        .decrement_ref_count(&state.bucket_name, &hash)
+        .await
+    {
         error!("Failed to decrement ref count: {}", e);
         state.locks.lock().await.release(&lock_key);
         return Response::builder()
@@ -98,7 +114,12 @@ pub async fn ft_delete_file(
     }
 
     // 7. Check if we should delete the blob (ref count is now 0)
-    let ref_count = state.kvstorage.lock().await.get_ref_count(&state.bucket_name, &hash).await;
+    let ref_count = state
+        .kvstorage
+        .lock()
+        .await
+        .get_ref_count(&state.bucket_name, &hash)
+        .await;
     if ref_count.is_ok() && ref_count.unwrap() <= 0 {
         debug!("Deleting blob with hash: {}", hash);
         // Delete blob from S3
@@ -108,11 +129,22 @@ pub async fn ft_delete_file(
         }
 
         // Delete logical size metadata
-        let _ = state.kvstorage.lock().await.set_logical_size(&state.bucket_name, &hash, 0).await;
+        let _ = state
+            .kvstorage
+            .lock()
+            .await
+            .set_logical_size(&state.bucket_name, &hash, 0)
+            .await;
     }
 
     // 8. Delete file metadata (path -> hash mapping and timestamp)
-    if let Err(e) = state.kvstorage.lock().await.delete_ref_file(&state.bucket_name, &path).await {
+    if let Err(e) = state
+        .kvstorage
+        .lock()
+        .await
+        .delete_ref_file(&state.bucket_name, path)
+        .await
+    {
         error!("Failed to delete ref file: {}", e);
         state.locks.lock().await.release(&lock_key);
         return Response::builder()
@@ -121,7 +153,13 @@ pub async fn ft_delete_file(
             .unwrap();
     }
 
-    if let Err(e) = state.kvstorage.lock().await.delete_modified(&state.bucket_name, &path).await {
+    if let Err(e) = state
+        .kvstorage
+        .lock()
+        .await
+        .delete_modified(&state.bucket_name, path)
+        .await
+    {
         error!("Failed to delete modified time: {}", e);
         state.locks.lock().await.release(&lock_key);
         return Response::builder()
