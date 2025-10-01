@@ -36,23 +36,19 @@ jobs:
         ports:
           - 5432:5432
 
-      minio:
-        image: minio/minio:latest
-        env:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin
-        options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 9000:9000
-        # MinIO needs to be started with 'server' command
-        command: server /data
-
     steps:
     - uses: actions/checkout@v4
+
+    - name: Start MinIO
+      run: |
+        docker run -d \
+          --name minio \
+          -p 9000:9000 \
+          -e MINIO_ROOT_USER=minioadmin \
+          -e MINIO_ROOT_PASSWORD=minioadmin \
+          minio/minio server /data
+        # Wait for MinIO to be ready
+        sleep 10
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -80,10 +76,8 @@ jobs:
 
     - name: Set up MinIO bucket
       run: |
-        # Wait a bit for MinIO to be fully ready
-        sleep 5
         # Install mc (MinIO client)
-        wget https://dl.min.io/client/mc/release/linux-amd64/mc
+        wget -q https://dl.min.io/client/mc/release/linux-amd64/mc
         chmod +x mc
         ./mc alias set local http://localhost:9000 minioadmin minioadmin
         ./mc mb local/bucket1 || true
