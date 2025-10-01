@@ -9,6 +9,7 @@ use s3dedup::AppState;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tower::util::ServiceExt;
 
 // Mock filetracker server state
 #[derive(Clone)]
@@ -381,3 +382,329 @@ async fn test_migration_deduplication() {
         .unwrap();
     assert_eq!(ref_count, 3);
 }
+
+// Live migration tests
+
+#[tokio::test]
+async fn test_live_migration_get_fallback() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+
+    // Add a file to mock filetracker only (not in s3dedup yet)
+    let test_data = b"File from filetracker";
+    mock_state.add_file("fallback.txt", test_data.to_vec()).await;
+
+    // Create app state with filetracker client (live migration mode)
+    let app_state_with_ft = Arc::new(AppState {
+        bucket_name: app_state.bucket_name.clone(),
+        kvstorage: app_state.kvstorage.clone(),
+        locks: app_state.locks.clone(),
+        s3storage: app_state.s3storage.clone(),
+        filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+    });
+
+    // Create router with live migration support
+    let app = Router::new()
+        .route("/ft/files/{*path}", axum::routing::get(s3dedup::routes::ft::get_file::ft_get_file))
+        .with_state(app_state_with_ft.clone());
+
+    // Make GET request - should fallback to filetracker and migrate on-the-fly
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/ft/files/fallback.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Verify file was migrated to s3dedup
+    let modified = app_state_with_ft
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state_with_ft.bucket_name, "fallback.txt")
+        .await
+        .unwrap();
+    assert!(modified > 0, "File should be migrated to s3dedup");
+}
+
+#[tokio::test]
+async fn test_live_migration_put_dual_write() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+
+    // Create app state with filetracker client (live migration mode)
+    let app_state_with_ft = Arc::new(AppState {
+        bucket_name: app_state.bucket_name.clone(),
+        kvstorage: app_state.kvstorage.clone(),
+        locks: app_state.locks.clone(),
+        s3storage: app_state.s3storage.clone(),
+        filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+    });
+
+    // Create router with live migration support
+    let app = Router::new()
+        .route("/ft/files/{*path}", axum::routing::put(s3dedup::routes::ft::put_file::ft_put_file))
+        .with_state(app_state_with_ft.clone());
+
+    // Prepare test data
+    let test_data = b"Dual write test data";
+    let compressed = s3dedup::routes::ft::storage_helpers::compress_gzip(test_data).unwrap();
+    let last_modified = chrono::Utc::now().to_rfc2822();
+
+    // Make PUT request - should write to both s3dedup and filetracker
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("PUT")
+                .uri(format!("/ft/files/dualwrite.txt?last_modified={}", urlencoding::encode(&last_modified)))
+                .header("Content-Encoding", "gzip")
+                .header("Logical-Size", test_data.len().to_string())
+                .body(Body::from(compressed))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Verify file is in s3dedup
+    let modified_s3dedup = app_state_with_ft
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state_with_ft.bucket_name, "dualwrite.txt")
+        .await
+        .unwrap();
+    assert!(modified_s3dedup > 0, "File should be in s3dedup");
+
+    // Verify file is also in filetracker
+    let files = mock_state.files.lock().await;
+    assert!(files.contains_key("dualwrite.txt"), "File should also be in filetracker");
+}
+
+#[tokio::test]
+async fn test_live_migration_delete_dual_delete() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+
+    // First, add file to both s3dedup and filetracker
+    let test_data = b"File to delete";
+    mock_state.add_file("todelete.txt", test_data.to_vec()).await;
+
+    // Migrate the file to s3dedup
+    let client = Arc::new(FiletrackerClient::new(url.clone()));
+    migrate_all_files(client, app_state.clone(), 5).await.unwrap();
+
+    // Create app state with filetracker client (live migration mode)
+    let app_state_with_ft = Arc::new(AppState {
+        bucket_name: app_state.bucket_name.clone(),
+        kvstorage: app_state.kvstorage.clone(),
+        locks: app_state.locks.clone(),
+        s3storage: app_state.s3storage.clone(),
+        filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+    });
+
+    // Verify file exists in both before deletion
+    let modified_before = app_state_with_ft
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state_with_ft.bucket_name, "todelete.txt")
+        .await
+        .unwrap();
+    assert!(modified_before > 0);
+    assert!(mock_state.files.lock().await.contains_key("todelete.txt"));
+
+    // Create router with live migration support
+    let app = Router::new()
+        .route("/ft/files/{*path}", axum::routing::delete(s3dedup::routes::ft::delete_file::ft_delete_file))
+        .with_state(app_state_with_ft.clone());
+
+    let last_modified = chrono::Utc::now().to_rfc2822();
+
+    // Make DELETE request - should delete from both s3dedup and filetracker
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method("DELETE")
+                .uri(format!("/ft/files/todelete.txt?last_modified={}", urlencoding::encode(&last_modified)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Verify file is deleted from s3dedup
+    let modified_after = app_state_with_ft
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state_with_ft.bucket_name, "todelete.txt")
+        .await
+        .unwrap();
+    assert_eq!(modified_after, 0, "File should be deleted from s3dedup");
+
+    // Verify file is also deleted from filetracker
+    let files = mock_state.files.lock().await;
+    assert!(!files.contains_key("todelete.txt"), "File should also be deleted from filetracker");
+}
+
+#[tokio::test]
+async fn test_live_migration_get_not_found_in_both() {
+    let (_mock_state, url) = create_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+
+    // Create app state with filetracker client (live migration mode)
+    let app_state_with_ft = Arc::new(AppState {
+        bucket_name: app_state.bucket_name.clone(),
+        kvstorage: app_state.kvstorage.clone(),
+        locks: app_state.locks.clone(),
+        s3storage: app_state.s3storage.clone(),
+        filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+    });
+
+    // Create router with live migration support
+    let app = Router::new()
+        .route("/ft/files/{*path}", axum::routing::get(s3dedup::routes::ft::get_file::ft_get_file))
+        .with_state(app_state_with_ft.clone());
+
+    // Make GET request for non-existent file - should return 404
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/ft/files/nonexistent.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_live_migration_get_fallback_response_data() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+
+    // Add a file with specific content to mock filetracker
+    let test_data = b"Specific test content for proxying";
+    mock_state.add_file("proxy_test.txt", test_data.to_vec()).await;
+
+    // Create app state with filetracker client (live migration mode)
+    let app_state_with_ft = Arc::new(AppState {
+        bucket_name: app_state.bucket_name.clone(),
+        kvstorage: app_state.kvstorage.clone(),
+        locks: app_state.locks.clone(),
+        s3storage: app_state.s3storage.clone(),
+        filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+    });
+
+    // Create router with live migration support
+    let app = Router::new()
+        .route("/ft/files/{*path}", axum::routing::get(s3dedup::routes::ft::get_file::ft_get_file))
+        .with_state(app_state_with_ft.clone());
+
+    // Make GET request - should fallback to filetracker
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/ft/files/proxy_test.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Verify headers are correctly proxied
+    let content_encoding = response.headers().get("content-encoding");
+    assert!(content_encoding.is_some());
+    assert_eq!(content_encoding.unwrap(), "gzip");
+
+    let logical_size = response.headers().get("logical-size");
+    assert!(logical_size.is_some());
+    assert_eq!(logical_size.unwrap().to_str().unwrap(), test_data.len().to_string());
+
+    // Verify response body is the compressed data
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+
+    // Decompress and verify content
+    let decompressed = s3dedup::routes::ft::storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(&decompressed[..], test_data);
+}
+
+#[tokio::test]
+async fn test_live_migration_subsequent_get_from_s3dedup() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+
+    // Add a file to mock filetracker
+    let test_data = b"File for second GET test";
+    mock_state.add_file("second_get.txt", test_data.to_vec()).await;
+
+    // Create app state with filetracker client (live migration mode)
+    let app_state_with_ft = Arc::new(AppState {
+        bucket_name: app_state.bucket_name.clone(),
+        kvstorage: app_state.kvstorage.clone(),
+        locks: app_state.locks.clone(),
+        s3storage: app_state.s3storage.clone(),
+        filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+    });
+
+    // First GET - should fallback to filetracker and migrate
+    let app1 = Router::new()
+        .route("/ft/files/{*path}", axum::routing::get(s3dedup::routes::ft::get_file::ft_get_file))
+        .with_state(app_state_with_ft.clone());
+
+    let response1 = app1
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/ft/files/second_get.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response1.status(), StatusCode::OK);
+
+    // Remove file from mock filetracker to prove second GET comes from s3dedup
+    mock_state.files.lock().await.remove("second_get.txt");
+
+    // Second GET - should come from s3dedup (not filetracker)
+    let app2 = Router::new()
+        .route("/ft/files/{*path}", axum::routing::get(s3dedup::routes::ft::get_file::ft_get_file))
+        .with_state(app_state_with_ft.clone());
+
+    let response2 = app2
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/ft/files/second_get.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response2.status(), StatusCode::OK);
+
+    // Verify response body is still correct
+    let body_bytes = axum::body::to_bytes(response2.into_body(), usize::MAX)
+        .await
+        .unwrap();
+
+    let decompressed = s3dedup::routes::ft::storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(&decompressed[..], test_data);
+}
+

@@ -21,6 +21,7 @@ impl FiletrackerClient {
     pub fn new(base_url: String) -> Self {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(300)) // 5 minutes for large files
+            .no_gzip() // Disable automatic decompression to preserve Content-Encoding header
             .build()
             .unwrap();
 
