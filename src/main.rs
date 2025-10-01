@@ -1,8 +1,8 @@
 use axum::Router;
 use axum::routing::get;
 use clap::{Parser, Subcommand};
-use s3dedup::cleaner::Cleaner;
 use s3dedup::AppState;
+use s3dedup::cleaner::Cleaner;
 use s3dedup::config;
 use s3dedup::routes::ft::delete_file::ft_delete_file;
 use s3dedup::routes::ft::get_file::ft_get_file;
@@ -123,7 +123,12 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) {
     }
 }
 
-async fn run_migrate(config_path: Option<&str>, use_env: bool, filetracker_url: &str, max_concurrency: usize) {
+async fn run_migrate(
+    config_path: Option<&str>,
+    use_env: bool,
+    filetracker_url: &str,
+    max_concurrency: usize,
+) {
     let config = if use_env {
         config::Config::from_env().unwrap()
     } else {
@@ -165,8 +170,9 @@ async fn run_migrate(config_path: Option<&str>, use_env: bool, filetracker_url: 
     }
 
     // Initialize filetracker client
-    let filetracker_client =
-        Arc::new(s3dedup::filetracker_client::FiletrackerClient::new(filetracker_url.to_string()));
+    let filetracker_client = Arc::new(s3dedup::filetracker_client::FiletrackerClient::new(
+        filetracker_url.to_string(),
+    ));
 
     // Run migration with specified concurrency
     match s3dedup::migration::migrate_all_files(filetracker_client, app_state, max_concurrency)
@@ -231,8 +237,14 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
 
                 let app = Router::new()
                     .route("/ft/version", get(s3dedup::routes::ft::version::ft_version))
-                    .route("/ft/list/", get(s3dedup::routes::ft::list_files::ft_list_files))
-                    .route("/ft/list/{*path}", get(s3dedup::routes::ft::list_files::ft_list_files))
+                    .route(
+                        "/ft/list/",
+                        get(s3dedup::routes::ft::list_files::ft_list_files),
+                    )
+                    .route(
+                        "/ft/list/{*path}",
+                        get(s3dedup::routes::ft::list_files::ft_list_files),
+                    )
                     .route(
                         "/ft/files/{*path}",
                         get(s3dedup::routes::ft::get_file::ft_get_file)
@@ -289,8 +301,14 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
 
         let app = Router::new()
             .route("/ft/version", get(s3dedup::routes::ft::version::ft_version))
-            .route("/ft/list/", get(s3dedup::routes::ft::list_files::ft_list_files))
-            .route("/ft/list/{*path}", get(s3dedup::routes::ft::list_files::ft_list_files))
+            .route(
+                "/ft/list/",
+                get(s3dedup::routes::ft::list_files::ft_list_files),
+            )
+            .route(
+                "/ft/list/{*path}",
+                get(s3dedup::routes::ft::list_files::ft_list_files),
+            )
             .route(
                 "/ft/files/{*path}",
                 get(s3dedup::routes::ft::get_file::ft_get_file)

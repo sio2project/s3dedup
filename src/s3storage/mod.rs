@@ -93,7 +93,10 @@ impl S3Storage {
         &self,
         continuation_token: Option<String>,
     ) -> Result<(Vec<String>, Option<String>), Box<dyn Error + Send + Sync>> {
-        debug!("Listing objects with continuation_token: {:?}", continuation_token);
+        debug!(
+            "Listing objects with continuation_token: {:?}",
+            continuation_token
+        );
         match self {
             S3Storage::MinIO(client) => client.list_objects(continuation_token).await,
         }

@@ -106,54 +106,51 @@ pub async fn ft_put_file(
     }
 
     // 6. Compute hash and logical size if not provided (matching original)
-    let (digest, logical_size, final_data) =
-        if let (true, Some(digest), Some(size)) = (compressed, provided_digest, provided_logical_size) {
-            // Use provided values, data is already compressed
-            (
-                digest,
-                size,
-                body_bytes.to_vec(),
-            )
+    let (digest, logical_size, final_data) = if let (true, Some(digest), Some(size)) =
+        (compressed, provided_digest, provided_logical_size)
+    {
+        // Use provided values, data is already compressed
+        (digest, size, body_bytes.to_vec())
+    } else {
+        // Handle data processing like original filetracker
+        let uncompressed_data = if compressed {
+            match storage_helpers::decompress_gzip(&body_bytes) {
+                Ok(data) => data,
+                Err(e) => {
+                    error!("Failed to decompress gzip data: {}", e);
+                    state.locks.lock().await.release(&lock_key);
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body("Failed to decompress gzip data".to_string())
+                        .unwrap();
+                }
+            }
         } else {
-            // Handle data processing like original filetracker
-            let uncompressed_data = if compressed {
-                match storage_helpers::decompress_gzip(&body_bytes) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        error!("Failed to decompress gzip data: {}", e);
-                        state.locks.lock().await.release(&lock_key);
-                        return Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .body("Failed to decompress gzip data".to_string())
-                            .unwrap();
-                    }
-                }
-            } else {
-                body_bytes.to_vec()
-            };
-
-            let computed_digest = storage_helpers::compute_sha256(&uncompressed_data);
-            let logical_size = uncompressed_data.len();
-
-            // Always store compressed (matching original behavior)
-            let final_data = if compressed {
-                body_bytes.to_vec() // Already compressed
-            } else {
-                match storage_helpers::compress_gzip(&uncompressed_data) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        error!("Failed to compress data: {}", e);
-                        state.locks.lock().await.release(&lock_key);
-                        return Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body("Failed to compress data".to_string())
-                            .unwrap();
-                    }
-                }
-            };
-
-            (computed_digest, logical_size, final_data)
+            body_bytes.to_vec()
         };
+
+        let computed_digest = storage_helpers::compute_sha256(&uncompressed_data);
+        let logical_size = uncompressed_data.len();
+
+        // Always store compressed (matching original behavior)
+        let final_data = if compressed {
+            body_bytes.to_vec() // Already compressed
+        } else {
+            match storage_helpers::compress_gzip(&uncompressed_data) {
+                Ok(data) => data,
+                Err(e) => {
+                    error!("Failed to compress data: {}", e);
+                    state.locks.lock().await.release(&lock_key);
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body("Failed to compress data".to_string())
+                        .unwrap();
+                }
+            }
+        };
+
+        (computed_digest, logical_size, final_data)
+    };
 
     // 7. Handle deduplication (use hash directly as S3 key for better performance)
     let s3_key = &digest;
@@ -235,33 +232,36 @@ pub async fn ft_put_file(
             .await;
 
         if let Ok(old_hash) = old_hash_result
-            && !old_hash.is_empty() && old_hash != digest {
-                info!(
-                    "Overwriting existing link {}. Old hash: {}, new hash: {}",
-                    path, old_hash, digest
-                );
-                // Decrement old reference count
-                let _ = state
-                    .kvstorage
-                    .lock()
-                    .await
-                    .decrement_ref_count(&state.bucket_name, &old_hash)
-                    .await;
+            && !old_hash.is_empty()
+            && old_hash != digest
+        {
+            info!(
+                "Overwriting existing link {}. Old hash: {}, new hash: {}",
+                path, old_hash, digest
+            );
+            // Decrement old reference count
+            let _ = state
+                .kvstorage
+                .lock()
+                .await
+                .decrement_ref_count(&state.bucket_name, &old_hash)
+                .await;
 
-                // Check if we should delete the old blob
-                let old_ref_count_result = state
-                    .kvstorage
-                    .lock()
-                    .await
-                    .get_ref_count(&state.bucket_name, &old_hash)
-                    .await;
+            // Check if we should delete the old blob
+            let old_ref_count_result = state
+                .kvstorage
+                .lock()
+                .await
+                .get_ref_count(&state.bucket_name, &old_hash)
+                .await;
 
-                if let Ok(old_ref_count) = old_ref_count_result
-                    && old_ref_count <= 0 {
-                        debug!("Deleting unused blob: {}", old_hash);
-                        let _ = state.s3storage.lock().await.delete_object(&old_hash).await;
-                    }
+            if let Ok(old_ref_count) = old_ref_count_result
+                && old_ref_count <= 0
+            {
+                debug!("Deleting unused blob: {}", old_hash);
+                let _ = state.s3storage.lock().await.delete_object(&old_hash).await;
             }
+        }
     }
 
     // 8. Update file metadata (path -> hash mapping and timestamp)
@@ -315,7 +315,10 @@ pub async fn ft_put_file(
             .await;
 
         if let Err(e) = result {
-            error!("Failed to write to filetracker during live migration: {}", e);
+            error!(
+                "Failed to write to filetracker during live migration: {}",
+                e
+            );
             // Continue anyway - s3dedup is primary storage
         } else {
             debug!("Successfully wrote to filetracker");

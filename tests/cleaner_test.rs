@@ -102,8 +102,7 @@ async fn test_clean_orphaned_ref_files() {
         return;
     }
 
-    let (kvstorage, s3storage, bucket_name) =
-        setup_test_env("test_clean_orphaned_ref_files").await;
+    let (kvstorage, s3storage, bucket_name) = setup_test_env("test_clean_orphaned_ref_files").await;
 
     // Create ref_file entries without corresponding refcounts
     kvstorage
@@ -295,12 +294,7 @@ async fn test_clean_unused_s3_objects() {
         .unwrap();
 
     // Verify objects exist
-    let exists1 = s3storage
-        .lock()
-        .await
-        .object_exists("hash1")
-        .await
-        .unwrap();
+    let exists1 = s3storage.lock().await.object_exists("hash1").await.unwrap();
     assert!(exists1);
 
     // Run cleaner
@@ -311,34 +305,24 @@ async fn test_clean_unused_s3_objects() {
         max_deletes_per_run: 100,
     };
 
-    let cleaner = Cleaner::new(bucket_name.clone(), kvstorage.clone(), s3storage.clone(), config);
+    let cleaner = Cleaner::new(
+        bucket_name.clone(),
+        kvstorage.clone(),
+        s3storage.clone(),
+        config,
+    );
     let result = cleaner.run_cleanup().await;
     assert!(result.is_ok());
 
     // Verify unused S3 objects were cleaned up
-    let exists1 = s3storage
-        .lock()
-        .await
-        .object_exists("hash1")
-        .await
-        .unwrap();
+    let exists1 = s3storage.lock().await.object_exists("hash1").await.unwrap();
     assert!(!exists1); // Should be deleted
 
-    let exists2 = s3storage
-        .lock()
-        .await
-        .object_exists("hash2")
-        .await
-        .unwrap();
+    let exists2 = s3storage.lock().await.object_exists("hash2").await.unwrap();
     assert!(!exists2); // Should be deleted
 
     // hash3 should still exist because it has a refcount
-    let exists3 = s3storage
-        .lock()
-        .await
-        .object_exists("hash3")
-        .await
-        .unwrap();
+    let exists3 = s3storage.lock().await.object_exists("hash3").await.unwrap();
     assert!(exists3); // Should still exist
 }
 
@@ -443,7 +427,11 @@ async fn test_max_deletes_per_run_limit() {
         kvstorage
             .lock()
             .await
-            .set_ref_file(&bucket_name, &format!("file{}.txt", i), &format!("hash{}", i))
+            .set_ref_file(
+                &bucket_name,
+                &format!("file{}.txt", i),
+                &format!("hash{}", i),
+            )
             .await
             .unwrap();
         kvstorage
@@ -498,7 +486,11 @@ async fn test_batched_processing() {
         kvstorage
             .lock()
             .await
-            .set_ref_file(&bucket_name, &format!("file{}.txt", i), &format!("hash{}", i))
+            .set_ref_file(
+                &bucket_name,
+                &format!("file{}.txt", i),
+                &format!("hash{}", i),
+            )
             .await
             .unwrap();
         kvstorage
@@ -610,7 +602,12 @@ async fn test_full_cleanup_cycle() {
         max_deletes_per_run: 100,
     };
 
-    let cleaner = Cleaner::new(bucket_name.clone(), kvstorage.clone(), s3storage.clone(), config);
+    let cleaner = Cleaner::new(
+        bucket_name.clone(),
+        kvstorage.clone(),
+        s3storage.clone(),
+        config,
+    );
     let result = cleaner.run_cleanup().await;
     assert!(result.is_ok());
 

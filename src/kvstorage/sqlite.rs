@@ -264,7 +264,7 @@ impl KVStorageTrait for SQLite {
         offset: usize,
     ) -> Result<Vec<(String, String)>, Box<dyn std::error::Error + Send + Sync>> {
         let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT path, hash FROM ref_file WHERE bucket = ?1 ORDER BY path LIMIT ?2 OFFSET ?3"
+            "SELECT path, hash FROM ref_file WHERE bucket = ?1 ORDER BY path LIMIT ?2 OFFSET ?3",
         )
         .bind(bucket)
         .bind(limit as i64)
@@ -300,7 +300,7 @@ impl KVStorageTrait for SQLite {
         offset: usize,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT hash FROM logical_size WHERE bucket = ?1 ORDER BY hash LIMIT ?2 OFFSET ?3"
+            "SELECT hash FROM logical_size WHERE bucket = ?1 ORDER BY hash LIMIT ?2 OFFSET ?3",
         )
         .bind(bucket)
         .bind(limit as i64)

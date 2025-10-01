@@ -452,10 +452,14 @@ impl KVStorage {
     ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
         match self {
             KVStorage::Postgres(storage) => {
-                storage.list_logical_sizes_batch(bucket, limit, offset).await
+                storage
+                    .list_logical_sizes_batch(bucket, limit, offset)
+                    .await
             }
             KVStorage::SQLite(storage) => {
-                storage.list_logical_sizes_batch(bucket, limit, offset).await
+                storage
+                    .list_logical_sizes_batch(bucket, limit, offset)
+                    .await
             }
         }
     }

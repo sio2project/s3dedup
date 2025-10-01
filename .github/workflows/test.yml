@@ -51,7 +51,9 @@ jobs:
         sleep 10
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: rustfmt, clippy
 
     - name: Cache cargo registry
       uses: actions/cache@v3
@@ -81,6 +83,12 @@ jobs:
         chmod +x mc
         ./mc alias set local http://localhost:9000 minioadmin minioadmin
         ./mc mb local/bucket1 || true
+
+    - name: Check formatting
+      run: cargo fmt -- --check
+
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
 
     - name: Run tests (SQLite)
       if: matrix.kvstorage == 'sqlite'

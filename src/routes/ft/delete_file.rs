@@ -177,7 +177,10 @@ pub async fn ft_delete_file(
         let result = filetracker_client.delete_file(path, timestamp).await;
 
         if let Err(e) = result {
-            error!("Failed to delete from filetracker during live migration: {}", e);
+            error!(
+                "Failed to delete from filetracker during live migration: {}",
+                e
+            );
             // Continue anyway - s3dedup is primary storage
         } else {
             debug!("Successfully deleted from filetracker");

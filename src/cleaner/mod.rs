@@ -76,15 +76,19 @@ impl Cleaner {
         );
 
         tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(tokio::time::Duration::from_secs(self.config.interval_seconds));
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+                self.config.interval_seconds,
+            ));
 
             loop {
                 interval.tick().await;
                 info!("Running cleanup cycle for bucket: {}", self.bucket_name);
 
                 if let Err(e) = self.run_cleanup().await {
-                    error!("Cleanup cycle failed for bucket {}: {}", self.bucket_name, e);
+                    error!(
+                        "Cleanup cycle failed for bucket {}: {}",
+                        self.bucket_name, e
+                    );
                 }
             }
         });
@@ -143,7 +147,9 @@ impl Cleaner {
     }
 
     /// Clean ref_files that point to non-existent hashes in refcount table
-    async fn clean_orphaned_ref_files(&self) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    async fn clean_orphaned_ref_files(
+        &self,
+    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
         let mut deleted_count = 0;
         let mut offset = 0;
 
@@ -210,7 +216,9 @@ impl Cleaner {
     }
 
     /// Clean refcounts that have no corresponding ref_files
-    async fn clean_unreferenced_refcounts(&self) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    async fn clean_unreferenced_refcounts(
+        &self,
+    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
         let mut deleted_count = 0;
         let mut offset = 0;
 
@@ -286,7 +294,9 @@ impl Cleaner {
     }
 
     /// Clean S3 objects that have no refcount or refcount = 0
-    async fn clean_unused_s3_objects(&self) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    async fn clean_unused_s3_objects(
+        &self,
+    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
         let mut deleted_count = 0;
         let mut continuation_token: Option<String> = None;
 
@@ -337,7 +347,9 @@ impl Cleaner {
     }
 
     /// Clean logical_size entries that have no corresponding refcount
-    async fn clean_orphaned_logical_sizes(&self) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    async fn clean_orphaned_logical_sizes(
+        &self,
+    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
         let mut deleted_count = 0;
         let mut offset = 0;
 
@@ -362,10 +374,7 @@ impl Cleaner {
                     .await?;
 
                 if refcount == 0 {
-                    debug!(
-                        "Found orphaned logical_size: hash={} (refcount=0)",
-                        hash
-                    );
+                    debug!("Found orphaned logical_size: hash={} (refcount=0)", hash);
 
                     // Delete the logical_size entry
                     if let Err(e) = self

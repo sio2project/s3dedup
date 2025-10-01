@@ -85,10 +85,10 @@ impl BucketConfig {
         if let Ok(val) = std::env::var("LISTEN_ADDRESS") {
             self.address = val;
         }
-        if let Ok(val) = std::env::var("LISTEN_PORT") {
-            if let Ok(port) = val.parse() {
-                self.port = port;
-            }
+        if let Ok(val) = std::env::var("LISTEN_PORT")
+            && let Ok(port) = val.parse()
+        {
+            self.port = port;
         }
 
         // SQLite overrides
@@ -96,10 +96,10 @@ impl BucketConfig {
             if let Ok(val) = std::env::var("SQLITE_PATH") {
                 sqlite.path = val;
             }
-            if let Ok(val) = std::env::var("SQLITE_MAX_CONNECTIONS") {
-                if let Ok(pool_size) = val.parse() {
-                    sqlite.pool_size = pool_size;
-                }
+            if let Ok(val) = std::env::var("SQLITE_MAX_CONNECTIONS")
+                && let Ok(pool_size) = val.parse()
+            {
+                sqlite.pool_size = pool_size;
             }
         }
 
@@ -108,10 +108,10 @@ impl BucketConfig {
             if let Ok(val) = std::env::var("POSTGRES_HOST") {
                 postgres.host = val;
             }
-            if let Ok(val) = std::env::var("POSTGRES_PORT") {
-                if let Ok(port) = val.parse() {
-                    postgres.port = port;
-                }
+            if let Ok(val) = std::env::var("POSTGRES_PORT")
+                && let Ok(port) = val.parse()
+            {
+                postgres.port = port;
             }
             if let Ok(val) = std::env::var("POSTGRES_USER") {
                 postgres.user = val;
@@ -122,10 +122,10 @@ impl BucketConfig {
             if let Ok(val) = std::env::var("POSTGRES_DB") {
                 postgres.dbname = val;
             }
-            if let Ok(val) = std::env::var("POSTGRES_MAX_CONNECTIONS") {
-                if let Ok(pool_size) = val.parse() {
-                    postgres.pool_size = pool_size;
-                }
+            if let Ok(val) = std::env::var("POSTGRES_MAX_CONNECTIONS")
+                && let Ok(pool_size) = val.parse()
+            {
+                postgres.pool_size = pool_size;
             }
         }
 
@@ -150,8 +150,8 @@ impl BucketConfig {
 
     /// Create a bucket config from environment variables only
     fn from_env() -> Result<Self, Box<dyn Error>> {
-        let kvstorage_type_str = std::env::var("KVSTORAGE_TYPE")
-            .unwrap_or_else(|_| "sqlite".to_string());
+        let kvstorage_type_str =
+            std::env::var("KVSTORAGE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
         let kvstorage_type = match kvstorage_type_str.as_str() {
             "postgres" => KVStorageType::Postgres,
             "sqlite" => KVStorageType::SQLite,
@@ -190,8 +190,8 @@ impl BucketConfig {
             None
         };
 
-        let s3storage_type_str = std::env::var("S3STORAGE_TYPE")
-            .unwrap_or_else(|_| "minio".to_string());
+        let s3storage_type_str =
+            std::env::var("S3STORAGE_TYPE").unwrap_or_else(|_| "minio".to_string());
         let s3storage_type = match s3storage_type_str.as_str() {
             "minio" => S3StorageType::MinIO,
             _ => return Err(format!("Invalid S3STORAGE_TYPE: {}", s3storage_type_str).into()),
@@ -222,8 +222,8 @@ impl BucketConfig {
             sqlite,
             postgres,
             locks_type: {
-                let locks_type_str = std::env::var("LOCKS_TYPE")
-                    .unwrap_or_else(|_| "memory".to_string());
+                let locks_type_str =
+                    std::env::var("LOCKS_TYPE").unwrap_or_else(|_| "memory".to_string());
                 match locks_type_str.as_str() {
                     "memory" => LocksType::Memory,
                     _ => LocksType::Memory, // Default to memory

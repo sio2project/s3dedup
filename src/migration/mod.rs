@@ -1,6 +1,6 @@
+use crate::AppState;
 use crate::filetracker_client::{FileMetadata, FiletrackerClient};
 use crate::routes::ft::storage_helpers;
-use crate::AppState;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
@@ -52,7 +52,7 @@ pub async fn migrate_all_files(
         info!(
             "Processing batch {}/{} (files {}-{})",
             batch_idx + 1,
-            (total_files + batch_size - 1) / batch_size,
+            total_files.div_ceil(batch_size),
             batch_start,
             batch_start + batch.len()
         );
@@ -74,7 +74,7 @@ pub async fn migrate_all_files(
                 let _permit = semaphore.acquire().await.unwrap();
 
                 // Log progress every 100 files
-                if file_idx % 100 == 0 && file_idx > 0 {
+                if file_idx.is_multiple_of(100) && file_idx > 0 {
                     let current_migrated = *migrated.lock().await;
                     let current_failed = *failed.lock().await;
                     let current_skipped = *skipped.lock().await;

@@ -37,9 +37,7 @@ impl FiletrackerClient {
         // The original filetracker expects a Unix timestamp as a string, not RFC2822
         let url = format!(
             "{}/list/{}?last_modified={}",
-            self.base_url,
-            path,
-            timestamp
+            self.base_url, path, timestamp
         );
 
         debug!("Listing files from filetracker: {}", url);
@@ -63,10 +61,7 @@ impl FiletrackerClient {
     }
 
     /// Get a file from filetracker
-    pub async fn get_file(
-        &self,
-        path: &str,
-    ) -> Result<FileMetadata, Box<dyn Error + Send + Sync>> {
+    pub async fn get_file(&self, path: &str) -> Result<FileMetadata, Box<dyn Error + Send + Sync>> {
         let url = format!("{}/files/{}", self.base_url, path);
         debug!("Getting file from filetracker: {}", url);
 
@@ -88,8 +83,7 @@ impl FiletrackerClient {
             .and_then(|v| v.to_str().ok())
             .ok_or("Missing Last-Modified header")?;
 
-        let last_modified = DateTime::parse_from_rfc2822(last_modified_str)?
-            .timestamp();
+        let last_modified = DateTime::parse_from_rfc2822(last_modified_str)?.timestamp();
 
         let logical_size = response
             .headers()
