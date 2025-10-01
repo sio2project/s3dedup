@@ -143,6 +143,7 @@ pub async fn ft_put_file(
     // 7. Handle deduplication (use hash directly as S3 key for better performance)
     let s3_key = &digest;
 
+    debug!("Checking if blob {} already exists", s3_key);
     // Check if blob already exists
     let blob_exists = match state.s3storage.lock().await.object_exists(&s3_key).await {
         Ok(exists) => exists,
@@ -192,15 +193,19 @@ pub async fn ft_put_file(
 
     // If overwriting existing file, handle deletion of old blob reference
     if current_modified > 0 {
-        // Get old hash to decrement its reference count
-        if let Ok(old_hash) = state.kvstorage.lock().await.get_ref_file(&state.bucket_name, &path).await {
+        // Get old hash to decrement its reference count (acquire lock, get value, release)
+        let old_hash_result = state.kvstorage.lock().await.get_ref_file(&state.bucket_name, &path).await;
+
+        if let Ok(old_hash) = old_hash_result {
             if !old_hash.is_empty() && old_hash != digest {
-                info!("Overwriting existing link {}.", path);
+                info!("Overwriting existing link {}. Old hash: {}, new hash: {}", path, old_hash, digest);
                 // Decrement old reference count
                 let _ = state.kvstorage.lock().await.decrement_ref_count(&state.bucket_name, &old_hash).await;
 
                 // Check if we should delete the old blob
-                if let Ok(old_ref_count) = state.kvstorage.lock().await.get_ref_count(&state.bucket_name, &old_hash).await {
+                let old_ref_count_result = state.kvstorage.lock().await.get_ref_count(&state.bucket_name, &old_hash).await;
+
+                if let Ok(old_ref_count) = old_ref_count_result {
                     if old_ref_count <= 0 {
                         debug!("Deleting unused blob: {}", old_hash);
                         let _ = state.s3storage.lock().await.delete_object(&old_hash).await;

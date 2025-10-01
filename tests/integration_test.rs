@@ -9,6 +9,12 @@ use std::sync::Arc;
 
 // Helper to create test app state
 async fn create_test_app() -> Router {
+    let (router, _) = create_test_app_with_state().await;
+    router
+}
+
+// Helper to create test app with access to app state for S3 verification
+async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     use s3dedup::{AppState};
     use s3dedup::config::{BucketConfig, KVStorageType, SQLiteConfig, MinIOConfig};
     use s3dedup::kvstorage::KVStorage;
@@ -26,7 +32,7 @@ async fn create_test_app() -> Router {
         kvstorage_type: KVStorageType::SQLite,
         sqlite: Some(SQLiteConfig {
             path: test_db.clone(),
-            pool_size: 5,
+            pool_size: 50,
         }),
         postgres: None,
         locks_type: s3dedup::locks::LocksType::Memory,
@@ -43,22 +49,24 @@ async fn create_test_app() -> Router {
     let locks = LocksStorage::new(&config.locks_type);
     let s3storage = S3Storage::new(&config).await.unwrap();
 
-    let app_state = AppState {
+    let app_state = Arc::new(AppState {
         bucket_name: config.name.clone(),
         kvstorage: Arc::new(Mutex::new(kvstorage)),
         locks: Arc::new(Mutex::new(locks)),
         s3storage: Arc::new(Mutex::new(s3storage)),
-    };
+    });
 
     app_state.kvstorage.lock().await.setup().await.unwrap();
 
-    Router::new()
+    let router = Router::new()
         .route("/ft/files/{*path}",
             get(s3dedup::routes::ft::get_file::ft_get_file)
             .head(s3dedup::routes::ft::get_file::ft_get_file)
             .put(s3dedup::routes::ft::put_file::ft_put_file)
             .delete(s3dedup::routes::ft::delete_file::ft_delete_file))
-        .with_state(Arc::new(app_state))
+        .with_state(app_state.clone());
+
+    (router, app_state)
 }
 
 #[tokio::test]
@@ -396,7 +404,8 @@ async fn test_delete_nonexistent_file() {
 
 #[tokio::test]
 async fn test_delete_file() {
-    let app = create_test_app().await;
+    let (mut app, state) = create_test_app_with_state().await;
+    use tower::Service;
 
     let test_content = b"Test content to be deleted";
 
@@ -408,14 +417,12 @@ async fn test_delete_file() {
     let encoded_timestamp = urlencoding::encode(&timestamp);
 
     // PUT the file first
-    let put_response = app
-        .clone()
-        .oneshot(
+    let put_response = app.call(
             Request::builder()
                 .uri(format!("/ft/files/delete/test.txt?last_modified={}", encoded_timestamp))
                 .method("PUT")
                 .header("Content-Encoding", "gzip")
-                .header("SHA256-Checksum", sha256)
+                .header("SHA256-Checksum", &sha256)
                 .header("Logical-Size", test_content.len().to_string())
                 .body(Body::from(compressed_data))
                 .unwrap(),
@@ -425,10 +432,12 @@ async fn test_delete_file() {
 
     assert_eq!(put_response.status(), StatusCode::OK);
 
+    // Verify blob exists in S3
+    let blob_exists = state.s3storage.lock().await.object_exists(&sha256).await.unwrap();
+    assert!(blob_exists, "Blob should exist in S3 after upload");
+
     // DELETE the file
-    let delete_response = app
-        .clone()
-        .oneshot(
+    let delete_response = app.call(
             Request::builder()
                 .uri(format!("/ft/files/delete/test.txt?last_modified={}", encoded_timestamp))
                 .method("DELETE")
@@ -440,9 +449,12 @@ async fn test_delete_file() {
 
     assert_eq!(delete_response.status(), StatusCode::OK);
 
+    // Verify blob is deleted from S3
+    let blob_exists = state.s3storage.lock().await.object_exists(&sha256).await.unwrap();
+    assert!(!blob_exists, "Blob should be deleted from S3 after file deletion");
+
     // Verify file is gone
-    let get_response = app
-        .oneshot(
+    let get_response = app.call(
             Request::builder()
                 .uri("/ft/files/delete/test.txt")
                 .method("GET")
@@ -453,4 +465,449 @@ async fn test_delete_file() {
         .unwrap();
 
     assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_dedup_refcount_increment() {
+    let app = create_test_app().await;
+
+    let test_content = b"Shared content for refcount test";
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(test_content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(test_content);
+
+    // PUT first file
+    let timestamp1 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp1 = urlencoding::encode(&timestamp1);
+
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/ft/files/refcount/file1.txt?last_modified={}", encoded_timestamp1))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // PUT second file with same content
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let timestamp2 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp2 = urlencoding::encode(&timestamp2);
+
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/ft/files/refcount/file2.txt?last_modified={}", encoded_timestamp2))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // PUT third file with same content
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let timestamp3 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp3 = urlencoding::encode(&timestamp3);
+
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/ft/files/refcount/file3.txt?last_modified={}", encoded_timestamp3))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Verify all three files can be retrieved
+    let get1 = app.clone()
+        .oneshot(
+            Request::builder()
+                .uri("/ft/files/refcount/file1.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let get2 = app.clone()
+        .oneshot(
+            Request::builder()
+                .uri("/ft/files/refcount/file2.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let get3 = app.clone()
+        .oneshot(
+            Request::builder()
+                .uri("/ft/files/refcount/file3.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get1.status(), StatusCode::OK);
+    assert_eq!(get2.status(), StatusCode::OK);
+    assert_eq!(get3.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_dedup_blob_deleted_when_refcount_zero() {
+    let (mut app, state) = create_test_app_with_state().await;
+    use tower::Service;
+
+    let test_content = b"Content that will be fully deleted";
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(test_content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(test_content);
+
+    // PUT two files with same content
+    let timestamp1 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp1 = urlencoding::encode(&timestamp1);
+
+    app.call(
+            Request::builder()
+                .uri(format!("/ft/files/deletion/file1.txt?last_modified={}", encoded_timestamp1))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let timestamp2 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp2 = urlencoding::encode(&timestamp2);
+
+    app.call(
+            Request::builder()
+                .uri(format!("/ft/files/deletion/file2.txt?last_modified={}", encoded_timestamp2))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Verify blob exists in S3
+    let blob_exists = state.s3storage.lock().await.object_exists(&sha256).await.unwrap();
+    assert!(blob_exists, "Blob should exist in S3 after upload");
+
+    // DELETE first file - blob should still exist (refcount = 1)
+    app.call(
+            Request::builder()
+                .uri(format!("/ft/files/deletion/file1.txt?last_modified={}", encoded_timestamp1))
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Verify blob still exists in S3 (refcount = 1)
+    let blob_exists = state.s3storage.lock().await.object_exists(&sha256).await.unwrap();
+    assert!(blob_exists, "Blob should still exist in S3 after first deletion (refcount=1)");
+
+    // Second file should still be retrievable
+    let get_response = app.call(
+            Request::builder()
+                .uri("/ft/files/deletion/file2.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get_response.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_response.into_body(), usize::MAX).await.unwrap();
+    let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content);
+
+    // DELETE second file - blob should be deleted from S3 (refcount = 0)
+    app.call(
+            Request::builder()
+                .uri(format!("/ft/files/deletion/file2.txt?last_modified={}", encoded_timestamp2))
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Verify blob is deleted from S3
+    let blob_exists = state.s3storage.lock().await.object_exists(&sha256).await.unwrap();
+    assert!(!blob_exists, "Blob should be deleted from S3 after refcount reaches 0");
+
+    // Both files should now be gone
+    let get1 = app.call(
+            Request::builder()
+                .uri("/ft/files/deletion/file1.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let get2 = app.call(
+            Request::builder()
+                .uri("/ft/files/deletion/file2.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get1.status(), StatusCode::NOT_FOUND);
+    assert_eq!(get2.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_dedup_partial_deletion() {
+    let app = create_test_app().await;
+
+    let test_content = b"Partially deleted content";
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(test_content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(test_content);
+
+    // PUT three files with same content
+    let timestamp1 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp1 = urlencoding::encode(&timestamp1);
+
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/ft/files/partial/file1.txt?last_modified={}", encoded_timestamp1))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let timestamp2 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp2 = urlencoding::encode(&timestamp2);
+
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/ft/files/partial/file2.txt?last_modified={}", encoded_timestamp2))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let timestamp3 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp3 = urlencoding::encode(&timestamp3);
+
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/ft/files/partial/file3.txt?last_modified={}", encoded_timestamp3))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // DELETE two files - one should still remain
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/ft/files/partial/file1.txt?last_modified={}", encoded_timestamp1))
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/ft/files/partial/file2.txt?last_modified={}", encoded_timestamp2))
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Third file should still be retrievable (refcount = 1)
+    let get_response = app.clone()
+        .oneshot(
+            Request::builder()
+                .uri("/ft/files/partial/file3.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get_response.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_response.into_body(), usize::MAX).await.unwrap();
+    let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content);
+
+    // First two files should be gone
+    let get1 = app.clone()
+        .oneshot(
+            Request::builder()
+                .uri("/ft/files/partial/file1.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let get2 = app.clone()
+        .oneshot(
+            Request::builder()
+                .uri("/ft/files/partial/file2.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get1.status(), StatusCode::NOT_FOUND);
+    assert_eq!(get2.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_dedup_update_same_path() {
+    use tower::Service;
+
+    let (mut app, state) = create_test_app_with_state().await;
+
+    let content_v1 = b"Version 1 content";
+    let content_v2 = b"Version 2 content - different!";
+
+    use s3dedup::routes::ft::storage_helpers;
+
+    // PUT version 1
+    let compressed_v1 = storage_helpers::compress_gzip(content_v1).unwrap();
+    let sha256_v1 = storage_helpers::compute_sha256(content_v1);
+
+    let timestamp1 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp1 = urlencoding::encode(&timestamp1);
+
+    let put1 = app.call(
+            Request::builder()
+                .uri(format!("/ft/files/update/same.txt?last_modified={}", encoded_timestamp1))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256_v1)
+                .header("Logical-Size", content_v1.len().to_string())
+                .body(Body::from(compressed_v1))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put1.status(), StatusCode::OK);
+
+    // Verify v1 blob exists in S3
+    let v1_exists = state.s3storage.lock().await.object_exists(&sha256_v1).await.unwrap();
+    assert!(v1_exists, "V1 blob should exist in S3");
+
+    // PUT version 2 to the same path (should decrement refcount of v1, increment v2)
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let compressed_v2 = storage_helpers::compress_gzip(content_v2).unwrap();
+    let sha256_v2 = storage_helpers::compute_sha256(content_v2);
+
+    let timestamp2 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp2 = urlencoding::encode(&timestamp2);
+
+    let put2 = app.call(
+            Request::builder()
+                .uri(format!("/ft/files/update/same.txt?last_modified={}", encoded_timestamp2))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256_v2)
+                .header("Logical-Size", content_v2.len().to_string())
+                .body(Body::from(compressed_v2))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put2.status(), StatusCode::OK);
+
+    // Verify v1 blob is deleted from S3 (refcount dropped to 0)
+    let v1_exists = state.s3storage.lock().await.object_exists(&sha256_v1).await.unwrap();
+    assert!(!v1_exists, "V1 blob should be deleted from S3 after update");
+
+    // Verify v2 blob exists in S3
+    let v2_exists = state.s3storage.lock().await.object_exists(&sha256_v2).await.unwrap();
+    assert!(v2_exists, "V2 blob should exist in S3");
+
+    // GET should return version 2
+    let get_response = app.call(
+            Request::builder()
+                .uri("/ft/files/update/same.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get_response.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_response.into_body(), usize::MAX).await.unwrap();
+    let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, content_v2);
 }

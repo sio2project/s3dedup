@@ -3,7 +3,7 @@ use crate::config::BucketConfig;
 use crate::kvstorage::KVStorageTrait;
 use crate::kvstorage::pooled::{RowModified, RowRefFile, RowRefcount};
 use serde::Deserialize;
-use sqlx::SqlitePool;
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use tracing::debug;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -25,9 +25,23 @@ impl KVStorageTrait for SQLite {
             std::fs::File::create(&sqlite_config.path)?;
         }
 
-        let db_url = format!("sqlite://{}", sqlite_config.path);
+        let db_url = format!("sqlite://{}?mode=rwc", sqlite_config.path);
         debug!("Connecting to SQLite database: {}", db_url);
-        let pool = SqlitePool::connect(&db_url).await?;
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(sqlite_config.pool_size)
+            .acquire_timeout(std::time::Duration::from_secs(30))
+            .connect(&db_url)
+            .await?;
+
+        // Enable WAL mode for better concurrency
+        sqlx::query("PRAGMA journal_mode=WAL")
+            .execute(&pool)
+            .await?;
+        sqlx::query("PRAGMA busy_timeout=30000")
+            .execute(&pool)
+            .await?;
+
         Ok(Box::new(SQLite { pool }))
     }
 

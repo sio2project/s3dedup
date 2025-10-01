@@ -104,15 +104,27 @@ impl S3StorageTrait for MinIOClient {
     async fn delete_object(&self, key: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!("Deleting object: {}", key);
 
-        self.client
+        let delete_future = self.client
             .delete_object()
             .bucket(&self.bucket)
             .key(key)
-            .send()
-            .await?;
+            .send();
 
-        debug!("Successfully deleted object: {}", key);
-        Ok(())
+        // Add 10 second timeout to prevent indefinite hanging
+        match tokio::time::timeout(std::time::Duration::from_secs(10), delete_future).await {
+            Ok(Ok(_)) => {
+                debug!("Successfully deleted object: {}", key);
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Failed to delete object {}: {}", key, e);
+                Err(Box::new(e))
+            }
+            Err(_) => {
+                tracing::error!("Timeout deleting object {}", key);
+                Err("Timeout deleting object".into())
+            }
+        }
     }
 
     async fn object_exists(&self, key: &str) -> Result<bool, Box<dyn Error + Send + Sync>> {
