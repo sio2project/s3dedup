@@ -168,16 +168,16 @@ pub async fn ft_put_file(
                 .body("Failed to store object".to_string())
                 .unwrap();
         }
+    }
 
-        // Store logical size metadata
-        if let Err(e) = state.kvstorage.lock().await.set_logical_size(&state.bucket_name, &digest, logical_size).await {
-            error!("Failed to store logical size: {}", e);
-            state.locks.lock().await.release(&lock_key);
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to store logical size".to_string())
-                .unwrap();
-        }
+    // Store logical size metadata (always, in case KV metadata was lost but S3 blob still exists)
+    if let Err(e) = state.kvstorage.lock().await.set_logical_size(&state.bucket_name, &digest, logical_size).await {
+        error!("Failed to store logical size: {}", e);
+        state.locks.lock().await.release(&lock_key);
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body("Failed to store logical size".to_string())
+            .unwrap();
     }
 
     // Increment reference count

@@ -18,7 +18,7 @@ fn hash_lock(bucket: &str, hash: &str) -> String {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub(crate) enum LocksType {
+pub enum LocksType {
     #[serde(rename = "memory")]
     Memory,
 }

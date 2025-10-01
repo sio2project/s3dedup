@@ -1,11 +1,12 @@
-use crate::kvstorage::KVStorageType;
-use crate::kvstorage::postgres::PostgresConfig;
-use crate::kvstorage::sqlite::SQLiteConfig;
-use crate::locks::LocksType;
-use crate::s3storage::S3StorageType;
-use crate::s3storage::minio::MinIOConfig;
 use std::error::Error;
 use crate::logging::LoggingConfig;
+
+pub use crate::kvstorage::KVStorageType;
+pub use crate::kvstorage::postgres::PostgresConfig;
+pub use crate::kvstorage::sqlite::SQLiteConfig;
+pub use crate::locks::LocksType;
+pub use crate::s3storage::S3StorageType;
+pub use crate::s3storage::minio::MinIOConfig;
 
 #[derive(Debug, serde::Deserialize, Clone)]
 pub struct Config {

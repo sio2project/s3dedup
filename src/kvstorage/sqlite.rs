@@ -68,13 +68,18 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         hash: &str,
     ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
-        sqlx::query_as("SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2")
-            .bind(bucket)
-            .bind(hash)
-            .fetch_one(&self.pool)
-            .await
-            .map(|row: RowRefcount| row.refcount)
-            .or(Ok(0))
+        let result: Result<(i32,), sqlx::Error> = sqlx::query_as(
+            "SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2"
+        )
+        .bind(bucket)
+        .bind(hash)
+        .fetch_one(&self.pool)
+        .await;
+
+        match result {
+            Ok((count,)) => Ok(count),
+            Err(_) => Ok(0),
+        }
     }
 
     async fn set_ref_count(
@@ -97,13 +102,18 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         path: &str,
     ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
-        sqlx::query_as("SELECT modified FROM modified WHERE bucket = ?1 AND path = ?2")
-            .bind(bucket)
-            .bind(path)
-            .fetch_one(&self.pool)
-            .await
-            .map(|row: RowModified| row.modified)
-            .or(Ok(0))
+        let result: Result<(i64,), sqlx::Error> = sqlx::query_as(
+            "SELECT modified FROM modified WHERE bucket = ?1 AND path = ?2"
+        )
+        .bind(bucket)
+        .bind(path)
+        .fetch_one(&self.pool)
+        .await;
+
+        match result {
+            Ok((modified,)) => Ok(modified),
+            Err(_) => Ok(0),
+        }
     }
 
     async fn set_modified(
@@ -139,13 +149,18 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         path: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        sqlx::query_as("SELECT hash FROM ref_file WHERE bucket = ?1 AND path = ?2")
-            .bind(bucket)
-            .bind(path)
-            .fetch_one(&self.pool)
-            .await
-            .map(|row: RowRefFile| row.hash)
-            .or(Ok("".to_string()))
+        let result: Result<(String,), sqlx::Error> = sqlx::query_as(
+            "SELECT hash FROM ref_file WHERE bucket = ?1 AND path = ?2"
+        )
+        .bind(bucket)
+        .bind(path)
+        .fetch_one(&self.pool)
+        .await;
+
+        match result {
+            Ok((hash,)) => Ok(hash),
+            Err(_) => Ok("".to_string()),
+        }
     }
 
     async fn set_ref_file(
