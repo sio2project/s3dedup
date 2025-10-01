@@ -17,6 +17,7 @@ use tracing::{Level, error, info, warn};
 #[derive(Parser)]
 #[command(name = "s3dedup")]
 #[command(about = "S3 deduplication proxy server", long_about = None)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
