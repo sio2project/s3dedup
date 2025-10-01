@@ -3,8 +3,8 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct LoggingConfig {
-    level: String,
-    json: bool,
+    pub level: String,
+    pub json: bool,
 }
 
 pub fn setup(logging_config: &LoggingConfig) -> Result<(), SetGlobalDefaultError> {

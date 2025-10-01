@@ -27,15 +27,21 @@ struct Cli {
 enum Commands {
     /// Start the S3 deduplication server
     Server {
-        /// Path to configuration file
-        #[arg(short, long, default_value = "config.json")]
-        config: String,
+        /// Path to configuration file (optional if using environment variables)
+        #[arg(short, long)]
+        config: Option<String>,
+        /// Use environment variables for configuration instead of config file
+        #[arg(short, long)]
+        env: bool,
     },
     /// Migrate data from old filetracker to s3dedup
     Migrate {
-        /// Path to configuration file
-        #[arg(short, long, default_value = "config.json")]
-        config: String,
+        /// Path to configuration file (optional if using environment variables)
+        #[arg(short, long)]
+        config: Option<String>,
+        /// Use environment variables for configuration instead of config file
+        #[arg(short, long)]
+        env: bool,
         /// URL of the old filetracker server
         #[arg(short, long)]
         filetracker_url: String,
@@ -46,9 +52,12 @@ enum Commands {
     /// Perform live migration while server is running
     /// Each bucket can specify its own filetracker_url in the config file
     LiveMigrate {
-        /// Path to configuration file
-        #[arg(short, long, default_value = "config.json")]
-        config: String,
+        /// Path to configuration file (optional if using environment variables)
+        #[arg(short, long)]
+        config: Option<String>,
+        /// Use environment variables for configuration instead of config file
+        #[arg(short, long)]
+        env: bool,
         /// Maximum number of concurrent migration workers per bucket
         #[arg(short, long, default_value = "10")]
         max_concurrency: usize,
@@ -60,8 +69,12 @@ async fn run_server(addr: SocketAddr, app: Router) {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn run_s3dedup_server(config_path: &str) {
-    let config = config::Config::new(config_path).unwrap();
+async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) {
+    let config = if use_env {
+        config::Config::from_env().unwrap()
+    } else {
+        config::Config::new(config_path.unwrap_or("config.json")).unwrap()
+    };
     s3dedup::logging::setup(&config.logging).unwrap();
     let mut handles = vec![];
 
@@ -110,12 +123,20 @@ async fn run_s3dedup_server(config_path: &str) {
     }
 }
 
-async fn run_migrate(config_path: &str, filetracker_url: &str, max_concurrency: usize) {
-    let config = config::Config::new(config_path).unwrap();
+async fn run_migrate(config_path: Option<&str>, use_env: bool, filetracker_url: &str, max_concurrency: usize) {
+    let config = if use_env {
+        config::Config::from_env().unwrap()
+    } else {
+        config::Config::new(config_path.unwrap_or("config.json")).unwrap()
+    };
     s3dedup::logging::setup(&config.logging).unwrap();
 
     info!("Starting offline migration from old filetracker to s3dedup");
-    info!("Config file: {}", config_path);
+    if use_env {
+        info!("Using environment variables for configuration");
+    } else {
+        info!("Config file: {}", config_path.unwrap_or("config.json"));
+    }
     info!("Filetracker URL: {}", filetracker_url);
     info!("Max concurrency: {}", max_concurrency);
 
@@ -170,13 +191,21 @@ async fn run_migrate(config_path: &str, filetracker_url: &str, max_concurrency: 
     }
 }
 
-async fn run_live_migrate(config_path: &str, max_concurrency: usize) {
-    let config = config::Config::new(config_path).unwrap();
+async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurrency: usize) {
+    let config = if use_env {
+        config::Config::from_env().unwrap()
+    } else {
+        config::Config::new(config_path.unwrap_or("config.json")).unwrap()
+    };
     s3dedup::logging::setup(&config.logging).unwrap();
     let mut handles = vec![];
 
     info!("Starting live migration from old filetracker to s3dedup");
-    info!("Config file: {}", config_path);
+    if use_env {
+        info!("Using environment variables for configuration");
+    } else {
+        info!("Config file: {}", config_path.unwrap_or("config.json"));
+    }
     info!("Max concurrency per bucket: {}", max_concurrency);
 
     for bucket in config.buckets.iter() {
@@ -293,21 +322,23 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Server { config } => {
-            run_s3dedup_server(&config).await;
+        Commands::Server { config, env } => {
+            run_s3dedup_server(config.as_deref(), env).await;
         }
         Commands::Migrate {
             config,
+            env,
             filetracker_url,
             max_concurrency,
         } => {
-            run_migrate(&config, &filetracker_url, max_concurrency).await;
+            run_migrate(config.as_deref(), env, &filetracker_url, max_concurrency).await;
         }
         Commands::LiveMigrate {
             config,
+            env,
             max_concurrency,
         } => {
-            run_live_migrate(&config, max_concurrency).await;
+            run_live_migrate(config.as_deref(), env, max_concurrency).await;
         }
     }
 }

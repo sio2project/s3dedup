@@ -1,0 +1,47 @@
+# Build stage
+FROM rustlang/rust:nightly-slim as builder
+
+WORKDIR /usr/src/s3dedup
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy manifests
+COPY Cargo.toml Cargo.lock ./
+
+# Copy source code
+COPY src ./src
+COPY tests ./tests
+
+# Build the application in release mode
+RUN cargo build --release
+
+# Runtime stage
+FROM debian:trixie-slim
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the binary from builder
+COPY --from=builder /usr/src/s3dedup/target/release/s3dedup /usr/local/bin/s3dedup
+
+# Create directory for config and database
+RUN mkdir -p /app/data
+
+# Set the working directory where config.json should be placed
+WORKDIR /app
+
+# Expose default port (can be overridden in config)
+EXPOSE 8080
+
+# Run the server command with environment variables by default
+ENTRYPOINT ["s3dedup"]
+CMD ["server", "--env"]

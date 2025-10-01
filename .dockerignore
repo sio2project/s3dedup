@@ -1,0 +1,10 @@
+target/
+kv.db
+*.db
+*.log
+.git/
+.gitignore
+*.md
+!README.md
+config.json
+config.*.json
