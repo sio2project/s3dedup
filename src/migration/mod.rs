@@ -160,7 +160,11 @@ pub async fn migrate_single_file_from_metadata(
 
     // Acquire file lock
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
-    app_state.locks.lock().await.acquire_exclusive(&lock_key);
+    app_state
+        .locks
+        .lock()
+        .await
+        .acquire_exclusive(lock_key.clone());
 
     // Recheck if file was already migrated after acquiring lock (race condition protection)
     let current_modified_after_lock = app_state
@@ -263,7 +267,7 @@ pub async fn migrate_single_file_from_metadata(
         .await?;
 
     // Release lock
-    app_state.locks.lock().await.release(&lock_key);
+    app_state.locks.lock().await.release(lock_key);
 
     Ok(())
 }
@@ -306,7 +310,11 @@ async fn migrate_single_file(
 
     // Acquire file lock
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
-    app_state.locks.lock().await.acquire_exclusive(&lock_key);
+    app_state
+        .locks
+        .lock()
+        .await
+        .acquire_exclusive(lock_key.clone());
 
     // Recheck if file was already migrated after acquiring lock (race condition protection)
     let current_modified_after_lock = app_state
@@ -409,7 +417,7 @@ async fn migrate_single_file(
         .await?;
 
     // Release lock
-    app_state.locks.lock().await.release(&lock_key);
+    app_state.locks.lock().await.release(lock_key);
 
     Ok(true)
 }

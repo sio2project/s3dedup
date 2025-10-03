@@ -29,7 +29,7 @@ pub async fn ft_delete_file(
 
     // 2. Acquire file lock (exclusive for write operation)
     let lock_key = locks::file_lock(&state.bucket_name, path);
-    state.locks.lock().await.acquire_exclusive(&lock_key);
+    state.locks.lock().await.acquire_exclusive(lock_key.clone());
 
     // 3. Check if file exists
     let current_modified = state
@@ -106,7 +106,7 @@ pub async fn ft_delete_file(
         .await
     {
         error!("Failed to decrement ref count: {}", e);
-        state.locks.lock().await.release(&lock_key);
+        state.locks.lock().await.release(lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to decrement ref count".to_string())
@@ -188,7 +188,7 @@ pub async fn ft_delete_file(
     }
 
     // 10. Release lock and return
-    state.locks.lock().await.release(&lock_key);
+    state.locks.lock().await.release(lock_key);
 
     Response::builder()
         .status(StatusCode::OK)

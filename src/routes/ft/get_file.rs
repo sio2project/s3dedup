@@ -19,7 +19,7 @@ pub async fn ft_get_file(
 
     // 1. Acquire file lock (shared lock for read operation)
     let lock_key = locks::file_lock(&state.bucket_name, path);
-    state.locks.lock().await.acquire_shared(&lock_key);
+    state.locks.lock().await.acquire_shared(lock_key.clone());
 
     // 2. Check if file exists and get metadata
     let modified_time = state
@@ -30,7 +30,7 @@ pub async fn ft_get_file(
         .await;
     if modified_time.is_err() {
         error!("Failed to get modified time");
-        state.locks.lock().await.release(&lock_key);
+        state.locks.lock().await.release(lock_key);
 
         metrics::HTTP_REQUESTS_TOTAL
             .with_label_values(&["GET", "/ft/files", "500"])
@@ -195,7 +195,7 @@ pub async fn ft_get_file(
     let blob_data = blob_data.unwrap();
 
     // 6. Release lock
-    state.locks.lock().await.release(&lock_key);
+    state.locks.lock().await.release(lock_key);
 
     // 7. Record metrics
     metrics::HTTP_REQUESTS_TOTAL

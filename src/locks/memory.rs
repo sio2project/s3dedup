@@ -9,10 +9,10 @@ pub(crate) struct MemoryLocks {
 }
 
 impl MemoryLocks {
-    fn get_or_create_lock(&self, key: &str) -> Arc<RwLock<()>> {
+    fn get_or_create_lock(&self, key: String) -> Arc<RwLock<()>> {
         let mut locks = self.locks.write().unwrap();
         locks
-            .entry(key.to_string())
+            .entry(key)
             .or_insert_with(|| Arc::new(RwLock::new(())))
             .clone()
     }
@@ -25,18 +25,18 @@ impl Locks for MemoryLocks {
         })
     }
 
-    fn acquire_shared(&mut self, key: &str) {
+    fn acquire_shared(&mut self, key: String) {
         let lock = self.get_or_create_lock(key);
         let _guard = lock.read().unwrap();
     }
 
-    fn acquire_exclusive(&mut self, key: &str) {
+    fn acquire_exclusive(&mut self, key: String) {
         let lock = self.get_or_create_lock(key);
         let _guard = lock.write().unwrap();
     }
 
-    fn release(&mut self, key: &str) -> bool {
+    fn release(&mut self, key: impl AsRef<str>) -> bool {
         let mut locks = self.locks.write().unwrap();
-        locks.remove(key).is_some()
+        locks.remove(key.as_ref()).is_some()
     }
 }

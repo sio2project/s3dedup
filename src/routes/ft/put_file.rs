@@ -68,7 +68,7 @@ pub async fn ft_put_file(
 
     // 4. Acquire file lock
     let lock_key = locks::file_lock(&state.bucket_name, path);
-    state.locks.lock().await.acquire_exclusive(&lock_key);
+    state.locks.lock().await.acquire_exclusive(lock_key.clone());
 
     // 5. Check existing version (matching original logic)
     let current_modified = state

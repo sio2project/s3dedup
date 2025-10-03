@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use serde::Deserialize;
 use tracing::{debug, info};
 
@@ -29,9 +31,9 @@ pub(crate) trait Locks {
     where
         Self: Sized;
 
-    fn acquire_shared(&mut self, key: &str);
-    fn acquire_exclusive(&mut self, key: &str);
-    fn release(&mut self, key: &str) -> bool;
+    fn acquire_shared(&mut self, key: String);
+    fn acquire_exclusive(&mut self, key: String);
+    fn release(&mut self, key: impl AsRef<str>) -> bool;
 }
 
 #[allow(private_interfaces)]
@@ -53,7 +55,7 @@ impl LocksStorage {
     /**
      * Acquire shared lock for key
      */
-    pub fn acquire_shared(&mut self, key: &str) {
+    pub fn acquire_shared(&mut self, key: String) {
         debug!("Acquiring shared lock for key: {}", key);
         match self {
             LocksStorage::Memory(lock) => {
@@ -65,7 +67,7 @@ impl LocksStorage {
     /**
      * Acquire exclusive lock for key
      */
-    pub fn acquire_exclusive(&mut self, key: &str) {
+    pub fn acquire_exclusive(&mut self, key: String) {
         debug!("Acquiring exclusive lock for key: {}", key);
         match self {
             LocksStorage::Memory(lock) => {
@@ -77,7 +79,7 @@ impl LocksStorage {
     /**
      * Release lock for key
      */
-    pub fn release(&mut self, key: &str) -> bool {
+    pub fn release(&mut self, key: impl AsRef<str> + Display) -> bool {
         debug!("Releasing lock for key: {}", key);
         match self {
             LocksStorage::Memory(lock) => lock.release(key),
