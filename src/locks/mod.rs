@@ -33,15 +33,14 @@ pub(crate) trait ExclusiveLockGuard<'a> {}
 #[async_trait]
 #[must_use = "preparing temporary lock makes no sense"]
 pub(crate) trait Lock {
-    async fn acquire_shared<'a>(&'a self) -> Box<dyn SharedLockGuard<'a> + 'a + Send>;
-    async fn acquire_exclusive<'a>(&'a self) -> Box<dyn ExclusiveLockGuard<'a> + 'a + Send>;
+    async fn acquire_shared<'a>(&'a self) -> Box<dyn SharedLockGuard<'a> + Send + 'a>;
+    async fn acquire_exclusive<'a>(&'a self) -> Box<dyn ExclusiveLockGuard<'a> + Send + 'a>;
 }
 
-#[async_trait]
 pub(crate) trait LockStorage {
     fn new() -> Box<Self>;
 
-    async fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send>;
+    fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send>;
 }
 
 #[allow(private_interfaces)]
@@ -60,9 +59,9 @@ impl LocksStorage {
         }
     }
 
-    pub(crate) async fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send> {
+    pub(crate) fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send> {
         match self {
-            LocksStorage::Memory(memory_locks) => memory_locks.prepare_lock(key).await,
+            LocksStorage::Memory(memory_locks) => memory_locks.prepare_lock(key),
         }
     }
 }
