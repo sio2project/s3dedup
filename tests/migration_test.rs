@@ -204,6 +204,7 @@ async fn create_test_app_state() -> Arc<AppState> {
         locks: Arc::new(tokio::sync::Mutex::new(locks)),
         s3storage: Arc::new(tokio::sync::Mutex::new(s3storage)),
         filetracker_client: None,
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
     });
 
     app_state.kvstorage.lock().await.setup().await.unwrap();
@@ -406,6 +407,7 @@ async fn test_live_migration_get_fallback() {
         locks: app_state.locks.clone(),
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
     });
 
     // Create router with live migration support
@@ -452,6 +454,7 @@ async fn test_live_migration_put_dual_write() {
         locks: app_state.locks.clone(),
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
     });
 
     // Create router with live migration support
@@ -528,6 +531,7 @@ async fn test_live_migration_delete_dual_delete() {
         locks: app_state.locks.clone(),
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
     });
 
     // Verify file exists in both before deletion
@@ -598,6 +602,7 @@ async fn test_live_migration_get_not_found_in_both() {
         locks: app_state.locks.clone(),
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
     });
 
     // Create router with live migration support
@@ -640,6 +645,7 @@ async fn test_live_migration_get_fallback_response_data() {
         locks: app_state.locks.clone(),
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
     });
 
     // Create router with live migration support
@@ -703,6 +709,7 @@ async fn test_live_migration_subsequent_get_from_s3dedup() {
         locks: app_state.locks.clone(),
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
     });
 
     // First GET - should fallback to filetracker and migrate
