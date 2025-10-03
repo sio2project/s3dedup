@@ -162,6 +162,20 @@ pub async fn migrate_single_file_from_metadata(
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
     app_state.locks.lock().await.acquire_exclusive(&lock_key);
 
+    // Recheck if file was already migrated after acquiring lock (race condition protection)
+    let current_modified_after_lock = app_state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state.bucket_name, path)
+        .await?;
+
+    if current_modified_after_lock >= file_metadata.last_modified {
+        // File was migrated by another concurrent task, skip
+        app_state.locks.lock().await.release(&lock_key);
+        return Ok(());
+    }
+
     // Check if blob already exists in S3
     let blob_exists = app_state
         .s3storage
@@ -293,6 +307,20 @@ async fn migrate_single_file(
     // Acquire file lock
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
     app_state.locks.lock().await.acquire_exclusive(&lock_key);
+
+    // Recheck if file was already migrated after acquiring lock (race condition protection)
+    let current_modified_after_lock = app_state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state.bucket_name, path)
+        .await?;
+
+    if current_modified_after_lock >= file_metadata.last_modified {
+        // File was migrated by another concurrent task, skip
+        app_state.locks.lock().await.release(&lock_key);
+        return Ok(false);
+    }
 
     // Check if blob already exists in S3
     let blob_exists = app_state
