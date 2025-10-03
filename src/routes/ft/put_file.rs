@@ -70,7 +70,7 @@ pub async fn ft_put_file(
     let lock_key = locks::file_lock(&state.bucket_name, path);
     let locks_storage = &state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
-    let _guard = lock.acquire_exclusive();
+    let _guard = lock.acquire_exclusive().await;
 
     // 5. Check existing version (matching original logic)
     let current_modified = state
