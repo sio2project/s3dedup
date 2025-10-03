@@ -115,7 +115,7 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) {
                     .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                     .on_response(DefaultOnResponse::new().level(Level::INFO)),
             )
-            .with_state(Arc::new(app_state));
+            .with_state(app_state);
         let address: SocketAddr = format!("{}:{}", bucket.address, bucket.port)
             .parse()
             .unwrap();
@@ -161,7 +161,7 @@ async fn run_migrate(
 
     // Initialize AppState
     let app_state = match AppState::new(bucket_config).await {
-        Ok(state) => Arc::new(state),
+        Ok(state) => state,
         Err(e) => {
             error!("Failed to initialize app state: {}", e);
             return;
@@ -267,7 +267,7 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
                             .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                             .on_response(DefaultOnResponse::new().level(Level::INFO)),
                     )
-                    .with_state(Arc::new(app_state));
+                    .with_state(app_state);
 
                 let address: SocketAddr = format!("{}:{}", bucket.address, bucket.port)
                     .parse()
@@ -303,7 +303,7 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
         tokio::spawn(async move {
             s3dedup::migration::live_migration_worker(
                 migration_client,
-                Arc::new(migration_app_state),
+                migration_app_state,
                 max_concurrency,
             )
             .await;
@@ -336,7 +336,7 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
                     .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                     .on_response(DefaultOnResponse::new().level(Level::INFO)),
             )
-            .with_state(Arc::new(app_state));
+            .with_state(app_state);
 
         let address: SocketAddr = format!("{}:{}", bucket.address, bucket.port)
             .parse()

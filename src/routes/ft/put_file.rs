@@ -68,7 +68,7 @@ pub async fn ft_put_file(
 
     // 4. Acquire file lock
     let lock_key = locks::file_lock(&state.bucket_name, path);
-    let locks_storage = state.locks.lock().await;
+    let locks_storage = &state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
     let _guard = lock.acquire_exclusive();
 

@@ -47,7 +47,7 @@ async fn create_test_app_state() -> Arc<AppState> {
     let app_state = AppState::new(&config).await.unwrap();
     app_state.kvstorage.lock().await.setup().await.unwrap();
 
-    Arc::new(app_state)
+    app_state
 }
 
 #[tokio::test]
@@ -284,7 +284,7 @@ async fn test_migration_active_metric() {
 
     let app = Router::new()
         .route("/metrics", get(s3dedup::routes::metrics::metrics_handler))
-        .with_state(Arc::new(app_state));
+        .with_state(app_state);
 
     let response = app
         .oneshot(

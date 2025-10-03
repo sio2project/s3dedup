@@ -14,36 +14,35 @@ pub mod migration;
 pub mod routes;
 pub mod s3storage;
 
-#[derive(Clone)]
 pub struct AppState {
-    pub bucket_name: Arc<str>,
+    pub bucket_name: String,
     pub kvstorage: Arc<Mutex<Box<kvstorage::KVStorage>>>,
-    pub locks: Arc<Mutex<Box<locks::LocksStorage>>>,
+    pub locks: Box<locks::LocksStorage>,
     pub s3storage: Arc<Mutex<Box<s3storage::S3Storage>>>,
     pub filetracker_client: Option<Arc<filetracker_client::FiletrackerClient>>,
     pub metrics: Arc<metrics::Metrics>,
 }
 
 impl AppState {
-    pub async fn new(config: &config::BucketConfig) -> Result<Self> {
+    pub async fn new(config: &config::BucketConfig) -> Result<Arc<Self>> {
         let kvstorage = kvstorage::KVStorage::new(config).await?;
         let locks = locks::LocksStorage::new(config.locks_type);
         let s3storage = s3storage::S3Storage::new(config).await?;
         let metrics = Arc::new(metrics::Metrics::new());
-        Ok(Self {
-            bucket_name: config.name.clone().into(),
+        Ok(Arc::new(Self {
+            bucket_name: config.name.clone(),
             kvstorage: Arc::new(Mutex::new(kvstorage)),
-            locks: Arc::new(Mutex::new(locks)),
+            locks,
             s3storage: Arc::new(Mutex::new(s3storage)),
             filetracker_client: None,
             metrics,
-        })
+        }))
     }
 
     pub async fn new_with_filetracker(
         config: &config::BucketConfig,
         filetracker_url: String,
-    ) -> Result<Self> {
+    ) -> Result<Arc<Self>> {
         let kvstorage = kvstorage::KVStorage::new(config).await?;
         let locks = locks::LocksStorage::new(config.locks_type);
         let s3storage = s3storage::S3Storage::new(config).await?;
@@ -53,13 +52,13 @@ impl AppState {
         // Mark migration as active
         metrics::MIGRATION_ACTIVE.set(1);
 
-        Ok(Self {
-            bucket_name: config.name.clone().into(),
+        Ok(Arc::new(Self {
+            bucket_name: config.name.clone(),
             kvstorage: Arc::new(Mutex::new(kvstorage)),
-            locks: Arc::new(Mutex::new(locks)),
+            locks,
             s3storage: Arc::new(Mutex::new(s3storage)),
             filetracker_client: Some(Arc::new(filetracker_client)),
             metrics,
-        })
+        }))
     }
 }

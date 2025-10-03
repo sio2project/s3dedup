@@ -162,7 +162,7 @@ pub async fn migrate_single_file_from_metadata(
 
     // Acquire file lock
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
-    let locks = app_state.locks.lock().await;
+    let locks = &app_state.locks;
     let lock = locks.prepare_lock(lock_key).await;
     let _guard = lock.acquire_exclusive();
 
@@ -305,7 +305,7 @@ async fn migrate_single_file(
 
     // Acquire file lock
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
-    let locks_storage = app_state.locks.lock().await;
+    let locks_storage = &app_state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
     let _guard = lock.acquire_exclusive();
 
