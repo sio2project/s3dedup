@@ -1,5 +1,6 @@
 use crate::kvstorage::KVStorage;
 use crate::s3storage::S3Storage;
+use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -95,7 +96,7 @@ impl Cleaner {
     }
 
     /// Run a full cleanup cycle
-    pub async fn run_cleanup(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn run_cleanup(&self) -> Result<()> {
         let mut total_deletes = 0;
 
         // Case 1: Clean ref_files pointing to non-existent hashes
@@ -147,9 +148,7 @@ impl Cleaner {
     }
 
     /// Clean ref_files that point to non-existent hashes in refcount table
-    async fn clean_orphaned_ref_files(
-        &self,
-    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    async fn clean_orphaned_ref_files(&self) -> Result<usize> {
         let mut deleted_count = 0;
         let mut offset = 0;
 
@@ -216,9 +215,7 @@ impl Cleaner {
     }
 
     /// Clean refcounts that have no corresponding ref_files
-    async fn clean_unreferenced_refcounts(
-        &self,
-    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    async fn clean_unreferenced_refcounts(&self) -> Result<usize> {
         let mut deleted_count = 0;
         let mut offset = 0;
 
@@ -294,9 +291,7 @@ impl Cleaner {
     }
 
     /// Clean S3 objects that have no refcount or refcount = 0
-    async fn clean_unused_s3_objects(
-        &self,
-    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    async fn clean_unused_s3_objects(&self) -> Result<usize> {
         let mut deleted_count = 0;
         let mut continuation_token: Option<String> = None;
 
@@ -347,9 +342,7 @@ impl Cleaner {
     }
 
     /// Clean logical_size entries that have no corresponding refcount
-    async fn clean_orphaned_logical_sizes(
-        &self,
-    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    async fn clean_orphaned_logical_sizes(&self) -> Result<usize> {
         let mut deleted_count = 0;
         let mut offset = 0;
 

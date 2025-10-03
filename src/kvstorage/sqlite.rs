@@ -1,5 +1,6 @@
 use crate::config::BucketConfig;
 use crate::kvstorage::KVStorageTrait;
+use anyhow::Result;
 use serde::Deserialize;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::path::Path;
@@ -17,9 +18,7 @@ pub struct SQLite {
 }
 
 impl KVStorageTrait for SQLite {
-    async fn new(
-        config: &BucketConfig,
-    ) -> Result<Box<Self>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn new(config: &BucketConfig) -> Result<Box<Self>> {
         let sqlite_config = config.sqlite.as_ref().unwrap();
 
         if !Path::new(&sqlite_config.path).exists() {
@@ -46,7 +45,7 @@ impl KVStorageTrait for SQLite {
         Ok(Box::new(SQLite { pool }))
     }
 
-    async fn setup(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn setup(&mut self) -> Result<()> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS refcount (
                 bucket TEXT NOT NULL,
@@ -78,11 +77,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn get_ref_count(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-    ) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
         let result: Result<(i32,), sqlx::Error> =
             sqlx::query_as("SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2")
                 .bind(bucket)
@@ -96,12 +91,7 @@ impl KVStorageTrait for SQLite {
         }
     }
 
-    async fn set_ref_count(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-        ref_cnt: i32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<()> {
         sqlx::query("INSERT OR REPLACE INTO refcount (bucket, hash, refcount) VALUES (?1, ?2, ?3)")
             .bind(bucket)
             .bind(hash)
@@ -111,11 +101,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn get_modified(
-        &mut self,
-        bucket: &str,
-        path: &str,
-    ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
+    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64> {
         let result: Result<(i64,), sqlx::Error> =
             sqlx::query_as("SELECT modified FROM modified WHERE bucket = ?1 AND path = ?2")
                 .bind(bucket)
@@ -129,12 +115,7 @@ impl KVStorageTrait for SQLite {
         }
     }
 
-    async fn set_modified(
-        &mut self,
-        bucket: &str,
-        path: &str,
-        modified: i64,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn set_modified(&mut self, bucket: &str, path: &str, modified: i64) -> Result<()> {
         sqlx::query("INSERT OR REPLACE INTO modified (bucket, path, modified) VALUES (?1, ?2, ?3)")
             .bind(bucket)
             .bind(path)
@@ -144,11 +125,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn delete_modified(
-        &mut self,
-        bucket: &str,
-        path: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<()> {
         sqlx::query("DELETE FROM modified WHERE bucket = ?1 AND path = ?2")
             .bind(bucket)
             .bind(path)
@@ -157,11 +134,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn get_ref_file(
-        &mut self,
-        bucket: &str,
-        path: &str,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String> {
         let result: Result<(String,), sqlx::Error> =
             sqlx::query_as("SELECT hash FROM ref_file WHERE bucket = ?1 AND path = ?2")
                 .bind(bucket)
@@ -175,12 +148,7 @@ impl KVStorageTrait for SQLite {
         }
     }
 
-    async fn set_ref_file(
-        &mut self,
-        bucket: &str,
-        path: &str,
-        hash: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn set_ref_file(&mut self, bucket: &str, path: &str, hash: &str) -> Result<()> {
         sqlx::query("INSERT OR REPLACE INTO ref_file (bucket, path, hash) VALUES (?1, ?2, ?3)")
             .bind(bucket)
             .bind(path)
@@ -190,11 +158,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn delete_ref_file(
-        &mut self,
-        bucket: &str,
-        path: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<()> {
         sqlx::query("DELETE FROM ref_file WHERE bucket = ?1 AND path = ?2")
             .bind(bucket)
             .bind(path)
@@ -203,11 +167,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn get_logical_size(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    async fn get_logical_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
         let result: Result<(i64,), sqlx::Error> =
             sqlx::query_as("SELECT logical_size FROM logical_size WHERE bucket = ?1 AND hash = ?2")
                 .bind(bucket)
@@ -221,12 +181,7 @@ impl KVStorageTrait for SQLite {
         }
     }
 
-    async fn set_logical_size(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-        size: usize,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()> {
         sqlx::query(
             "INSERT OR REPLACE INTO logical_size (bucket, hash, logical_size) VALUES (?1, ?2, ?3)",
         )
@@ -243,7 +198,7 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         path_prefix: &str,
         timestamp: i64,
-    ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Vec<String>> {
         let pattern = format!("{}%", path_prefix);
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT path FROM modified WHERE bucket = ?1 AND path LIKE ?2 AND modified <= ?3 ORDER BY path"
@@ -262,7 +217,7 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         limit: usize,
         offset: usize,
-    ) -> Result<Vec<(String, String)>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Vec<(String, String)>> {
         let rows: Vec<(String, String)> = sqlx::query_as(
             "SELECT path, hash FROM ref_file WHERE bucket = ?1 ORDER BY path LIMIT ?2 OFFSET ?3",
         )
@@ -280,7 +235,7 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         limit: usize,
         offset: usize,
-    ) -> Result<Vec<(String, i32)>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Vec<(String, i32)>> {
         let rows: Vec<(String, i32)> = sqlx::query_as(
             "SELECT hash, refcount FROM refcount WHERE bucket = ?1 ORDER BY hash LIMIT ?2 OFFSET ?3"
         )
@@ -298,7 +253,7 @@ impl KVStorageTrait for SQLite {
         bucket: &str,
         limit: usize,
         offset: usize,
-    ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Vec<String>> {
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT hash FROM logical_size WHERE bucket = ?1 ORDER BY hash LIMIT ?2 OFFSET ?3",
         )
@@ -311,11 +266,7 @@ impl KVStorageTrait for SQLite {
         Ok(rows.into_iter().map(|(hash,)| hash).collect())
     }
 
-    async fn delete_refcount(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn delete_refcount(&mut self, bucket: &str, hash: &str) -> Result<()> {
         sqlx::query("DELETE FROM refcount WHERE bucket = ?1 AND hash = ?2")
             .bind(bucket)
             .bind(hash)
@@ -324,11 +275,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn delete_logical_size(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn delete_logical_size(&mut self, bucket: &str, hash: &str) -> Result<()> {
         sqlx::query("DELETE FROM logical_size WHERE bucket = ?1 AND hash = ?2")
             .bind(bucket)
             .bind(hash)

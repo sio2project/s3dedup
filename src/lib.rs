@@ -1,3 +1,4 @@
+use anyhow::Result;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -24,9 +25,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn new(
-        config: &config::BucketConfig,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn new(config: &config::BucketConfig) -> Result<Self> {
         let kvstorage = kvstorage::KVStorage::new(config).await?;
         let locks = locks::LocksStorage::new(config.locks_type);
         let s3storage = s3storage::S3Storage::new(config).await?;
@@ -44,7 +43,7 @@ impl AppState {
     pub async fn new_with_filetracker(
         config: &config::BucketConfig,
         filetracker_url: String,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Self> {
         let kvstorage = kvstorage::KVStorage::new(config).await?;
         let locks = locks::LocksStorage::new(config.locks_type);
         let s3storage = s3storage::S3Storage::new(config).await?;

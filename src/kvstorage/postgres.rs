@@ -1,9 +1,9 @@
 use crate::config::BucketConfig;
 use crate::kvstorage::KVStorageTrait;
+use anyhow::Result;
 use serde::Deserialize;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
-use std::error::Error;
 use tracing::debug;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -31,7 +31,7 @@ impl Postgres {
 }
 
 impl KVStorageTrait for Postgres {
-    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn Error + Send + Sync>> {
+    async fn new(config: &BucketConfig) -> Result<Box<Self>> {
         let pg_config = config.postgres.as_ref().unwrap();
         let db_url = format!(
             "postgres://{}:{}@{}:{}/{}",
@@ -47,7 +47,7 @@ impl KVStorageTrait for Postgres {
             bucket: config.name.clone(),
         }))
     }
-    async fn setup(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn setup(&mut self) -> Result<()> {
         // PostgreSQL doesn't support multiple statements in a single query
         // Create tables with bucket-specific names to allow parallel tests
         let refcount_table = self.table_name("refcount");
@@ -106,11 +106,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_ref_count(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-    ) -> Result<i32, Box<dyn Error + Send + Sync>> {
+    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
         let table = self.table_name("refcount");
         let query = format!(
             "SELECT refcount FROM {} WHERE bucket = $1 AND hash = $2",
@@ -128,12 +124,7 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn set_ref_count(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-        ref_cnt: i32,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<()> {
         let table = self.table_name("refcount");
         let query = format!(
             "INSERT INTO {} (bucket, hash, refcount) VALUES ($1, $2, $3)
@@ -149,11 +140,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_modified(
-        &mut self,
-        bucket: &str,
-        path: &str,
-    ) -> Result<i64, Box<dyn Error + Send + Sync>> {
+    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64> {
         let table = self.table_name("modified");
         let query = format!(
             "SELECT modified FROM {} WHERE bucket = $1 AND path = $2",
@@ -171,12 +158,7 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn set_modified(
-        &mut self,
-        bucket: &str,
-        path: &str,
-        modified: i64,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn set_modified(&mut self, bucket: &str, path: &str, modified: i64) -> Result<()> {
         let table = self.table_name("modified");
         let query = format!(
             "INSERT INTO {} (bucket, path, modified) VALUES ($1, $2, $3)
@@ -192,11 +174,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn delete_modified(
-        &mut self,
-        bucket: &str,
-        path: &str,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<()> {
         let table = self.table_name("modified");
         let query = format!("DELETE FROM {} WHERE bucket = $1 AND path = $2", table);
         sqlx::query(&query)
@@ -207,11 +185,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_ref_file(
-        &mut self,
-        bucket: &str,
-        path: &str,
-    ) -> Result<String, Box<dyn Error + Send + Sync>> {
+    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String> {
         let table = self.table_name("ref_file");
         let query = format!("SELECT hash FROM {} WHERE bucket = $1 AND path = $2", table);
         let result: Result<(String,), sqlx::Error> = sqlx::query_as(&query)
@@ -226,12 +200,7 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn set_ref_file(
-        &mut self,
-        bucket: &str,
-        path: &str,
-        hash: &str,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn set_ref_file(&mut self, bucket: &str, path: &str, hash: &str) -> Result<()> {
         let table = self.table_name("ref_file");
         let query = format!(
             "INSERT INTO {} (bucket, path, hash) VALUES ($1, $2, $3)
@@ -247,11 +216,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn delete_ref_file(
-        &mut self,
-        bucket: &str,
-        path: &str,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<()> {
         let table = self.table_name("ref_file");
         let query = format!("DELETE FROM {} WHERE bucket = $1 AND path = $2", table);
         sqlx::query(&query)
@@ -262,11 +227,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_logical_size(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-    ) -> Result<usize, Box<dyn Error + Send + Sync>> {
+    async fn get_logical_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
         let table = self.table_name("logical_size");
         let query = format!(
             "SELECT logical_size FROM {} WHERE bucket = $1 AND hash = $2",
@@ -284,12 +245,7 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn set_logical_size(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-        size: usize,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()> {
         let table = self.table_name("logical_size");
         let query = format!(
             "INSERT INTO {} (bucket, hash, logical_size) VALUES ($1, $2, $3) ON CONFLICT (bucket, hash) DO UPDATE SET logical_size = $3",
@@ -309,7 +265,7 @@ impl KVStorageTrait for Postgres {
         bucket: &str,
         path_prefix: &str,
         timestamp: i64,
-    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<String>> {
         let table = self.table_name("modified");
         let pattern = format!("{}%", path_prefix);
         let query = format!(
@@ -331,7 +287,7 @@ impl KVStorageTrait for Postgres {
         bucket: &str,
         limit: usize,
         offset: usize,
-    ) -> Result<Vec<(String, String)>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<(String, String)>> {
         let table = self.table_name("ref_file");
         let query = format!(
             "SELECT path, hash FROM {} WHERE bucket = $1 ORDER BY path LIMIT $2 OFFSET $3",
@@ -352,7 +308,7 @@ impl KVStorageTrait for Postgres {
         bucket: &str,
         limit: usize,
         offset: usize,
-    ) -> Result<Vec<(String, i32)>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<(String, i32)>> {
         let table = self.table_name("refcount");
         let query = format!(
             "SELECT hash, refcount FROM {} WHERE bucket = $1 ORDER BY hash LIMIT $2 OFFSET $3",
@@ -373,7 +329,7 @@ impl KVStorageTrait for Postgres {
         bucket: &str,
         limit: usize,
         offset: usize,
-    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<String>> {
         let table = self.table_name("logical_size");
         let query = format!(
             "SELECT hash FROM {} WHERE bucket = $1 ORDER BY hash LIMIT $2 OFFSET $3",
@@ -389,11 +345,7 @@ impl KVStorageTrait for Postgres {
         Ok(rows.into_iter().map(|(hash,)| hash).collect())
     }
 
-    async fn delete_refcount(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn delete_refcount(&mut self, bucket: &str, hash: &str) -> Result<()> {
         let table = self.table_name("refcount");
         let query = format!("DELETE FROM {} WHERE bucket = $1 AND hash = $2", table);
         sqlx::query(&query)
@@ -404,11 +356,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn delete_logical_size(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn delete_logical_size(&mut self, bucket: &str, hash: &str) -> Result<()> {
         let table = self.table_name("logical_size");
         let query = format!("DELETE FROM {} WHERE bucket = $1 AND hash = $2", table);
         sqlx::query(&query)

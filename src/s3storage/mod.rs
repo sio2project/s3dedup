@@ -1,7 +1,7 @@
 use crate::config::BucketConfig;
+use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::error::Error;
 use tracing::{debug, info};
 
 pub mod minio;
@@ -16,25 +16,21 @@ pub enum S3StorageType {
 
 #[async_trait]
 pub(crate) trait S3StorageTrait {
-    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn Error + Send + Sync>>
+    async fn new(config: &BucketConfig) -> Result<Box<Self>>
     where
         Self: Sized;
 
-    async fn put_object(
-        &self,
-        key: &str,
-        data: Vec<u8>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>>;
-    async fn get_object(&self, key: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>>;
-    async fn delete_object(&self, key: &str) -> Result<(), Box<dyn Error + Send + Sync>>;
-    async fn object_exists(&self, key: &str) -> Result<bool, Box<dyn Error + Send + Sync>>;
+    async fn put_object(&self, key: &str, data: Vec<u8>) -> Result<()>;
+    async fn get_object(&self, key: &str) -> Result<Vec<u8>>;
+    async fn delete_object(&self, key: &str) -> Result<()>;
+    async fn object_exists(&self, key: &str) -> Result<bool>;
 
     /// List objects in batches with continuation support
     /// Returns (keys, continuation_token)
     async fn list_objects(
         &self,
         continuation_token: Option<String>,
-    ) -> Result<(Vec<String>, Option<String>), Box<dyn Error + Send + Sync>>;
+    ) -> Result<(Vec<String>, Option<String>)>;
 }
 
 #[derive(Clone)]
@@ -43,7 +39,7 @@ pub enum S3Storage {
 }
 
 impl S3Storage {
-    pub async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn Error + Send + Sync>> {
+    pub async fn new(config: &BucketConfig) -> Result<Box<Self>> {
         match config.s3storage_type {
             S3StorageType::MinIO => {
                 info!("Using MinIO as S3 storage");
@@ -57,32 +53,28 @@ impl S3Storage {
         }
     }
 
-    pub async fn put_object(
-        &self,
-        key: &str,
-        data: Vec<u8>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn put_object(&self, key: &str, data: Vec<u8>) -> Result<()> {
         debug!("Putting object with key: {}", key);
         match self {
             S3Storage::MinIO(client) => client.put_object(key, data).await,
         }
     }
 
-    pub async fn get_object(&self, key: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+    pub async fn get_object(&self, key: &str) -> Result<Vec<u8>> {
         debug!("Getting object with key: {}", key);
         match self {
             S3Storage::MinIO(client) => client.get_object(key).await,
         }
     }
 
-    pub async fn delete_object(&self, key: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn delete_object(&self, key: &str) -> Result<()> {
         debug!("Deleting object with key: {}", key);
         match self {
             S3Storage::MinIO(client) => client.delete_object(key).await,
         }
     }
 
-    pub async fn object_exists(&self, key: &str) -> Result<bool, Box<dyn Error + Send + Sync>> {
+    pub async fn object_exists(&self, key: &str) -> Result<bool> {
         debug!("Checking if object exists with key: {}", key);
         match self {
             S3Storage::MinIO(client) => client.object_exists(key).await,
@@ -92,7 +84,7 @@ impl S3Storage {
     pub async fn list_objects(
         &self,
         continuation_token: Option<String>,
-    ) -> Result<(Vec<String>, Option<String>), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(Vec<String>, Option<String>)> {
         debug!(
             "Listing objects with continuation_token: {:?}",
             continuation_token

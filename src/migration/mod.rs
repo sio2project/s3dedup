@@ -1,6 +1,7 @@
 use crate::AppState;
 use crate::filetracker_client::{FileMetadata, FiletrackerClient};
 use crate::routes::ft::storage_helpers;
+use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
@@ -17,7 +18,7 @@ pub async fn migrate_all_files(
     filetracker_client: Arc<FiletrackerClient>,
     app_state: Arc<AppState>,
     max_concurrency: usize,
-) -> Result<MigrationStats, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<MigrationStats> {
     info!("Starting offline migration from filetracker to s3dedup");
     info!("Max concurrency: {}", max_concurrency);
 
@@ -132,7 +133,7 @@ pub async fn migrate_single_file_from_metadata(
     app_state: &AppState,
     path: &str,
     file_metadata: FileMetadata,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<()> {
     // Check if file already exists in s3dedup with same or newer version
     let current_modified = app_state
         .kvstorage
@@ -272,7 +273,7 @@ async fn migrate_single_file(
     filetracker_client: &FiletrackerClient,
     app_state: Arc<AppState>,
     path: &str,
-) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<bool> {
     // Get file from filetracker
     let file_metadata = filetracker_client.get_file(path).await?;
 
