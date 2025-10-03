@@ -65,3 +65,14 @@ impl LockStorage for MemoryLocks {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn assert_locks_compile() {
+        let memory = MemoryLocks::new();
+        let lock = memory.prepare_lock("1".into()).await;
+        let _guard = lock.acquire_exclusive().await;
+    }
+}
