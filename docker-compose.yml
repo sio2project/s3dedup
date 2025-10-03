@@ -1,6 +1,6 @@
 version: '3.8'
 
-# MinIO setup for s3dedup
+# MinIO and PostgreSQL setup for s3dedup development
 # Buckets are automatically created by the application on startup
 services:
   minio:
@@ -22,6 +22,26 @@ services:
       timeout: 20s
       retries: 3
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: s3dedup-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: s3dedup
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   minio_data:
+    driver: local
+  postgres_data:
     driver: local
