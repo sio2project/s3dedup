@@ -21,7 +21,7 @@ pub async fn ft_get_file(
     let lock_key = locks::file_lock(&state.bucket_name, path);
     let locks_storage = &state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
-    let _guard = lock.acquire_shared().await;
+    let guard = lock.acquire_shared().await;
 
     // 2. Check if file exists and get metadata
     let modified_time = state
@@ -63,7 +63,7 @@ pub async fn ft_get_file(
 
                     // Drop the shared lock before migration to avoid deadlock
                     // (migration needs exclusive lock on the same key)
-                    drop(_guard);
+                    drop(guard);
 
                     // Migrate the file on-the-fly using migration logic
                     let result = crate::migration::migrate_single_file_from_metadata(
@@ -187,7 +187,7 @@ pub async fn ft_get_file(
     }
     let blob_data = blob_data.unwrap();
 
-    drop(_guard);
+    drop(guard);
 
     // 6. Record metrics
     metrics::HTTP_REQUESTS_TOTAL

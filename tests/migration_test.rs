@@ -691,6 +691,82 @@ async fn test_live_migration_get_fallback_response_data() {
     assert_eq!(&decompressed[..], test_data);
 }
 
+/// This test validates the critical deadlock fix in src/routes/ft/get_file.rs:66
+///
+/// Deadlock scenario WITHOUT the fix:
+/// 1. ft_get_file acquires a SHARED lock on the file (get_file.rs:24)
+/// 2. File not found in s3dedup (modified_time == 0), found in filetracker
+/// 3. Calls migrate_single_file_from_metadata while STILL HOLDING the shared lock
+/// 4. Migration tries to acquire EXCLUSIVE lock on the SAME file (migration/mod.rs:167)
+/// 5. Exclusive lock waits for shared lock to release → DEADLOCK (RwLock semantics)
+///
+/// The fix (get_file.rs:66): drop(_guard) before calling migration
+///
+/// This test would HANG/TIMEOUT without the drop, proving the fix is necessary.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_live_migration_get_no_deadlock_on_fallback() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+
+    // Add a file ONLY to filetracker (not in s3dedup) to trigger fallback migration
+    let test_data = b"File that triggers on-the-fly migration";
+    mock_state
+        .add_file("deadlock_test.txt", test_data.to_vec())
+        .await;
+
+    // Create app state with filetracker client (enables live migration mode)
+    let app_state_with_ft = Arc::new(AppState {
+        bucket_name: app_state.bucket_name.clone(),
+        kvstorage: app_state.kvstorage.clone(),
+        locks: app_state.locks.clone(),
+        s3storage: app_state.s3storage.clone(),
+        filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+    });
+
+    // Create router
+    let app = Router::new()
+        .route(
+            "/ft/files/{*path}",
+            axum::routing::get(s3dedup::routes::ft::get_file::ft_get_file),
+        )
+        .with_state(app_state_with_ft.clone());
+
+    // Make GET request with timeout to detect deadlocks quickly
+    // Without the drop(_guard) fix in get_file.rs:66, this would deadlock and timeout
+    let response = tokio::time::timeout(
+        tokio::time::Duration::from_secs(5),
+        app.oneshot(
+            axum::http::Request::builder()
+                .uri("/ft/files/deadlock_test.txt")
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    )
+    .await
+    .expect("Request timed out - likely deadlock! Check that get_file.rs drops shared lock before migration")
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Verify file was successfully migrated to s3dedup
+    let modified = app_state_with_ft
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state_with_ft.bucket_name, "deadlock_test.txt")
+        .await
+        .unwrap();
+    assert!(modified > 0, "File should be migrated to s3dedup");
+
+    // Verify response data is correct
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let decompressed = s3dedup::routes::ft::storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(&decompressed[..], test_data);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_live_migration_subsequent_get_from_s3dedup() {
     let (mock_state, url) = create_mock_filetracker().await;
