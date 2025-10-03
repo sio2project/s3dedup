@@ -25,10 +25,13 @@ pub enum LocksType {
     Memory,
 }
 
+#[must_use = "droping temporary lock makes no sense"]
 pub(crate) trait SharedLockGuard<'a> {}
+#[must_use = "droping temporary lock makes no sense"]
 pub(crate) trait ExclusiveLockGuard<'a> {}
 
 #[async_trait]
+#[must_use = "preparing temporary lock makes no sense"]
 pub(crate) trait Lock {
     async fn acquire_shared<'a>(&'a self) -> Box<dyn SharedLockGuard<'a> + 'a + Send>;
     async fn acquire_exclusive<'a>(&'a self) -> Box<dyn ExclusiveLockGuard<'a> + 'a + Send>;
