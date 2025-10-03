@@ -104,6 +104,11 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) {
                     .put(ft_put_file)
                     .delete(ft_delete_file),
             )
+            .route("/metrics", get(s3dedup::routes::metrics::metrics_handler))
+            .route(
+                "/metrics/json",
+                get(s3dedup::routes::metrics::metrics_json_handler),
+            )
             .layer(
                 // Logging middleware
                 TraceLayer::new_for_http()
@@ -252,6 +257,11 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
                             .put(s3dedup::routes::ft::put_file::ft_put_file)
                             .delete(s3dedup::routes::ft::delete_file::ft_delete_file),
                     )
+                    .route("/metrics", get(s3dedup::routes::metrics::metrics_handler))
+                    .route(
+                        "/metrics/json",
+                        get(s3dedup::routes::metrics::metrics_json_handler),
+                    )
                     .layer(
                         TraceLayer::new_for_http()
                             .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
@@ -315,6 +325,11 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
                     .head(s3dedup::routes::ft::get_file::ft_get_file)
                     .put(s3dedup::routes::ft::put_file::ft_put_file)
                     .delete(s3dedup::routes::ft::delete_file::ft_delete_file),
+            )
+            .route("/metrics", get(s3dedup::routes::metrics::metrics_handler))
+            .route(
+                "/metrics/json",
+                get(s3dedup::routes::metrics::metrics_json_handler),
             )
             .layer(
                 TraceLayer::new_for_http()

@@ -96,6 +96,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         locks: Arc::new(Mutex::new(locks)),
         s3storage: Arc::new(Mutex::new(s3storage)),
         filetracker_client: None,
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
     });
 
     app_state.kvstorage.lock().await.setup().await.unwrap();

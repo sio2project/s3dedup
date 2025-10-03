@@ -1,5 +1,5 @@
 use crate::routes::ft::utils;
-use crate::{AppState, locks};
+use crate::{AppState, locks, metrics};
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{Response, StatusCode};
@@ -11,6 +11,8 @@ pub async fn ft_get_file(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
 ) -> impl IntoResponse {
+    let start = std::time::Instant::now();
+
     // Remove leading slash from wildcard path
     let path = path.strip_prefix('/').unwrap_or(&path);
     debug!("Handling GET for path: {}", path);
@@ -29,6 +31,14 @@ pub async fn ft_get_file(
     if modified_time.is_err() {
         error!("Failed to get modified time");
         state.locks.lock().await.release(&lock_key);
+
+        metrics::HTTP_REQUESTS_TOTAL
+            .with_label_values(&["GET", "/ft/files", "500"])
+            .inc();
+        metrics::HTTP_REQUEST_DURATION_SECONDS
+            .with_label_values(&["GET", "/ft/files"])
+            .observe(start.elapsed().as_secs_f64());
+
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::empty())
@@ -46,6 +56,11 @@ pub async fn ft_get_file(
                 Ok(file_metadata) => {
                     debug!("File {} found in filetracker, migrating on-the-fly", path);
 
+                    // Track filetracker fallback
+                    metrics::FILETRACKER_FALLBACKS_TOTAL
+                        .with_label_values(&[&state.bucket_name])
+                        .inc();
+
                     // Migrate the file on-the-fly using migration logic
                     let result = crate::migration::migrate_single_file_from_metadata(
                         &state,
@@ -57,6 +72,14 @@ pub async fn ft_get_file(
                     if let Err(e) = result {
                         error!("Failed to migrate file on-the-fly: {}", e);
                         state.locks.lock().await.release(&lock_key);
+
+                        metrics::HTTP_REQUESTS_TOTAL
+                            .with_label_values(&["GET", "/ft/files", "500"])
+                            .inc();
+                        metrics::HTTP_REQUEST_DURATION_SECONDS
+                            .with_label_values(&["GET", "/ft/files"])
+                            .observe(start.elapsed().as_secs_f64());
+
                         return Response::builder()
                             .status(StatusCode::INTERNAL_SERVER_ERROR)
                             .body(Body::empty())
@@ -65,6 +88,13 @@ pub async fn ft_get_file(
 
                     // Release lock
                     state.locks.lock().await.release(&lock_key);
+
+                    metrics::HTTP_REQUESTS_TOTAL
+                        .with_label_values(&["GET", "/ft/files", "200"])
+                        .inc();
+                    metrics::HTTP_REQUEST_DURATION_SECONDS
+                        .with_label_values(&["GET", "/ft/files"])
+                        .observe(start.elapsed().as_secs_f64());
 
                     // Serve the file directly from filetracker response
                     return Response::builder()
@@ -95,6 +125,14 @@ pub async fn ft_get_file(
 
         debug!("File {} not found", path);
         state.locks.lock().await.release(&lock_key);
+
+        metrics::HTTP_REQUESTS_TOTAL
+            .with_label_values(&["GET", "/ft/files", "404"])
+            .inc();
+        metrics::HTTP_REQUEST_DURATION_SECONDS
+            .with_label_values(&["GET", "/ft/files"])
+            .observe(start.elapsed().as_secs_f64());
+
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
@@ -159,7 +197,15 @@ pub async fn ft_get_file(
     // 6. Release lock
     state.locks.lock().await.release(&lock_key);
 
-    // 7. Return file with appropriate headers (matching original filetracker)
+    // 7. Record metrics
+    metrics::HTTP_REQUESTS_TOTAL
+        .with_label_values(&["GET", "/ft/files", "200"])
+        .inc();
+    metrics::HTTP_REQUEST_DURATION_SECONDS
+        .with_label_values(&["GET", "/ft/files"])
+        .observe(start.elapsed().as_secs_f64());
+
+    // 8. Return file with appropriate headers (matching original filetracker)
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/octet-stream")
