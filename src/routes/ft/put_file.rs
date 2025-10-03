@@ -355,16 +355,16 @@ mod tests {
     async fn test_path_processing() {
         // Test path processing logic
         let path = "/test.txt";
-        let stripped = path.strip_prefix('/').unwrap_or(&path);
+        let stripped = path.strip_prefix('/').unwrap_or(path);
         assert_eq!(stripped, "test.txt");
 
         let path = "test.txt";
-        let stripped = path.strip_prefix('/').unwrap_or(&path);
+        let stripped = path.strip_prefix('/').unwrap_or(path);
         assert_eq!(stripped, "test.txt");
 
         // Test subdirectory paths
         let path = "/subdir/deep/test.txt";
-        let stripped = path.strip_prefix('/').unwrap_or(&path);
+        let stripped = path.strip_prefix('/').unwrap_or(path);
         assert_eq!(stripped, "subdir/deep/test.txt");
     }
 
