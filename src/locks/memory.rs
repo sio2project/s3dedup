@@ -34,7 +34,15 @@ impl<'b> Lock for LockedKey<'b> {
 
 impl<'a> Drop for LockedKey<'a> {
     fn drop(&mut self) {
-        tokio_async_drop!({ self.parent.locks.write().await.remove(&self.key) });
+        tokio_async_drop!({
+            // Lock the map to prevent concurrent modifications while we check the refcount
+            let mut locks = self.parent.locks.write().await;
+            // Only remove the entry if this is the last LockedKey holding it.
+            // Arc::strong_count == 2 means: 1 in self.lock + 1 in the HashMap
+            if Arc::strong_count(&self.lock) == 2 {
+                locks.remove(&self.key);
+            }
+        });
     }
 }
 
@@ -237,5 +245,69 @@ mod tests {
         let msg2 = rx.recv().await.unwrap();
         assert_eq!(msg1, "key1_acquired");
         assert_eq!(msg2, "key2_acquired");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_multiple_locked_keys_prevent_bypass() {
+        // This test ensures that dropping one LockedKey doesn't remove the lock
+        // from the map while other LockedKeys still exist, which would allow
+        // a third task to bypass the lock
+        let memory = Arc::new(*MemoryLocks::new());
+        let (tx, mut rx) = mpsc::channel(10);
+
+        let memory1 = memory.clone();
+        let tx1 = tx.clone();
+        tokio::spawn(async move {
+            let lock = memory1.prepare_lock("shared_key".into()).await;
+            let _guard = lock.acquire_exclusive().await;
+            tx1.send("task1_acquired").await.unwrap();
+            sleep(Duration::from_millis(50)).await;
+            tx1.send("task1_released").await.unwrap();
+        });
+
+        sleep(Duration::from_millis(10)).await;
+
+        let memory2 = memory.clone();
+        let tx2 = tx.clone();
+        tokio::spawn(async move {
+            let lock = memory2.prepare_lock("shared_key".into()).await;
+            let _guard = lock.acquire_exclusive().await;
+            tx2.send("task2_acquired").await.unwrap();
+            sleep(Duration::from_millis(100)).await;
+            tx2.send("task2_released").await.unwrap();
+        });
+
+        sleep(Duration::from_millis(70)).await;
+
+        let memory3 = memory.clone();
+        let tx3 = tx.clone();
+        tokio::spawn(async move {
+            let lock = memory3.prepare_lock("shared_key".into()).await;
+            let _guard = lock.acquire_exclusive().await;
+            tx3.send("task3_acquired").await.unwrap();
+        });
+
+        drop(tx);
+
+        let messages: Vec<_> = rx
+            .recv()
+            .await
+            .into_iter()
+            .chain(rx.recv().await)
+            .chain(rx.recv().await)
+            .chain(rx.recv().await)
+            .chain(rx.recv().await)
+            .collect();
+
+        assert_eq!(
+            messages,
+            [
+                "task1_acquired",
+                "task1_released",
+                "task2_acquired",
+                "task2_released",
+                "task3_acquired"
+            ]
+        );
     }
 }

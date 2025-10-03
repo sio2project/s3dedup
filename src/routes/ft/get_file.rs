@@ -61,6 +61,10 @@ pub async fn ft_get_file(
                         .with_label_values(&[&state.bucket_name])
                         .inc();
 
+                    // Drop the shared lock before migration to avoid deadlock
+                    // (migration needs exclusive lock on the same key)
+                    drop(_guard);
+
                     // Migrate the file on-the-fly using migration logic
                     let result = crate::migration::migrate_single_file_from_metadata(
                         &state,
@@ -182,6 +186,8 @@ pub async fn ft_get_file(
             .unwrap();
     }
     let blob_data = blob_data.unwrap();
+
+    drop(_guard);
 
     // 6. Record metrics
     metrics::HTTP_REQUESTS_TOTAL
