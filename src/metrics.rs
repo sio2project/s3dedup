@@ -1,10 +1,9 @@
 use lazy_static::lazy_static;
 use prometheus::{
-    register_gauge, register_histogram_vec, register_int_counter_vec,
-    register_int_gauge, Encoder, Gauge, HistogramVec, IntCounterVec, IntGauge,
-    TextEncoder,
+    Encoder, Gauge, HistogramVec, IntCounterVec, IntGauge, TextEncoder, register_gauge,
+    register_histogram_vec, register_int_counter_vec, register_int_gauge,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 lazy_static! {
     // HTTP Request metrics

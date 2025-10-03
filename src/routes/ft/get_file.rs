@@ -1,5 +1,5 @@
 use crate::routes::ft::utils;
-use crate::{metrics, AppState, locks};
+use crate::{AppState, locks, metrics};
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{Response, StatusCode};
@@ -32,7 +32,9 @@ pub async fn ft_get_file(
         error!("Failed to get modified time");
         state.locks.lock().await.release(&lock_key);
 
-        metrics::HTTP_REQUESTS_TOTAL.with_label_values(&["GET", "/ft/files", "500"]).inc();
+        metrics::HTTP_REQUESTS_TOTAL
+            .with_label_values(&["GET", "/ft/files", "500"])
+            .inc();
         metrics::HTTP_REQUEST_DURATION_SECONDS
             .with_label_values(&["GET", "/ft/files"])
             .observe(start.elapsed().as_secs_f64());
@@ -71,7 +73,9 @@ pub async fn ft_get_file(
                         error!("Failed to migrate file on-the-fly: {}", e);
                         state.locks.lock().await.release(&lock_key);
 
-                        metrics::HTTP_REQUESTS_TOTAL.with_label_values(&["GET", "/ft/files", "500"]).inc();
+                        metrics::HTTP_REQUESTS_TOTAL
+                            .with_label_values(&["GET", "/ft/files", "500"])
+                            .inc();
                         metrics::HTTP_REQUEST_DURATION_SECONDS
                             .with_label_values(&["GET", "/ft/files"])
                             .observe(start.elapsed().as_secs_f64());
@@ -85,7 +89,9 @@ pub async fn ft_get_file(
                     // Release lock
                     state.locks.lock().await.release(&lock_key);
 
-                    metrics::HTTP_REQUESTS_TOTAL.with_label_values(&["GET", "/ft/files", "200"]).inc();
+                    metrics::HTTP_REQUESTS_TOTAL
+                        .with_label_values(&["GET", "/ft/files", "200"])
+                        .inc();
                     metrics::HTTP_REQUEST_DURATION_SECONDS
                         .with_label_values(&["GET", "/ft/files"])
                         .observe(start.elapsed().as_secs_f64());
@@ -120,7 +126,9 @@ pub async fn ft_get_file(
         debug!("File {} not found", path);
         state.locks.lock().await.release(&lock_key);
 
-        metrics::HTTP_REQUESTS_TOTAL.with_label_values(&["GET", "/ft/files", "404"]).inc();
+        metrics::HTTP_REQUESTS_TOTAL
+            .with_label_values(&["GET", "/ft/files", "404"])
+            .inc();
         metrics::HTTP_REQUEST_DURATION_SECONDS
             .with_label_values(&["GET", "/ft/files"])
             .observe(start.elapsed().as_secs_f64());
@@ -190,7 +198,9 @@ pub async fn ft_get_file(
     state.locks.lock().await.release(&lock_key);
 
     // 7. Record metrics
-    metrics::HTTP_REQUESTS_TOTAL.with_label_values(&["GET", "/ft/files", "200"]).inc();
+    metrics::HTTP_REQUESTS_TOTAL
+        .with_label_values(&["GET", "/ft/files", "200"])
+        .inc();
     metrics::HTTP_REQUEST_DURATION_SECONDS
         .with_label_values(&["GET", "/ft/files"])
         .observe(start.elapsed().as_secs_f64());

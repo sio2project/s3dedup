@@ -1,9 +1,9 @@
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::get;
-use axum::Router;
-use s3dedup::config::BucketConfig;
 use s3dedup::AppState;
+use s3dedup::config::BucketConfig;
 use std::sync::Arc;
 use tower::util::ServiceExt;
 

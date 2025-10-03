@@ -105,7 +105,10 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) {
                     .delete(ft_delete_file),
             )
             .route("/metrics", get(s3dedup::routes::metrics::metrics_handler))
-            .route("/metrics/json", get(s3dedup::routes::metrics::metrics_json_handler))
+            .route(
+                "/metrics/json",
+                get(s3dedup::routes::metrics::metrics_json_handler),
+            )
             .layer(
                 // Logging middleware
                 TraceLayer::new_for_http()
