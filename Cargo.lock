@@ -2779,6 +2779,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tokio",
+ "tokio-async-drop",
  "tower",
  "tower-http",
  "tracing",
@@ -3447,6 +3448,12 @@ dependencies = [
  "tokio-macros",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "tokio-async-drop"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e57fbf1da3f18c8a95469f8973c138b0a99f4ae761885c3646b0c61139b0522"
 
 [[package]]
 name = "tokio-macros"

@@ -1,7 +1,6 @@
-use std::fmt::Display;
-
+use async_trait::async_trait;
 use serde::Deserialize;
-use tracing::{debug, info};
+use tracing::info;
 
 pub mod memory;
 
@@ -20,20 +19,26 @@ fn hash_lock(bucket: &str, hash: &str) -> String {
     format!("hash:{}:{}", bucket, hash)
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Copy)]
 pub enum LocksType {
     #[serde(rename = "memory")]
     Memory,
 }
 
-pub(crate) trait Locks {
-    fn new() -> Box<Self>
-    where
-        Self: Sized;
+pub(crate) trait SharedLockGuard<'a> {}
+pub(crate) trait ExclusiveLockGuard<'a> {}
 
-    fn acquire_shared(&mut self, key: String);
-    fn acquire_exclusive(&mut self, key: String);
-    fn release(&mut self, key: impl AsRef<str>) -> bool;
+#[async_trait]
+pub(crate) trait Lock {
+    async fn acquire_shared<'a>(&'a self) -> Box<dyn SharedLockGuard<'a> + 'a + Send>;
+    async fn acquire_exclusive<'a>(&'a self) -> Box<dyn ExclusiveLockGuard<'a> + 'a + Send>;
+}
+
+#[async_trait]
+pub(crate) trait LockStorage {
+    fn new() -> Box<Self>;
+
+    async fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send>;
 }
 
 #[allow(private_interfaces)]
@@ -43,7 +48,7 @@ pub enum LocksStorage {
 }
 
 impl LocksStorage {
-    pub fn new(lock_type: &LocksType) -> Box<Self> {
+    pub fn new(lock_type: LocksType) -> Box<Self> {
         match lock_type {
             LocksType::Memory => {
                 info!("Using memory as locks storage");
@@ -52,37 +57,9 @@ impl LocksStorage {
         }
     }
 
-    /**
-     * Acquire shared lock for key
-     */
-    pub fn acquire_shared(&mut self, key: String) {
-        debug!("Acquiring shared lock for key: {}", key);
+    pub(crate) async fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send> {
         match self {
-            LocksStorage::Memory(lock) => {
-                lock.acquire_shared(key);
-            }
-        }
-    }
-
-    /**
-     * Acquire exclusive lock for key
-     */
-    pub fn acquire_exclusive(&mut self, key: String) {
-        debug!("Acquiring exclusive lock for key: {}", key);
-        match self {
-            LocksStorage::Memory(lock) => {
-                lock.acquire_exclusive(key);
-            }
-        }
-    }
-
-    /**
-     * Release lock for key
-     */
-    pub fn release(&mut self, key: impl AsRef<str> + Display) -> bool {
-        debug!("Releasing lock for key: {}", key);
-        match self {
-            LocksStorage::Memory(lock) => lock.release(key),
+            LocksStorage::Memory(memory_locks) => memory_locks.prepare_lock(key).await,
         }
     }
 }

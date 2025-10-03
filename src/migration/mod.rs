@@ -85,7 +85,7 @@ pub async fn migrate_all_files(
                 }
 
                 // Migrate the file
-                match migrate_single_file(&filetracker_client, &app_state, &path).await {
+                match migrate_single_file(&filetracker_client, app_state, &path).await {
                     Ok(true) => {
                         *migrated.lock().await += 1;
                     }
@@ -103,6 +103,7 @@ pub async fn migrate_all_files(
         }
 
         // Wait for this batch to complete before moving to next batch
+        // TODO: futures_util::join_all;
         for handle in handles {
             let _ = handle.await;
         }
@@ -160,11 +161,9 @@ pub async fn migrate_single_file_from_metadata(
 
     // Acquire file lock
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
-    app_state
-        .locks
-        .lock()
-        .await
-        .acquire_exclusive(lock_key.clone());
+    let locks = app_state.locks.lock().await;
+    let lock = locks.prepare_lock(lock_key).await;
+    let _guard = lock.acquire_exclusive();
 
     // Recheck if file was already migrated after acquiring lock (race condition protection)
     let current_modified_after_lock = app_state
@@ -176,7 +175,6 @@ pub async fn migrate_single_file_from_metadata(
 
     if current_modified_after_lock >= file_metadata.last_modified {
         // File was migrated by another concurrent task, skip
-        app_state.locks.lock().await.release(&lock_key);
         return Ok(());
     }
 
@@ -265,10 +263,6 @@ pub async fn migrate_single_file_from_metadata(
         .await
         .set_modified(&app_state.bucket_name, path, file_metadata.last_modified)
         .await?;
-
-    // Release lock
-    app_state.locks.lock().await.release(lock_key);
-
     Ok(())
 }
 
@@ -276,7 +270,7 @@ pub async fn migrate_single_file_from_metadata(
 /// Returns Ok(true) if migrated, Ok(false) if skipped, Err if failed
 async fn migrate_single_file(
     filetracker_client: &FiletrackerClient,
-    app_state: &AppState,
+    app_state: Arc<AppState>,
     path: &str,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     // Get file from filetracker
@@ -310,11 +304,9 @@ async fn migrate_single_file(
 
     // Acquire file lock
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
-    app_state
-        .locks
-        .lock()
-        .await
-        .acquire_exclusive(lock_key.clone());
+    let locks_storage = app_state.locks.lock().await;
+    let lock = locks_storage.prepare_lock(lock_key).await;
+    let _guard = lock.acquire_exclusive();
 
     // Recheck if file was already migrated after acquiring lock (race condition protection)
     let current_modified_after_lock = app_state
@@ -326,7 +318,6 @@ async fn migrate_single_file(
 
     if current_modified_after_lock >= file_metadata.last_modified {
         // File was migrated by another concurrent task, skip
-        app_state.locks.lock().await.release(&lock_key);
         return Ok(false);
     }
 
@@ -415,9 +406,6 @@ async fn migrate_single_file(
         .await
         .set_modified(&app_state.bucket_name, path, file_metadata.last_modified)
         .await?;
-
-    // Release lock
-    app_state.locks.lock().await.release(lock_key);
 
     Ok(true)
 }

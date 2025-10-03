@@ -195,11 +195,11 @@ async fn create_test_app_state() -> Arc<AppState> {
     };
 
     let kvstorage = KVStorage::new(&config).await.unwrap();
-    let locks = LocksStorage::new(&config.locks_type);
+    let locks = LocksStorage::new(config.locks_type);
     let s3storage = S3Storage::new(&config).await.unwrap();
 
     let app_state = Arc::new(AppState {
-        bucket_name: config.name.clone(),
+        bucket_name: config.name.into(),
         kvstorage: Arc::new(tokio::sync::Mutex::new(kvstorage)),
         locks: Arc::new(tokio::sync::Mutex::new(locks)),
         s3storage: Arc::new(tokio::sync::Mutex::new(s3storage)),

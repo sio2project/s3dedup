@@ -1,4 +1,5 @@
 use std::sync::Arc;
+
 use tokio::sync::Mutex;
 
 pub mod cleaner;
@@ -14,7 +15,7 @@ pub mod s3storage;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub bucket_name: String,
+    pub bucket_name: Arc<str>,
     pub kvstorage: Arc<Mutex<Box<kvstorage::KVStorage>>>,
     pub locks: Arc<Mutex<Box<locks::LocksStorage>>>,
     pub s3storage: Arc<Mutex<Box<s3storage::S3Storage>>>,
@@ -27,11 +28,11 @@ impl AppState {
         config: &config::BucketConfig,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let kvstorage = kvstorage::KVStorage::new(config).await?;
-        let locks = locks::LocksStorage::new(&config.locks_type);
+        let locks = locks::LocksStorage::new(config.locks_type);
         let s3storage = s3storage::S3Storage::new(config).await?;
         let metrics = Arc::new(metrics::Metrics::new());
         Ok(Self {
-            bucket_name: config.name.clone(),
+            bucket_name: config.name.clone().into(),
             kvstorage: Arc::new(Mutex::new(kvstorage)),
             locks: Arc::new(Mutex::new(locks)),
             s3storage: Arc::new(Mutex::new(s3storage)),
@@ -45,7 +46,7 @@ impl AppState {
         filetracker_url: String,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let kvstorage = kvstorage::KVStorage::new(config).await?;
-        let locks = locks::LocksStorage::new(&config.locks_type);
+        let locks = locks::LocksStorage::new(config.locks_type);
         let s3storage = s3storage::S3Storage::new(config).await?;
         let filetracker_client = filetracker_client::FiletrackerClient::new(filetracker_url);
         let metrics = Arc::new(metrics::Metrics::new());
@@ -54,7 +55,7 @@ impl AppState {
         metrics::MIGRATION_ACTIVE.set(1);
 
         Ok(Self {
-            bucket_name: config.name.clone(),
+            bucket_name: config.name.clone().into(),
             kvstorage: Arc::new(Mutex::new(kvstorage)),
             locks: Arc::new(Mutex::new(locks)),
             s3storage: Arc::new(Mutex::new(s3storage)),
