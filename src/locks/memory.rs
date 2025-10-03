@@ -69,10 +69,173 @@ impl LockStorage for MemoryLocks {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc;
+    use tokio::time::{Duration, sleep};
+
     #[tokio::test(flavor = "multi_thread")]
     async fn assert_locks_compile() {
         let memory = MemoryLocks::new();
         let lock = memory.prepare_lock("1".into()).await;
         let _guard = lock.acquire_exclusive().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_concurrent_shared_locks() {
+        let memory = Arc::new(*MemoryLocks::new());
+        let (tx, mut rx) = mpsc::channel(10);
+
+        for i in 0..3 {
+            let memory = memory.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let lock = memory.prepare_lock("key1".into()).await;
+                let _guard = lock.acquire_shared().await;
+                tx.send(format!("acquired_{}", i)).await.unwrap();
+                sleep(Duration::from_millis(50)).await;
+                tx.send(format!("released_{}", i)).await.unwrap();
+            });
+        }
+        drop(tx);
+
+        let mut messages = Vec::new();
+        while let Some(msg) = rx.recv().await {
+            messages.push(msg);
+        }
+
+        assert_eq!(messages.len(), 6);
+        assert!(messages[0].starts_with("acquired_"));
+        assert!(messages[1].starts_with("acquired_"));
+        assert!(messages[2].starts_with("acquired_"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_exclusive_lock_mutual_exclusion() {
+        let memory = Arc::new(*MemoryLocks::new());
+        let (tx, mut rx) = mpsc::channel(10);
+
+        let memory1 = memory.clone();
+        let tx1 = tx.clone();
+        tokio::spawn(async move {
+            let lock = memory1.prepare_lock("key1".into()).await;
+            let _guard = lock.acquire_exclusive().await;
+            tx1.send("task1_acquired").await.unwrap();
+            sleep(Duration::from_millis(100)).await;
+            tx1.send("task1_released").await.unwrap();
+        });
+
+        sleep(Duration::from_millis(10)).await;
+
+        let memory2 = memory.clone();
+        let tx2 = tx.clone();
+        tokio::spawn(async move {
+            let lock = memory2.prepare_lock("key1".into()).await;
+            let _guard = lock.acquire_exclusive().await;
+            tx2.send("task2_acquired").await.unwrap();
+        });
+
+        drop(tx);
+
+        let messages: Vec<_> = rx
+            .recv()
+            .await
+            .into_iter()
+            .chain(rx.recv().await)
+            .chain(rx.recv().await)
+            .collect();
+        assert_eq!(
+            messages,
+            vec!["task1_acquired", "task1_released", "task2_acquired"]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_shared_exclusive_mutual_exclusion() {
+        let memory = Arc::new(*MemoryLocks::new());
+        let (tx, mut rx) = mpsc::channel(10);
+
+        let memory1 = memory.clone();
+        let tx1 = tx.clone();
+        tokio::spawn(async move {
+            let lock = memory1.prepare_lock("key1".into()).await;
+            let _guard = lock.acquire_shared().await;
+            tx1.send("shared_acquired").await.unwrap();
+            sleep(Duration::from_millis(100)).await;
+            tx1.send("shared_released").await.unwrap();
+        });
+
+        sleep(Duration::from_millis(10)).await;
+
+        let memory2 = memory.clone();
+        let tx2 = tx.clone();
+        tokio::spawn(async move {
+            let lock = memory2.prepare_lock("key1".into()).await;
+            let _guard = lock.acquire_exclusive().await;
+            tx2.send("exclusive_acquired").await.unwrap();
+        });
+
+        drop(tx);
+
+        let messages: Vec<_> = rx
+            .recv()
+            .await
+            .into_iter()
+            .chain(rx.recv().await)
+            .chain(rx.recv().await)
+            .collect();
+        assert_eq!(
+            messages,
+            vec!["shared_acquired", "shared_released", "exclusive_acquired"]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_lock_cleanup() {
+        let memory = Arc::new(*MemoryLocks::new());
+
+        {
+            let lock = memory.prepare_lock("cleanup_key".into()).await;
+            let _guard = lock.acquire_exclusive().await;
+        }
+
+        sleep(Duration::from_millis(50)).await;
+
+        let locks_map = memory.locks.read().await;
+        assert!(
+            !locks_map.contains_key("cleanup_key"),
+            "Lock should be cleaned up from HashMap"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_key_independence() {
+        let memory = Arc::new(*MemoryLocks::new());
+        let (tx, mut rx) = mpsc::channel(10);
+
+        let memory1 = memory.clone();
+        let tx1 = tx.clone();
+        tokio::spawn(async move {
+            let lock = memory1.prepare_lock("key1".into()).await;
+            let _guard = lock.acquire_exclusive().await;
+            tx1.send("key1_acquired").await.unwrap();
+            sleep(Duration::from_millis(100)).await;
+            tx1.send("key1_released").await.unwrap();
+        });
+
+        sleep(Duration::from_millis(10)).await;
+
+        let memory2 = memory.clone();
+        let tx2 = tx.clone();
+        tokio::spawn(async move {
+            let lock = memory2.prepare_lock("key2".into()).await;
+            let _guard = lock.acquire_exclusive().await;
+            tx2.send("key2_acquired").await.unwrap();
+        });
+
+        drop(tx);
+
+        let msg1 = rx.recv().await.unwrap();
+        let msg2 = rx.recv().await.unwrap();
+        assert_eq!(msg1, "key1_acquired");
+        assert_eq!(msg2, "key2_acquired");
     }
 }
