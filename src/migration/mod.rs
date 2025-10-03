@@ -414,5 +414,7 @@ pub async fn live_migration_worker(
         }
     }
 
-    info!("Background migration worker finished");
+    // Reset migration_active gauge to indicate migration is complete
+    crate::metrics::MIGRATION_ACTIVE.set(0);
+    info!("Background migration worker finished, migration_active set to 0");
 }
