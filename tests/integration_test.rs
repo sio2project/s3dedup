@@ -122,7 +122,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     (router, app_state)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_get_nonexistent_file() {
     let app = create_test_app().await;
 
@@ -140,7 +140,7 @@ async fn test_get_nonexistent_file() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_put_and_get_file() {
     let app = create_test_app().await;
 
@@ -219,7 +219,7 @@ async fn test_put_and_get_file() {
     assert_eq!(decompressed, test_content);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_put_twice_same_content() {
     let app = create_test_app().await;
 
@@ -320,7 +320,7 @@ async fn test_put_twice_same_content() {
     assert_eq!(decompressed2, test_content);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_get_headers() {
     let app = create_test_app().await;
 
@@ -379,7 +379,7 @@ async fn test_get_headers() {
     assert!(headers.get("Content-Length").is_some());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_head_nonexistent_file() {
     let app = create_test_app().await;
 
@@ -402,7 +402,7 @@ async fn test_head_nonexistent_file() {
     assert_eq!(body_bytes.len(), 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_head_existing_file() {
     let app = create_test_app().await;
 
@@ -467,7 +467,7 @@ async fn test_head_existing_file() {
     assert_eq!(body_bytes.len(), 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_delete_nonexistent_file() {
     let app = create_test_app().await;
 
@@ -491,7 +491,7 @@ async fn test_delete_nonexistent_file() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_delete_file() {
     let (mut app, state) = create_test_app_with_state().await;
     use tower::Service;
@@ -580,7 +580,7 @@ async fn test_delete_file() {
     assert_eq!(get_response.status(), StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_dedup_refcount_increment() {
     let app = create_test_app().await;
 
@@ -697,7 +697,7 @@ async fn test_dedup_refcount_increment() {
     assert_eq!(get3.status(), StatusCode::OK);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_dedup_blob_deleted_when_refcount_zero() {
     let (mut app, state) = create_test_app_with_state().await;
     use tower::Service;
@@ -860,7 +860,7 @@ async fn test_dedup_blob_deleted_when_refcount_zero() {
     assert_eq!(get2.status(), StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_dedup_partial_deletion() {
     let app = create_test_app().await;
 
@@ -1013,7 +1013,7 @@ async fn test_dedup_partial_deletion() {
     assert_eq!(get2.status(), StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_dedup_update_same_path() {
     use tower::Service;
 
@@ -1127,7 +1127,7 @@ async fn test_dedup_update_same_path() {
     assert_eq!(decompressed, content_v2);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_list_files_empty() {
     let app = create_test_app().await;
 
@@ -1151,7 +1151,7 @@ async fn test_list_files_empty() {
     assert_eq!(body_str, "");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_list_files_basic() {
     use tower::Service;
     let mut app = create_test_app().await;
@@ -1291,7 +1291,7 @@ async fn test_list_files_basic() {
     assert_eq!(all_files.len(), 3);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_list_files_with_timestamp() {
     use tower::Service;
     let mut app = create_test_app().await;

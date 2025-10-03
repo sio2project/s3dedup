@@ -212,7 +212,7 @@ async fn create_test_app_state() -> Arc<AppState> {
     app_state
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_offline_migration_empty() {
     let (_mock_state, url) = create_mock_filetracker().await;
     let app_state = create_test_app_state().await;
@@ -228,7 +228,7 @@ async fn test_offline_migration_empty() {
     assert_eq!(stats.skipped, 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_offline_migration_single_file() {
     let (mock_state, url) = create_mock_filetracker().await;
     let app_state = create_test_app_state().await;
@@ -259,7 +259,7 @@ async fn test_offline_migration_single_file() {
     assert!(modified > 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_offline_migration_multiple_files() {
     let (mock_state, url) = create_mock_filetracker().await;
     let app_state = create_test_app_state().await;
@@ -296,7 +296,7 @@ async fn test_offline_migration_multiple_files() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_offline_migration_skips_existing() {
     let (mock_state, url) = create_mock_filetracker().await;
     let app_state = create_test_app_state().await;
@@ -322,7 +322,7 @@ async fn test_offline_migration_skips_existing() {
     assert_eq!(stats.skipped, 2);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_migration_deduplication() {
     let (mock_state, url) = create_mock_filetracker().await;
     let app_state = create_test_app_state().await;
@@ -389,7 +389,7 @@ async fn test_migration_deduplication() {
 
 // Live migration tests
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_live_migration_get_fallback() {
     let (mock_state, url) = create_mock_filetracker().await;
     let app_state = create_test_app_state().await;
@@ -442,7 +442,7 @@ async fn test_live_migration_get_fallback() {
     assert!(modified > 0, "File should be migrated to s3dedup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_live_migration_put_dual_write() {
     let (mock_state, url) = create_mock_filetracker().await;
     let app_state = create_test_app_state().await;
@@ -507,7 +507,7 @@ async fn test_live_migration_put_dual_write() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_live_migration_delete_dual_delete() {
     let (mock_state, url) = create_mock_filetracker().await;
     let app_state = create_test_app_state().await;
@@ -590,7 +590,7 @@ async fn test_live_migration_delete_dual_delete() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_live_migration_get_not_found_in_both() {
     let (_mock_state, url) = create_mock_filetracker().await;
     let app_state = create_test_app_state().await;
@@ -627,7 +627,7 @@ async fn test_live_migration_get_not_found_in_both() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_live_migration_get_fallback_response_data() {
     let (mock_state, url) = create_mock_filetracker().await;
     let app_state = create_test_app_state().await;
@@ -691,7 +691,7 @@ async fn test_live_migration_get_fallback_response_data() {
     assert_eq!(&decompressed[..], test_data);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_live_migration_subsequent_get_from_s3dedup() {
     let (mock_state, url) = create_mock_filetracker().await;
     let app_state = create_test_app_state().await;
