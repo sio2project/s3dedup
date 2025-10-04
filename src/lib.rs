@@ -81,8 +81,12 @@ impl AppState {
         metrics::DEDUPLICATED_BYTES_SAVED.set(deduplicated_bytes_saved);
 
         // Calculate derived metrics
-        if total_blobs > 0 {
-            metrics::DEDUPLICATION_RATIO.set(total_files as f64 / total_blobs as f64);
+        if total_files > 0 && total_blobs > 0 {
+            // Deduplication ratio: percentage of files that are deduplicated
+            // 0.0 (0%) = no dedup (all files unique), 0.5 (50%) = half the files share blobs
+            let dedup_ratio = (total_files - total_blobs) as f64 / total_files as f64;
+            metrics::DEDUPLICATION_RATIO.set(dedup_ratio);
+            // Average reference count: how many files point to each blob on average
             metrics::AVERAGE_REFERENCE_COUNT.set(total_files as f64 / total_blobs as f64);
         }
 

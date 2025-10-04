@@ -36,7 +36,7 @@ lazy_static! {
 
     pub static ref DEDUPLICATION_RATIO: Gauge = register_gauge!(
         "s3dedup_deduplication_ratio",
-        "Ratio of total files to total blobs"
+        "Deduplication effectiveness: (files - blobs) / files. 0.0 = no dedup, 1.0 = perfect dedup"
     )
     .unwrap();
 
