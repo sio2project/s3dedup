@@ -1,6 +1,6 @@
 [package]
 name = "s3dedup"
-version = "1.0.0-dev2"
+version = "1.0.0-dev3"
 edition = "2024"
 
 [lib]
