@@ -30,16 +30,19 @@ pub async fn ft_list_files(
     debug!("Query params: last_modified={}", query.last_modified);
     debug!("Headers: last-modified={:?}", headers.get("last-modified"));
 
-    // Parse the timestamp (LIST typically only uses query param, but support header too)
-    let timestamp =
-        match crate::routes::ft::utils::extract_timestamp(&headers, Some(&query.last_modified)) {
-            Ok(ts) => ts,
-            Err(e) => {
-                error!("Failed to extract timestamp: {}", e);
-                // For LIST, be lenient - use current time if parsing fails
-                chrono::Utc::now().timestamp()
-            }
-        };
+    // Parse the timestamp (optional for LIST - defaults to current time if not provided)
+    let timestamp = match crate::routes::ft::utils::extract_timestamp(
+        &headers,
+        Some(&query.last_modified),
+        false,
+    ) {
+        Ok(ts) => ts,
+        Err(e) => {
+            error!("Failed to extract timestamp: {}", e);
+            // For LIST, be lenient - use current time if parsing fails
+            chrono::Utc::now().timestamp()
+        }
+    };
 
     debug!("Handling GET /list/{} (@{})", path, timestamp);
 

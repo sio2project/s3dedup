@@ -16,8 +16,13 @@ pub fn format_rfc2822_timestamp(timestamp: i64) -> String {
 /// Extract timestamp from request (header or query param)
 ///
 /// Protocol v1/v2 clients send Last-Modified header, v0 clients use query parameter.
-/// Returns the parsed timestamp or current time if neither is provided.
-pub fn extract_timestamp(headers: &HeaderMap, query_param: Option<&String>) -> Result<i64, String> {
+/// If `required` is true, returns an error if neither header nor query param is provided.
+/// If `required` is false, returns current time when timestamp is missing.
+pub fn extract_timestamp(
+    headers: &HeaderMap,
+    query_param: Option<&String>,
+    required: bool,
+) -> Result<i64, String> {
     // Check Last-Modified header first (protocol v1/v2)
     let timestamp_str = headers
         .get("last-modified")
@@ -42,9 +47,13 @@ pub fn extract_timestamp(headers: &HeaderMap, query_param: Option<&String>) -> R
             Err(e) => Err(format!("Failed to parse timestamp '{}': {}", ts_str, e)),
         },
         None => {
-            let ts = Utc::now().timestamp();
-            debug!("No timestamp provided, using current time: {}", ts);
-            Ok(ts)
+            if required {
+                Err("\"?last_modified=\" is required".to_string())
+            } else {
+                let ts = Utc::now().timestamp();
+                debug!("No timestamp provided, using current time: {}", ts);
+                Ok(ts)
+            }
         }
     }
 }

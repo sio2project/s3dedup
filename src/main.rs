@@ -243,7 +243,10 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
 
                 let app = Router::new()
                     .route("/ft/version", get(s3dedup::routes::ft::version::ft_version))
-                    .route("/ft/version/", get(s3dedup::routes::ft::version::ft_version))
+                    .route(
+                        "/ft/version/",
+                        get(s3dedup::routes::ft::version::ft_version),
+                    )
                     .route(
                         "/ft/list/",
                         get(s3dedup::routes::ft::list_files::ft_list_files),
@@ -313,7 +316,10 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
 
         let app = Router::new()
             .route("/ft/version", get(s3dedup::routes::ft::version::ft_version))
-            .route("/ft/version/", get(s3dedup::routes::ft::version::ft_version))
+            .route(
+                "/ft/version/",
+                get(s3dedup::routes::ft::version::ft_version),
+            )
             .route(
                 "/ft/list/",
                 get(s3dedup::routes::ft::list_files::ft_list_files),

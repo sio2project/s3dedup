@@ -19,8 +19,8 @@ pub async fn ft_delete_file(
     debug!("Query params: last_modified={:?}", query.last_modified);
     debug!("Headers: last-modified={:?}", headers.get("last-modified"));
 
-    // 1. Parse and validate timestamp
-    let timestamp = match utils::extract_timestamp(&headers, query.last_modified.as_ref()) {
+    // 1. Parse and validate timestamp (required for DELETE)
+    let timestamp = match utils::extract_timestamp(&headers, query.last_modified.as_ref(), true) {
         Ok(ts) => ts,
         Err(e) => {
             error!("Failed to extract timestamp: {}", e);

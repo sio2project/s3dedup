@@ -27,8 +27,8 @@ pub async fn ft_put_file(
         headers.get("last-modified")
     );
 
-    // 1. Parse and validate timestamp
-    let timestamp = match utils::extract_timestamp(&headers, query.last_modified.as_ref()) {
+    // 1. Parse and validate timestamp (required for PUT)
+    let timestamp = match utils::extract_timestamp(&headers, query.last_modified.as_ref(), true) {
         Ok(ts) => ts,
         Err(e) => {
             error!("Failed to extract timestamp: {}", e);
