@@ -103,7 +103,11 @@ Environment variables override config file values.
 
 ## Migration
 
-### Offline Migration
+> **📖 Complete Migration Guide**: See [docs/migration.md](docs/migration.md) for comprehensive migration instructions from Filetracker v2.1+
+>
+> _Note: Migration from Filetracker v1.x will be supported in a future release._
+
+### Quick Start: Offline Migration
 
 Migrate all files from old Filetracker while the proxy is offline:
 
@@ -117,7 +121,7 @@ docker run --rm \
   --max-concurrency 10
 ```
 
-### Live Migration
+### Quick Start: Live Migration (Zero Downtime)
 
 Run the proxy while migrating in the background:
 
@@ -139,6 +143,8 @@ During live migration:
 - **GET**: Falls back to old Filetracker if file not found, migrates on-the-fly
 - **PUT**: Writes to both s3dedup and old Filetracker
 - **DELETE**: Deletes from both systems
+
+For detailed migration strategies, performance tuning, troubleshooting, and rollback procedures, see the [Migration Guide](docs/migration.md).
 
 ## API Endpoints
 
@@ -182,6 +188,13 @@ cargo run -- server --config config.json
 - **Metadata Store**: SQLite or PostgreSQL for file metadata and reference counts
 - **Lock Manager**: In-memory file-level locks for concurrent operations
 - **Cleaner**: Background worker that removes unreferenced S3 objects
+
+For detailed architecture documentation, see [docs/deduplication.md](docs/deduplication.md).
+
+## Documentation
+
+- **[Migration Guide](docs/migration.md)** - Migrating from Filetracker v2.1+ (offline and live migration strategies)
+- **[Deduplication Architecture](docs/deduplication.md)** - How content-based deduplication works, data flows, and performance characteristics
 
 ## License
 
