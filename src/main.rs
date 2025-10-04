@@ -93,6 +93,18 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) {
         ));
         cleaner.start();
 
+        // Start metrics updater task
+        let metrics_state = app_state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                if let Err(e) = metrics_state.update_storage_metrics().await {
+                    warn!("Failed to update storage metrics: {}", e);
+                }
+            }
+        });
+
         let app = Router::new()
             .route("/ft/version", get(ft_version))
             .route("/ft/version/", get(ft_version))
@@ -241,6 +253,18 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
                 ));
                 cleaner.start();
 
+                // Start metrics updater task
+                let metrics_state = app_state.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+                    loop {
+                        interval.tick().await;
+                        if let Err(e) = metrics_state.update_storage_metrics().await {
+                            warn!("Failed to update storage metrics: {}", e);
+                        }
+                    }
+                });
+
                 let app = Router::new()
                     .route("/ft/version", get(s3dedup::routes::ft::version::ft_version))
                     .route(
@@ -301,6 +325,18 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
             bucket.cleaner.clone(),
         ));
         cleaner.start();
+
+        // Start metrics updater task
+        let metrics_state = app_state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                if let Err(e) = metrics_state.update_storage_metrics().await {
+                    warn!("Failed to update storage metrics: {}", e);
+                }
+            }
+        });
 
         // Start background migration worker
         let migration_app_state = app_state.clone();

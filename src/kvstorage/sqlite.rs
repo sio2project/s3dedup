@@ -69,6 +69,7 @@ impl KVStorageTrait for SQLite {
                 bucket TEXT NOT NULL,
                 hash TEXT NOT NULL,
                 logical_size INTEGER NOT NULL,
+                compressed_size INTEGER,
                 PRIMARY KEY (bucket, hash)
             );",
         )
@@ -282,5 +283,87 @@ impl KVStorageTrait for SQLite {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn get_compressed_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
+        let result: Result<(Option<i64>,), sqlx::Error> = sqlx::query_as(
+            "SELECT compressed_size FROM logical_size WHERE bucket = ?1 AND hash = ?2",
+        )
+        .bind(bucket)
+        .bind(hash)
+        .fetch_one(&self.pool)
+        .await;
+
+        match result {
+            Ok((Some(size),)) => Ok(size as usize),
+            Ok((None,)) => Ok(0),
+            Err(sqlx::Error::RowNotFound) => Ok(0),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn set_compressed_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO logical_size (bucket, hash, logical_size, compressed_size) VALUES (?1, ?2, 0, ?3)
+             ON CONFLICT (bucket, hash) DO UPDATE SET compressed_size = ?3",
+        )
+        .bind(bucket)
+        .bind(hash)
+        .bind(size as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_total_files(&mut self, bucket: &str) -> Result<i64> {
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM modified WHERE bucket = ?1")
+            .bind(bucket)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
+    }
+
+    async fn get_total_blobs(&mut self, bucket: &str) -> Result<i64> {
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM refcount WHERE bucket = ?1 AND refcount > 0")
+                .bind(bucket)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(count)
+    }
+
+    async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64> {
+        let (total,): (Option<i64>,) =
+            sqlx::query_as("SELECT SUM(compressed_size) FROM logical_size WHERE bucket = ?1")
+                .bind(bucket)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(total.unwrap_or(0))
+    }
+
+    async fn get_total_logical_bytes(&mut self, bucket: &str) -> Result<i64> {
+        let (total,): (Option<i64>,) = sqlx::query_as(
+            "SELECT SUM(r.refcount * l.logical_size)
+             FROM refcount r
+             INNER JOIN logical_size l ON r.bucket = l.bucket AND r.hash = l.hash
+             WHERE r.bucket = ?1",
+        )
+        .bind(bucket)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(total.unwrap_or(0))
+    }
+
+    async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64> {
+        let (total,): (Option<i64>,) = sqlx::query_as(
+            "SELECT SUM((r.refcount - 1) * l.logical_size)
+             FROM refcount r
+             INNER JOIN logical_size l ON r.bucket = l.bucket AND r.hash = l.hash
+             WHERE r.bucket = ?1 AND r.refcount > 1",
+        )
+        .bind(bucket)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(total.unwrap_or(0))
     }
 }

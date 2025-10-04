@@ -1,10 +1,11 @@
 use crate::routes::ft::{LastModifiedQuery, storage_helpers, utils};
-use crate::{AppState, locks};
+use crate::{AppState, locks, metrics};
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, Response, StatusCode};
 use axum::response::IntoResponse;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, error, info};
 
 pub async fn ft_put_file(
@@ -14,6 +15,8 @@ pub async fn ft_put_file(
     headers: HeaderMap,
     body: Body,
 ) -> impl IntoResponse {
+    let start = Instant::now();
+
     // Remove leading slash from wildcard path
     let path = path.strip_prefix('/').unwrap_or(&path);
     debug!("PUT request for path: {}", path);
@@ -27,11 +30,22 @@ pub async fn ft_put_file(
         headers.get("last-modified")
     );
 
+    // Helper to record metrics before returning
+    let record_metrics = |status: &str| {
+        metrics::HTTP_REQUESTS_TOTAL
+            .with_label_values(&["PUT", "/ft/files", status])
+            .inc();
+        metrics::HTTP_REQUEST_DURATION_SECONDS
+            .with_label_values(&["PUT", "/ft/files"])
+            .observe(start.elapsed().as_secs_f64());
+    };
+
     // 1. Parse and validate timestamp (required for PUT)
     let timestamp = match utils::extract_timestamp(&headers, query.last_modified.as_ref(), true) {
         Ok(ts) => ts,
         Err(e) => {
             error!("Failed to extract timestamp: {}", e);
+            record_metrics("400");
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(e)
@@ -68,6 +82,7 @@ pub async fn ft_put_file(
         Ok(bytes) => bytes,
         Err(e) => {
             error!("Failed to read request body: {}", e);
+            record_metrics("400");
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body("Failed to read request body".to_string())
@@ -90,6 +105,7 @@ pub async fn ft_put_file(
         .await;
     if current_modified.is_err() {
         error!("Failed to get current modified");
+        record_metrics("500");
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to get current modified".to_string())
@@ -103,6 +119,7 @@ pub async fn ft_put_file(
             "Tried to store older version of {} ({} < {}), ignoring.",
             path, timestamp, current_modified
         );
+        record_metrics("200");
         return Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "text/plain")
@@ -127,6 +144,7 @@ pub async fn ft_put_file(
                 Ok(data) => data,
                 Err(e) => {
                     error!("Failed to decompress gzip data: {}", e);
+                    record_metrics("400");
                     return Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body("Failed to decompress gzip data".to_string())
@@ -148,6 +166,7 @@ pub async fn ft_put_file(
                 Ok(data) => data,
                 Err(e) => {
                     error!("Failed to compress data: {}", e);
+                    record_metrics("500");
                     return Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .body("Failed to compress data".to_string())
@@ -168,12 +187,24 @@ pub async fn ft_put_file(
         Ok(exists) => exists,
         Err(e) => {
             error!("Failed to check object existence: {}", e);
+            record_metrics("500");
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Failed to check object existence".to_string())
                 .unwrap();
         }
     };
+
+    // Record deduplication metrics
+    if blob_exists {
+        metrics::DEDUP_HITS_TOTAL
+            .with_label_values(&[&state.bucket_name])
+            .inc();
+    } else {
+        metrics::DEDUP_MISSES_TOTAL
+            .with_label_values(&[&state.bucket_name])
+            .inc();
+    }
 
     // Update reference count and store blob if needed (matching original transaction order)
     if !blob_exists {
@@ -187,9 +218,26 @@ pub async fn ft_put_file(
             .await
         {
             error!("Failed to store object in S3: {}", e);
+            record_metrics("500");
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Failed to store object".to_string())
+                .unwrap();
+        }
+
+        // Store compressed size metadata (actual bytes in S3) - only when we upload
+        if let Err(e) = state
+            .kvstorage
+            .lock()
+            .await
+            .set_compressed_size(&state.bucket_name, &digest, final_data.len())
+            .await
+        {
+            error!("Failed to store compressed size: {}", e);
+            record_metrics("500");
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body("Failed to store compressed size".to_string())
                 .unwrap();
         }
     }
@@ -203,6 +251,7 @@ pub async fn ft_put_file(
         .await
     {
         error!("Failed to store logical size: {}", e);
+        record_metrics("500");
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to store logical size".to_string())
@@ -218,6 +267,7 @@ pub async fn ft_put_file(
         .await
     {
         error!("Failed to increment ref count: {}", e);
+        record_metrics("500");
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to increment ref count".to_string())
@@ -276,6 +326,7 @@ pub async fn ft_put_file(
         .await
     {
         error!("Failed to set ref file: {}", e);
+        record_metrics("500");
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to set ref file".to_string())
@@ -290,6 +341,7 @@ pub async fn ft_put_file(
         .await
     {
         error!("Failed to set modified time: {}", e);
+        record_metrics("500");
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to set modified time".to_string())
@@ -326,6 +378,7 @@ pub async fn ft_put_file(
         }
     }
 
+    record_metrics("200");
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "text/plain")

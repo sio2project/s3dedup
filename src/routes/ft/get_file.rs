@@ -145,6 +145,13 @@ pub async fn ft_get_file(
         .await;
     if hash.is_err() {
         error!("Failed to get ref file");
+        metrics::HTTP_REQUESTS_TOTAL
+            .with_label_values(&["GET", "/ft/files", "500"])
+            .inc();
+        metrics::HTTP_REQUEST_DURATION_SECONDS
+            .with_label_values(&["GET", "/ft/files"])
+            .observe(start.elapsed().as_secs_f64());
+
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::empty())
@@ -154,6 +161,13 @@ pub async fn ft_get_file(
 
     if hash.is_empty() {
         error!("File {} has no hash reference", path);
+        metrics::HTTP_REQUESTS_TOTAL
+            .with_label_values(&["GET", "/ft/files", "404"])
+            .inc();
+        metrics::HTTP_REQUEST_DURATION_SECONDS
+            .with_label_values(&["GET", "/ft/files"])
+            .observe(start.elapsed().as_secs_f64());
+
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
@@ -169,6 +183,13 @@ pub async fn ft_get_file(
         .await;
     if logical_size.is_err() {
         error!("Failed to get logical size");
+        metrics::HTTP_REQUESTS_TOTAL
+            .with_label_values(&["GET", "/ft/files", "500"])
+            .inc();
+        metrics::HTTP_REQUEST_DURATION_SECONDS
+            .with_label_values(&["GET", "/ft/files"])
+            .observe(start.elapsed().as_secs_f64());
+
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::empty())
@@ -180,6 +201,13 @@ pub async fn ft_get_file(
     let blob_data = state.s3storage.lock().await.get_object(&hash).await;
     if blob_data.is_err() {
         error!("Failed to get object from S3: {}", blob_data.err().unwrap());
+        metrics::HTTP_REQUESTS_TOTAL
+            .with_label_values(&["GET", "/ft/files", "500"])
+            .inc();
+        metrics::HTTP_REQUEST_DURATION_SECONDS
+            .with_label_values(&["GET", "/ft/files"])
+            .observe(start.elapsed().as_secs_f64());
+
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::empty())
