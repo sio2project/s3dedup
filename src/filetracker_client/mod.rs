@@ -1,6 +1,8 @@
+use anyhow::Result;
+use anyhow::anyhow;
+use anyhow::bail;
 use chrono::DateTime;
 use reqwest::{Client, StatusCode};
-use std::error::Error;
 use tracing::{debug, error, warn};
 
 #[derive(Clone)]
@@ -29,11 +31,7 @@ impl FiletrackerClient {
     }
 
     /// List all files under a path with modification time before the given timestamp
-    pub async fn list_files(
-        &self,
-        path: &str,
-        timestamp: i64,
-    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+    pub async fn list_files(&self, path: &str, timestamp: i64) -> Result<Vec<String>> {
         // The original filetracker expects a Unix timestamp as a string, not RFC2822
         let url = format!(
             "{}/list/{}?last_modified={}",
@@ -46,7 +44,7 @@ impl FiletrackerClient {
 
         if !response.status().is_success() {
             error!("Failed to list files: HTTP {}", response.status());
-            return Err(format!("HTTP {}", response.status()).into());
+            bail!("HTTP {}", response.status())
         }
 
         let body = response.text().await?;
@@ -61,19 +59,19 @@ impl FiletrackerClient {
     }
 
     /// Get a file from filetracker
-    pub async fn get_file(&self, path: &str) -> Result<FileMetadata, Box<dyn Error + Send + Sync>> {
+    pub async fn get_file(&self, path: &str) -> Result<FileMetadata> {
         let url = format!("{}/files/{}", self.base_url, path);
         debug!("Getting file from filetracker: {}", url);
 
         let response = self.client.get(&url).send().await?;
 
         if response.status() == StatusCode::NOT_FOUND {
-            return Err("File not found".into());
+            bail!("File not found");
         }
 
         if !response.status().is_success() {
             error!("Failed to get file: HTTP {}", response.status());
-            return Err(format!("HTTP {}", response.status()).into());
+            bail!("HTTP {}", response.status())
         }
 
         // Extract headers
@@ -81,7 +79,7 @@ impl FiletrackerClient {
             .headers()
             .get("Last-Modified")
             .and_then(|v| v.to_str().ok())
-            .ok_or("Missing Last-Modified header")?;
+            .ok_or_else(|| anyhow!("Missing Last-Modified header"))?;
 
         let last_modified = DateTime::parse_from_rfc2822(last_modified_str)?.timestamp();
 
@@ -126,9 +124,9 @@ impl FiletrackerClient {
         logical_size: usize,
         sha256_checksum: &str,
         is_compressed: bool,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<()> {
         let timestamp_rfc2822 = DateTime::from_timestamp(last_modified, 0)
-            .ok_or("Invalid timestamp")?
+            .ok_or_else(|| anyhow!("Invalid timestamp"))?
             .to_rfc2822();
 
         let url = format!(
@@ -154,7 +152,7 @@ impl FiletrackerClient {
 
         if !response.status().is_success() {
             error!("Failed to put file: HTTP {}", response.status());
-            return Err(format!("HTTP {}", response.status()).into());
+            bail!("HTTP {}", response.status())
         }
 
         debug!("Put file to filetracker successfully");
@@ -162,13 +160,9 @@ impl FiletrackerClient {
     }
 
     /// Delete a file from filetracker
-    pub async fn delete_file(
-        &self,
-        path: &str,
-        last_modified: i64,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn delete_file(&self, path: &str, last_modified: i64) -> Result<()> {
         let timestamp_rfc2822 = DateTime::from_timestamp(last_modified, 0)
-            .ok_or("Invalid timestamp")?
+            .ok_or_else(|| anyhow!("Invalid timestamp"))?
             .to_rfc2822();
 
         let url = format!(
@@ -189,7 +183,7 @@ impl FiletrackerClient {
 
         if !response.status().is_success() {
             error!("Failed to delete file: HTTP {}", response.status());
-            return Err(format!("HTTP {}", response.status()).into());
+            bail!("HTTP {}", response.status())
         }
 
         debug!("Deleted file from filetracker successfully");

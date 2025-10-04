@@ -47,10 +47,10 @@ async fn create_test_app_state() -> Arc<AppState> {
     let app_state = AppState::new(&config).await.unwrap();
     app_state.kvstorage.lock().await.setup().await.unwrap();
 
-    Arc::new(app_state)
+    app_state
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_metrics_endpoint_exists() {
     let app_state = create_test_app_state().await;
 
@@ -71,7 +71,7 @@ async fn test_metrics_endpoint_exists() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_metrics_format() {
     let app_state = create_test_app_state().await;
 
@@ -115,7 +115,7 @@ async fn test_metrics_format() {
     // We just check that the metrics endpoint returns valid Prometheus format
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_metrics_after_get_request() {
     let app_state = create_test_app_state().await;
 
@@ -173,7 +173,7 @@ async fn test_metrics_after_get_request() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_metrics_uptime_increases() {
     let app_state = create_test_app_state().await;
 
@@ -238,7 +238,7 @@ async fn test_metrics_uptime_increases() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_migration_active_metric() {
     // Create unique identifier
     let thread_id = std::thread::current().id();
@@ -284,7 +284,7 @@ async fn test_migration_active_metric() {
 
     let app = Router::new()
         .route("/metrics", get(s3dedup::routes::metrics::metrics_handler))
-        .with_state(Arc::new(app_state));
+        .with_state(app_state);
 
     let response = app
         .oneshot(
@@ -321,7 +321,7 @@ async fn test_migration_active_metric() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_metrics_json_endpoint() {
     let app_state = create_test_app_state().await;
 

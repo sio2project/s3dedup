@@ -1,6 +1,6 @@
+use anyhow::Result;
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
-use std::error::Error;
 use std::io::Read;
 
 pub fn compute_sha256(data: &[u8]) -> String {
@@ -9,7 +9,7 @@ pub fn compute_sha256(data: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-pub fn compress_gzip(data: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+pub fn compress_gzip(data: &[u8]) -> Result<Vec<u8>> {
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use std::io::Write;
@@ -20,7 +20,7 @@ pub fn compress_gzip(data: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync
     Ok(compressed)
 }
 
-pub fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+pub fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>> {
     use flate2::read::GzDecoder;
 
     let mut decoder = GzDecoder::new(data);
@@ -29,9 +29,7 @@ pub fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sy
     Ok(decompressed)
 }
 
-pub async fn read_body_bytes(
-    body: axum::body::Body,
-) -> Result<Bytes, Box<dyn Error + Send + Sync>> {
+pub async fn read_body_bytes(body: axum::body::Body) -> Result<Bytes> {
     use axum::body::to_bytes;
 
     let bytes = to_bytes(body, usize::MAX).await?;

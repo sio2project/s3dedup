@@ -1,6 +1,7 @@
 use crate::cleaner::CleanerConfig;
 use crate::logging::LoggingConfig;
-use std::error::Error;
+use anyhow::Result;
+use anyhow::bail;
 
 pub use crate::kvstorage::KVStorageType;
 pub use crate::kvstorage::postgres::PostgresConfig;
@@ -45,7 +46,7 @@ pub struct BucketConfig {
 }
 
 impl Config {
-    pub fn new(path: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn new(path: &str) -> Result<Self> {
         let config_str = std::fs::read_to_string(path)?;
         let mut config: Config = serde_json::from_str(config_str.as_str())?;
 
@@ -58,7 +59,7 @@ impl Config {
     }
 
     /// Create a default config from environment variables only
-    pub fn from_env() -> Result<Self, Box<dyn Error>> {
+    pub fn from_env() -> Result<Self> {
         let logging = LoggingConfig {
             level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
             json: std::env::var("LOG_JSON")
@@ -149,13 +150,13 @@ impl BucketConfig {
     }
 
     /// Create a bucket config from environment variables only
-    fn from_env() -> Result<Self, Box<dyn Error>> {
+    fn from_env() -> Result<Self> {
         let kvstorage_type_str =
             std::env::var("KVSTORAGE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
         let kvstorage_type = match kvstorage_type_str.as_str() {
             "postgres" => KVStorageType::Postgres,
             "sqlite" => KVStorageType::SQLite,
-            _ => return Err(format!("Invalid KVSTORAGE_TYPE: {}", kvstorage_type_str).into()),
+            _ => bail!("Invalid KVSTORAGE_TYPE: {}", kvstorage_type_str),
         };
 
         let sqlite = if matches!(kvstorage_type, KVStorageType::SQLite) {
@@ -194,7 +195,7 @@ impl BucketConfig {
             std::env::var("S3STORAGE_TYPE").unwrap_or_else(|_| "minio".to_string());
         let s3storage_type = match s3storage_type_str.as_str() {
             "minio" => S3StorageType::MinIO,
-            _ => return Err(format!("Invalid S3STORAGE_TYPE: {}", s3storage_type_str).into()),
+            _ => bail!("Invalid S3STORAGE_TYPE: {}", s3storage_type_str),
         };
 
         let minio = if matches!(s3storage_type, S3StorageType::MinIO) {

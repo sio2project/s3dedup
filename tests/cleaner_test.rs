@@ -60,7 +60,7 @@ async fn setup_test_env(
     (kvstorage, s3storage, bucket_name.to_string())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_cleaner_config_defaults() {
     let config = CleanerConfig::default();
     assert!(!config.enabled);
@@ -69,7 +69,7 @@ async fn test_cleaner_config_defaults() {
     assert_eq!(config.max_deletes_per_run, 10000);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_cleaner_config_deserialization() {
     let json = r#"{
         "enabled": true,
@@ -85,7 +85,7 @@ async fn test_cleaner_config_deserialization() {
     assert_eq!(config.max_deletes_per_run, 5000);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_cleaner_config_partial_deserialization() {
     // Test that defaults work when fields are missing
     let json = r#"{"enabled": true}"#;
@@ -95,7 +95,7 @@ async fn test_cleaner_config_partial_deserialization() {
     assert_eq!(config.batch_size, 1000); // default
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_clean_orphaned_ref_files() {
     if !is_minio_available().await {
         eprintln!("Skipping test: MinIO not available");
@@ -170,7 +170,7 @@ async fn test_clean_orphaned_ref_files() {
     assert_eq!(modified1, 0); // Should be deleted
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_clean_unreferenced_refcounts() {
     if !is_minio_available().await {
         eprintln!("Skipping test: MinIO not available");
@@ -256,7 +256,7 @@ async fn test_clean_unreferenced_refcounts() {
     assert_eq!(count3, 1); // Should still exist
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_clean_unused_s3_objects() {
     if !is_minio_available().await {
         eprintln!("Skipping test: MinIO not available");
@@ -326,7 +326,7 @@ async fn test_clean_unused_s3_objects() {
     assert!(exists3); // Should still exist
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_clean_orphaned_logical_sizes() {
     if !is_minio_available().await {
         eprintln!("Skipping test: MinIO not available");
@@ -412,7 +412,7 @@ async fn test_clean_orphaned_logical_sizes() {
     assert_eq!(size3, 300); // Should still exist
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_max_deletes_per_run_limit() {
     if !is_minio_available().await {
         eprintln!("Skipping test: MinIO not available");
@@ -472,7 +472,7 @@ async fn test_max_deletes_per_run_limit() {
     assert_eq!(remaining, 15);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_batched_processing() {
     if !is_minio_available().await {
         eprintln!("Skipping test: MinIO not available");
@@ -525,7 +525,7 @@ async fn test_batched_processing() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_full_cleanup_cycle() {
     if !is_minio_available().await {
         eprintln!("Skipping test: MinIO not available");

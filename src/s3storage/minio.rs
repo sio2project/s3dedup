@@ -1,12 +1,14 @@
 use crate::config::BucketConfig;
 use crate::s3storage::S3StorageTrait;
+use anyhow::Result;
+use anyhow::anyhow;
+use anyhow::bail;
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::{Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::{Client, Config};
 use serde::Deserialize;
-use std::error::Error;
 use tracing::{debug, error};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -30,8 +32,11 @@ pub struct MinIOClient {
 
 #[async_trait]
 impl S3StorageTrait for MinIOClient {
-    async fn new(config: &BucketConfig) -> Result<Box<Self>, Box<dyn Error + Send + Sync>> {
-        let minio_config = config.minio.as_ref().ok_or("MinIO config not found")?;
+    async fn new(config: &BucketConfig) -> Result<Box<Self>> {
+        let minio_config = config
+            .minio
+            .as_ref()
+            .ok_or_else(|| anyhow!("MinIO config not found"))?;
 
         debug!("Connecting to MinIO at: {}", minio_config.endpoint);
 
@@ -70,11 +75,7 @@ impl S3StorageTrait for MinIOClient {
         Ok(Box::new(minio_client))
     }
 
-    async fn put_object(
-        &self,
-        key: &str,
-        data: Vec<u8>,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn put_object(&self, key: &str, data: Vec<u8>) -> Result<()> {
         debug!("Putting object: {} (size: {} bytes)", key, data.len());
 
         self.client
@@ -90,7 +91,7 @@ impl S3StorageTrait for MinIOClient {
         Ok(())
     }
 
-    async fn get_object(&self, key: &str) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+    async fn get_object(&self, key: &str) -> Result<Vec<u8>> {
         debug!("Getting object: {}", key);
 
         let resp = self
@@ -110,7 +111,7 @@ impl S3StorageTrait for MinIOClient {
         Ok(data)
     }
 
-    async fn delete_object(&self, key: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn delete_object(&self, key: &str) -> Result<()> {
         debug!("Deleting object: {}", key);
 
         let delete_future = self
@@ -128,16 +129,16 @@ impl S3StorageTrait for MinIOClient {
             }
             Ok(Err(e)) => {
                 tracing::error!("Failed to delete object {}: {}", key, e);
-                Err(Box::new(e))
+                bail!(e)
             }
             Err(_) => {
                 tracing::error!("Timeout deleting object {}", key);
-                Err("Timeout deleting object".into())
+                bail!("Timeout deleting object")
             }
         }
     }
 
-    async fn object_exists(&self, key: &str) -> Result<bool, Box<dyn Error + Send + Sync>> {
+    async fn object_exists(&self, key: &str) -> Result<bool> {
         debug!("Checking if object exists: {}", key);
 
         match self
@@ -166,7 +167,7 @@ impl S3StorageTrait for MinIOClient {
                     Ok(false)
                 } else {
                     debug!("Error checking object existence: {}", err);
-                    Err(Box::new(err))
+                    bail!(err)
                 }
             }
         }
@@ -175,7 +176,7 @@ impl S3StorageTrait for MinIOClient {
     async fn list_objects(
         &self,
         continuation_token: Option<String>,
-    ) -> Result<(Vec<String>, Option<String>), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(Vec<String>, Option<String>)> {
         debug!(
             "Listing objects with continuation_token: {:?}",
             continuation_token
@@ -209,7 +210,7 @@ impl S3StorageTrait for MinIOClient {
 
 impl MinIOClient {
     /// Ensures the bucket exists, creating it if necessary
-    async fn ensure_bucket_exists(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn ensure_bucket_exists(&self) -> Result<()> {
         debug!("Checking if bucket exists: {}", self.bucket);
 
         // Try to check if bucket exists using head_bucket
@@ -255,13 +256,13 @@ impl MinIOClient {
                                 Ok(())
                             } else {
                                 error!("Failed to create bucket {}: {}", self.bucket, create_err);
-                                Err(Box::new(create_err))
+                                bail!(create_err)
                             }
                         }
                     }
                 } else {
                     error!("Error checking bucket existence: {}", err);
-                    Err(Box::new(err))
+                    bail!(err)
                 }
             }
         }

@@ -19,7 +19,9 @@ pub async fn ft_get_file(
 
     // 1. Acquire file lock (shared lock for read operation)
     let lock_key = locks::file_lock(&state.bucket_name, path);
-    state.locks.lock().await.acquire_shared(&lock_key);
+    let locks_storage = &state.locks;
+    let lock = locks_storage.prepare_lock(lock_key);
+    let guard = lock.acquire_shared().await;
 
     // 2. Check if file exists and get metadata
     let modified_time = state
@@ -30,8 +32,6 @@ pub async fn ft_get_file(
         .await;
     if modified_time.is_err() {
         error!("Failed to get modified time");
-        state.locks.lock().await.release(&lock_key);
-
         metrics::HTTP_REQUESTS_TOTAL
             .with_label_values(&["GET", "/ft/files", "500"])
             .inc();
@@ -61,6 +61,10 @@ pub async fn ft_get_file(
                         .with_label_values(&[&state.bucket_name])
                         .inc();
 
+                    // Drop the shared lock before migration to avoid deadlock
+                    // (migration needs exclusive lock on the same key)
+                    drop(guard);
+
                     // Migrate the file on-the-fly using migration logic
                     let result = crate::migration::migrate_single_file_from_metadata(
                         &state,
@@ -71,8 +75,6 @@ pub async fn ft_get_file(
 
                     if let Err(e) = result {
                         error!("Failed to migrate file on-the-fly: {}", e);
-                        state.locks.lock().await.release(&lock_key);
-
                         metrics::HTTP_REQUESTS_TOTAL
                             .with_label_values(&["GET", "/ft/files", "500"])
                             .inc();
@@ -85,9 +87,6 @@ pub async fn ft_get_file(
                             .body(Body::empty())
                             .unwrap();
                     }
-
-                    // Release lock
-                    state.locks.lock().await.release(&lock_key);
 
                     metrics::HTTP_REQUESTS_TOTAL
                         .with_label_values(&["GET", "/ft/files", "200"])
@@ -124,8 +123,6 @@ pub async fn ft_get_file(
         }
 
         debug!("File {} not found", path);
-        state.locks.lock().await.release(&lock_key);
-
         metrics::HTTP_REQUESTS_TOTAL
             .with_label_values(&["GET", "/ft/files", "404"])
             .inc();
@@ -148,7 +145,6 @@ pub async fn ft_get_file(
         .await;
     if hash.is_err() {
         error!("Failed to get ref file");
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::empty())
@@ -158,7 +154,6 @@ pub async fn ft_get_file(
 
     if hash.is_empty() {
         error!("File {} has no hash reference", path);
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
@@ -174,7 +169,6 @@ pub async fn ft_get_file(
         .await;
     if logical_size.is_err() {
         error!("Failed to get logical size");
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::empty())
@@ -186,7 +180,6 @@ pub async fn ft_get_file(
     let blob_data = state.s3storage.lock().await.get_object(&hash).await;
     if blob_data.is_err() {
         error!("Failed to get object from S3: {}", blob_data.err().unwrap());
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::empty())
@@ -194,10 +187,9 @@ pub async fn ft_get_file(
     }
     let blob_data = blob_data.unwrap();
 
-    // 6. Release lock
-    state.locks.lock().await.release(&lock_key);
+    drop(guard);
 
-    // 7. Record metrics
+    // 6. Record metrics
     metrics::HTTP_REQUESTS_TOTAL
         .with_label_values(&["GET", "/ft/files", "200"])
         .inc();
@@ -205,7 +197,7 @@ pub async fn ft_get_file(
         .with_label_values(&["GET", "/ft/files"])
         .observe(start.elapsed().as_secs_f64());
 
-    // 8. Return file with appropriate headers (matching original filetracker)
+    // 7. Return file with appropriate headers (matching original filetracker)
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/octet-stream")

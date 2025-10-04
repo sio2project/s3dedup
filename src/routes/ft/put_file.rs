@@ -68,7 +68,9 @@ pub async fn ft_put_file(
 
     // 4. Acquire file lock
     let lock_key = locks::file_lock(&state.bucket_name, path);
-    state.locks.lock().await.acquire_exclusive(&lock_key);
+    let locks_storage = &state.locks;
+    let lock = locks_storage.prepare_lock(lock_key);
+    let _guard = lock.acquire_exclusive().await;
 
     // 5. Check existing version (matching original logic)
     let current_modified = state
@@ -79,7 +81,6 @@ pub async fn ft_put_file(
         .await;
     if current_modified.is_err() {
         error!("Failed to get current modified");
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to get current modified".to_string())
@@ -93,7 +94,6 @@ pub async fn ft_put_file(
             "Tried to store older version of {} ({} < {}), ignoring.",
             path, timestamp, current_modified
         );
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "text/plain")
@@ -118,7 +118,6 @@ pub async fn ft_put_file(
                 Ok(data) => data,
                 Err(e) => {
                     error!("Failed to decompress gzip data: {}", e);
-                    state.locks.lock().await.release(&lock_key);
                     return Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body("Failed to decompress gzip data".to_string())
@@ -140,7 +139,6 @@ pub async fn ft_put_file(
                 Ok(data) => data,
                 Err(e) => {
                     error!("Failed to compress data: {}", e);
-                    state.locks.lock().await.release(&lock_key);
                     return Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .body("Failed to compress data".to_string())
@@ -161,7 +159,6 @@ pub async fn ft_put_file(
         Ok(exists) => exists,
         Err(e) => {
             error!("Failed to check object existence: {}", e);
-            state.locks.lock().await.release(&lock_key);
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Failed to check object existence".to_string())
@@ -181,7 +178,6 @@ pub async fn ft_put_file(
             .await
         {
             error!("Failed to store object in S3: {}", e);
-            state.locks.lock().await.release(&lock_key);
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Failed to store object".to_string())
@@ -198,7 +194,6 @@ pub async fn ft_put_file(
         .await
     {
         error!("Failed to store logical size: {}", e);
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to store logical size".to_string())
@@ -214,7 +209,6 @@ pub async fn ft_put_file(
         .await
     {
         error!("Failed to increment ref count: {}", e);
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to increment ref count".to_string())
@@ -273,7 +267,6 @@ pub async fn ft_put_file(
         .await
     {
         error!("Failed to set ref file: {}", e);
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to set ref file".to_string())
@@ -288,7 +281,6 @@ pub async fn ft_put_file(
         .await
     {
         error!("Failed to set modified time: {}", e);
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to set modified time".to_string())
@@ -324,9 +316,6 @@ pub async fn ft_put_file(
             debug!("Successfully wrote to filetracker");
         }
     }
-
-    // 10. Release lock and return (matching original response format)
-    state.locks.lock().await.release(&lock_key);
 
     Response::builder()
         .status(StatusCode::OK)

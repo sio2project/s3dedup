@@ -29,7 +29,9 @@ pub async fn ft_delete_file(
 
     // 2. Acquire file lock (exclusive for write operation)
     let lock_key = locks::file_lock(&state.bucket_name, path);
-    state.locks.lock().await.acquire_exclusive(&lock_key);
+    let locks_storage = &state.locks;
+    let lock = locks_storage.prepare_lock(lock_key);
+    let _guard = lock.acquire_exclusive().await;
 
     // 3. Check if file exists
     let current_modified = state
@@ -40,7 +42,6 @@ pub async fn ft_delete_file(
         .await;
     if current_modified.is_err() {
         error!("Failed to get current modified");
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to get current modified".to_string())
@@ -51,7 +52,6 @@ pub async fn ft_delete_file(
     // If file doesn't exist, return 404
     if current_modified == 0 {
         debug!("File {} not found", path);
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body("File not found".to_string())
@@ -64,7 +64,6 @@ pub async fn ft_delete_file(
             "Tried to delete newer version of {} ({} < {}), ignoring.",
             path, timestamp, current_modified
         );
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::OK)
             .body("".to_string())
@@ -80,7 +79,6 @@ pub async fn ft_delete_file(
         .await;
     if hash.is_err() {
         error!("Failed to get ref file");
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to get ref file".to_string())
@@ -90,7 +88,6 @@ pub async fn ft_delete_file(
 
     if hash.is_empty() {
         error!("File {} has no hash reference", path);
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body("File has no hash reference".to_string())
@@ -106,7 +103,6 @@ pub async fn ft_delete_file(
         .await
     {
         error!("Failed to decrement ref count: {}", e);
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to decrement ref count".to_string())
@@ -146,7 +142,6 @@ pub async fn ft_delete_file(
         .await
     {
         error!("Failed to delete ref file: {}", e);
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to delete ref file".to_string())
@@ -161,7 +156,6 @@ pub async fn ft_delete_file(
         .await
     {
         error!("Failed to delete modified time: {}", e);
-        state.locks.lock().await.release(&lock_key);
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to delete modified time".to_string())
@@ -186,9 +180,6 @@ pub async fn ft_delete_file(
             debug!("Successfully deleted from filetracker");
         }
     }
-
-    // 10. Release lock and return
-    state.locks.lock().await.release(&lock_key);
 
     Response::builder()
         .status(StatusCode::OK)
