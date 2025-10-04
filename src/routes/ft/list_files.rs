@@ -1,9 +1,10 @@
-use crate::AppState;
+use crate::{AppState, metrics};
 use axum::extract::{Path, Query, State};
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, error};
 
 #[derive(Debug, Deserialize)]
@@ -22,6 +23,18 @@ pub async fn ft_list_files(
     Query(query): Query<ListQuery>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
+    let start = Instant::now();
+
+    // Helper to record metrics before returning
+    let record_metrics = |status: &str| {
+        metrics::HTTP_REQUESTS_TOTAL
+            .with_label_values(&["GET", "/ft/list", status])
+            .inc();
+        metrics::HTTP_REQUEST_DURATION_SECONDS
+            .with_label_values(&["GET", "/ft/list"])
+            .observe(start.elapsed().as_secs_f64());
+    };
+
     // Extract path or use empty string for root
     let path_str = path.map(|Path(p)| p).unwrap_or_default();
     let path = path_str.strip_prefix('/').unwrap_or(&path_str);
@@ -58,6 +71,7 @@ pub async fn ft_list_files(
         Ok(files) => {
             // Return files as newline-separated list
             let response_body = files.join("\n");
+            record_metrics("200");
             if !response_body.is_empty() {
                 Response::builder()
                     .status(StatusCode::OK)
@@ -72,6 +86,7 @@ pub async fn ft_list_files(
         }
         Err(e) => {
             error!("Failed to list files: {}", e);
+            record_metrics("500");
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Failed to list files".to_string())

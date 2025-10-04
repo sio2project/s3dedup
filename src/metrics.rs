@@ -42,13 +42,19 @@ lazy_static! {
 
     pub static ref TOTAL_LOGICAL_SIZE_BYTES: IntGauge = register_int_gauge!(
         "s3dedup_total_logical_size_bytes",
-        "Sum of all logical file sizes"
+        "Sum of (refcount * logical_size) for all blobs - what storage would be without deduplication"
     )
     .unwrap();
 
-    pub static ref TOTAL_PHYSICAL_SIZE_BYTES: IntGauge = register_int_gauge!(
-        "s3dedup_total_physical_size_bytes",
-        "Actual storage used in S3"
+    pub static ref TOTAL_STORAGE_BYTES: IntGauge = register_int_gauge!(
+        "s3dedup_total_storage_bytes",
+        "Actual storage used in S3 (sum of compressed blob sizes)"
+    )
+    .unwrap();
+
+    pub static ref DEDUPLICATED_BYTES_SAVED: IntGauge = register_int_gauge!(
+        "s3dedup_deduplicated_bytes_saved",
+        "Bytes saved by deduplication: sum of (refcount - 1) * logical_size"
     )
     .unwrap();
 

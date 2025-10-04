@@ -61,4 +61,37 @@ impl AppState {
             metrics,
         }))
     }
+
+    /// Update storage gauge metrics from database
+    pub async fn update_storage_metrics(&self) -> Result<()> {
+        let mut kv = self.kvstorage.lock().await;
+
+        // Get all stats
+        let total_files = kv.get_total_files(&self.bucket_name).await?;
+        let total_blobs = kv.get_total_blobs(&self.bucket_name).await?;
+        let total_storage_bytes = kv.get_total_storage_bytes(&self.bucket_name).await?;
+        let total_logical_bytes = kv.get_total_logical_bytes(&self.bucket_name).await?;
+        let deduplicated_bytes_saved = kv.get_deduplicated_bytes_saved(&self.bucket_name).await?;
+
+        // Update gauges
+        metrics::TOTAL_FILES.set(total_files);
+        metrics::TOTAL_BLOBS.set(total_blobs);
+        metrics::TOTAL_STORAGE_BYTES.set(total_storage_bytes);
+        metrics::TOTAL_LOGICAL_SIZE_BYTES.set(total_logical_bytes);
+        metrics::DEDUPLICATED_BYTES_SAVED.set(deduplicated_bytes_saved);
+
+        // Calculate derived metrics
+        if total_blobs > 0 {
+            metrics::DEDUPLICATION_RATIO.set(total_files as f64 / total_blobs as f64);
+            metrics::AVERAGE_REFERENCE_COUNT.set(total_files as f64 / total_blobs as f64);
+        }
+
+        if total_logical_bytes > 0 {
+            let savings_ratio =
+                (total_logical_bytes - total_storage_bytes) as f64 / total_logical_bytes as f64;
+            metrics::STORAGE_SAVINGS_RATIO.set(savings_ratio);
+        }
+
+        Ok(())
+    }
 }

@@ -96,6 +96,7 @@ impl KVStorageTrait for Postgres {
                 bucket VARCHAR(255) NOT NULL,
                 hash VARCHAR(255) NOT NULL,
                 logical_size BIGINT NOT NULL,
+                compressed_size BIGINT,
                 PRIMARY KEY (bucket, hash)
             )",
             logical_size_table
@@ -365,5 +366,111 @@ impl KVStorageTrait for Postgres {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn get_compressed_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
+        let table = self.table_name("logical_size");
+        let query = format!(
+            "SELECT compressed_size FROM {} WHERE bucket = $1 AND hash = $2",
+            table
+        );
+        let result: Result<(Option<i64>,), sqlx::Error> = sqlx::query_as(&query)
+            .bind(bucket)
+            .bind(hash)
+            .fetch_one(&self.pool)
+            .await;
+
+        match result {
+            Ok((Some(size),)) => Ok(size as usize),
+            Ok((None,)) => Ok(0),
+            Err(sqlx::Error::RowNotFound) => Ok(0),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn set_compressed_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()> {
+        let table = self.table_name("logical_size");
+        let query = format!(
+            "INSERT INTO {} (bucket, hash, logical_size, compressed_size) VALUES ($1, $2, 0, $3)
+             ON CONFLICT (bucket, hash) DO UPDATE SET compressed_size = $3",
+            table
+        );
+        sqlx::query(&query)
+            .bind(bucket)
+            .bind(hash)
+            .bind(size as i64)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_total_files(&mut self, bucket: &str) -> Result<i64> {
+        let table = self.table_name("modified");
+        let query = format!("SELECT COUNT(*) FROM {} WHERE bucket = $1", table);
+        let (count,): (i64,) = sqlx::query_as(&query)
+            .bind(bucket)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
+    }
+
+    async fn get_total_blobs(&mut self, bucket: &str) -> Result<i64> {
+        let table = self.table_name("refcount");
+        let query = format!(
+            "SELECT COUNT(*) FROM {} WHERE bucket = $1 AND refcount > 0",
+            table
+        );
+        let (count,): (i64,) = sqlx::query_as(&query)
+            .bind(bucket)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
+    }
+
+    async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64> {
+        let table = self.table_name("logical_size");
+        let query = format!(
+            "SELECT COALESCE(SUM(compressed_size), 0) FROM {} WHERE bucket = $1",
+            table
+        );
+        let (total,): (Option<i64>,) = sqlx::query_as(&query)
+            .bind(bucket)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(total.unwrap_or(0))
+    }
+
+    async fn get_total_logical_bytes(&mut self, bucket: &str) -> Result<i64> {
+        let refcount_table = self.table_name("refcount");
+        let logical_size_table = self.table_name("logical_size");
+        let query = format!(
+            "SELECT COALESCE(SUM(r.refcount * l.logical_size), 0)
+             FROM {} r
+             INNER JOIN {} l ON r.bucket = l.bucket AND r.hash = l.hash
+             WHERE r.bucket = $1",
+            refcount_table, logical_size_table
+        );
+        let (total,): (Option<i64>,) = sqlx::query_as(&query)
+            .bind(bucket)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(total.unwrap_or(0))
+    }
+
+    async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64> {
+        let refcount_table = self.table_name("refcount");
+        let logical_size_table = self.table_name("logical_size");
+        let query = format!(
+            "SELECT COALESCE(SUM((r.refcount - 1) * l.logical_size), 0)
+             FROM {} r
+             INNER JOIN {} l ON r.bucket = l.bucket AND r.hash = l.hash
+             WHERE r.bucket = $1 AND r.refcount > 1",
+            refcount_table, logical_size_table
+        );
+        let (total,): (Option<i64>,) = sqlx::query_as(&query)
+            .bind(bucket)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(total.unwrap_or(0))
     }
 }

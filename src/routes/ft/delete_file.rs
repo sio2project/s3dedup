@@ -1,9 +1,10 @@
 use crate::routes::ft::{LastModifiedQuery, utils};
-use crate::{AppState, locks};
+use crate::{AppState, locks, metrics};
 use axum::extract::{Path, Query, State};
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, error, info};
 
 pub async fn ft_delete_file(
@@ -12,6 +13,18 @@ pub async fn ft_delete_file(
     Query(query): Query<LastModifiedQuery>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
+    let start = Instant::now();
+
+    // Helper to record metrics before returning
+    let record_metrics = |status: &str| {
+        metrics::HTTP_REQUESTS_TOTAL
+            .with_label_values(&["DELETE", "/ft/files", status])
+            .inc();
+        metrics::HTTP_REQUEST_DURATION_SECONDS
+            .with_label_values(&["DELETE", "/ft/files"])
+            .observe(start.elapsed().as_secs_f64());
+    };
+
     // Remove leading slash from wildcard path
     let path = path.strip_prefix('/').unwrap_or(&path);
 
@@ -24,6 +37,7 @@ pub async fn ft_delete_file(
         Ok(ts) => ts,
         Err(e) => {
             error!("Failed to extract timestamp: {}", e);
+            record_metrics("400");
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(e)
@@ -48,6 +62,7 @@ pub async fn ft_delete_file(
         .await;
     if current_modified.is_err() {
         error!("Failed to get current modified");
+        record_metrics("500");
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to get current modified".to_string())
@@ -58,6 +73,7 @@ pub async fn ft_delete_file(
     // If file doesn't exist, return 404
     if current_modified == 0 {
         debug!("File {} not found", path);
+        record_metrics("404");
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body("File not found".to_string())
@@ -70,6 +86,7 @@ pub async fn ft_delete_file(
             "Tried to delete newer version of {} ({} < {}), ignoring.",
             path, timestamp, current_modified
         );
+        record_metrics("200");
         return Response::builder()
             .status(StatusCode::OK)
             .body("".to_string())
@@ -85,6 +102,7 @@ pub async fn ft_delete_file(
         .await;
     if hash.is_err() {
         error!("Failed to get ref file");
+        record_metrics("500");
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to get ref file".to_string())
@@ -94,6 +112,7 @@ pub async fn ft_delete_file(
 
     if hash.is_empty() {
         error!("File {} has no hash reference", path);
+        record_metrics("404");
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body("File has no hash reference".to_string())
@@ -109,6 +128,7 @@ pub async fn ft_delete_file(
         .await
     {
         error!("Failed to decrement ref count: {}", e);
+        record_metrics("500");
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to decrement ref count".to_string())
@@ -148,6 +168,7 @@ pub async fn ft_delete_file(
         .await
     {
         error!("Failed to delete ref file: {}", e);
+        record_metrics("500");
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to delete ref file".to_string())
@@ -162,6 +183,7 @@ pub async fn ft_delete_file(
         .await
     {
         error!("Failed to delete modified time: {}", e);
+        record_metrics("500");
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to delete modified time".to_string())
@@ -187,6 +209,7 @@ pub async fn ft_delete_file(
         }
     }
 
+    record_metrics("200");
     Response::builder()
         .status(StatusCode::OK)
         .body("".to_string())

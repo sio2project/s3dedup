@@ -47,6 +47,9 @@ pub(crate) trait KVStorageTrait {
     async fn get_logical_size(&mut self, bucket: &str, hash: &str) -> Result<usize>;
     async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()>;
 
+    async fn get_compressed_size(&mut self, bucket: &str, hash: &str) -> Result<usize>;
+    async fn set_compressed_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()>;
+
     /// List all files under a given path prefix that were modified at or before the given timestamp
     async fn list_files(
         &mut self,
@@ -85,6 +88,22 @@ pub(crate) trait KVStorageTrait {
 
     /// Delete a logical_size entry
     async fn delete_logical_size(&mut self, bucket: &str, hash: &str) -> Result<()>;
+
+    // Aggregate statistics methods for metrics
+    /// Get total number of files (count of file_modified entries)
+    async fn get_total_files(&mut self, bucket: &str) -> Result<i64>;
+
+    /// Get total number of blobs (count of refcount entries where refcount > 0)
+    async fn get_total_blobs(&mut self, bucket: &str) -> Result<i64>;
+
+    /// Get total storage bytes (sum of compressed_size for all blobs - actual S3 storage)
+    async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64>;
+
+    /// Get total logical bytes (sum of logical_size * refcount for all blobs - what storage would be without dedup)
+    async fn get_total_logical_bytes(&mut self, bucket: &str) -> Result<i64>;
+
+    /// Get deduplicated bytes saved (sum of (refcount - 1) * logical_size for all blobs)
+    async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64>;
 }
 
 #[derive(Clone)]
@@ -283,6 +302,33 @@ impl KVStorage {
         }
     }
 
+    pub async fn get_compressed_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
+        debug!(
+            "Getting compressed size for bucket: {}, hash: {}",
+            bucket, hash
+        );
+        match self {
+            KVStorage::Postgres(storage) => storage.get_compressed_size(bucket, hash).await,
+            KVStorage::SQLite(storage) => storage.get_compressed_size(bucket, hash).await,
+        }
+    }
+
+    pub async fn set_compressed_size(
+        &mut self,
+        bucket: &str,
+        hash: &str,
+        size: usize,
+    ) -> Result<()> {
+        debug!(
+            "Setting compressed size for bucket: {}, hash: {} to {}",
+            bucket, hash, size
+        );
+        match self {
+            KVStorage::Postgres(storage) => storage.set_compressed_size(bucket, hash, size).await,
+            KVStorage::SQLite(storage) => storage.set_compressed_size(bucket, hash, size).await,
+        }
+    }
+
     /**
      * List all files under a given path prefix that were modified at or before the given timestamp.
      */
@@ -363,6 +409,41 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.delete_logical_size(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.delete_logical_size(bucket, hash).await,
+        }
+    }
+
+    pub async fn get_total_files(&mut self, bucket: &str) -> Result<i64> {
+        match self {
+            KVStorage::Postgres(storage) => storage.get_total_files(bucket).await,
+            KVStorage::SQLite(storage) => storage.get_total_files(bucket).await,
+        }
+    }
+
+    pub async fn get_total_blobs(&mut self, bucket: &str) -> Result<i64> {
+        match self {
+            KVStorage::Postgres(storage) => storage.get_total_blobs(bucket).await,
+            KVStorage::SQLite(storage) => storage.get_total_blobs(bucket).await,
+        }
+    }
+
+    pub async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64> {
+        match self {
+            KVStorage::Postgres(storage) => storage.get_total_storage_bytes(bucket).await,
+            KVStorage::SQLite(storage) => storage.get_total_storage_bytes(bucket).await,
+        }
+    }
+
+    pub async fn get_total_logical_bytes(&mut self, bucket: &str) -> Result<i64> {
+        match self {
+            KVStorage::Postgres(storage) => storage.get_total_logical_bytes(bucket).await,
+            KVStorage::SQLite(storage) => storage.get_total_logical_bytes(bucket).await,
+        }
+    }
+
+    pub async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64> {
+        match self {
+            KVStorage::Postgres(storage) => storage.get_deduplicated_bytes_saved(bucket).await,
+            KVStorage::SQLite(storage) => storage.get_deduplicated_bytes_saved(bucket).await,
         }
     }
 }
