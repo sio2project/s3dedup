@@ -430,47 +430,47 @@ impl KVStorageTrait for Postgres {
     async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64> {
         let table = self.table_name("logical_size");
         let query = format!(
-            "SELECT COALESCE(SUM(compressed_size), 0) FROM {} WHERE bucket = $1",
+            "SELECT COALESCE(SUM(compressed_size), 0)::BIGINT FROM {} WHERE bucket = $1",
             table
         );
-        let (total,): (Option<i64>,) = sqlx::query_as(&query)
+        let (total,): (i64,) = sqlx::query_as(&query)
             .bind(bucket)
             .fetch_one(&self.pool)
             .await?;
-        Ok(total.unwrap_or(0))
+        Ok(total)
     }
 
     async fn get_total_logical_bytes(&mut self, bucket: &str) -> Result<i64> {
         let refcount_table = self.table_name("refcount");
         let logical_size_table = self.table_name("logical_size");
         let query = format!(
-            "SELECT COALESCE(SUM(r.refcount * l.logical_size), 0)
+            "SELECT COALESCE(SUM(r.refcount * l.logical_size), 0)::BIGINT
              FROM {} r
              INNER JOIN {} l ON r.bucket = l.bucket AND r.hash = l.hash
              WHERE r.bucket = $1",
             refcount_table, logical_size_table
         );
-        let (total,): (Option<i64>,) = sqlx::query_as(&query)
+        let (total,): (i64,) = sqlx::query_as(&query)
             .bind(bucket)
             .fetch_one(&self.pool)
             .await?;
-        Ok(total.unwrap_or(0))
+        Ok(total)
     }
 
     async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64> {
         let refcount_table = self.table_name("refcount");
         let logical_size_table = self.table_name("logical_size");
         let query = format!(
-            "SELECT COALESCE(SUM((r.refcount - 1) * l.logical_size), 0)
+            "SELECT COALESCE(SUM((r.refcount - 1) * l.logical_size), 0)::BIGINT
              FROM {} r
              INNER JOIN {} l ON r.bucket = l.bucket AND r.hash = l.hash
              WHERE r.bucket = $1 AND r.refcount > 1",
             refcount_table, logical_size_table
         );
-        let (total,): (Option<i64>,) = sqlx::query_as(&query)
+        let (total,): (i64,) = sqlx::query_as(&query)
             .bind(bucket)
             .fetch_one(&self.pool)
             .await?;
-        Ok(total.unwrap_or(0))
+        Ok(total)
     }
 }
