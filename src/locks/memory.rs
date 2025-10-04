@@ -2,6 +2,7 @@ use crate::locks::{ExclusiveLockGuard, Lock, LockStorage, SharedLockGuard};
 use async_trait::async_trait;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{RwLock as TokioRwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::task::spawn_blocking;
 
 // HashMap management: parking_lot (sync, fast, held briefly)
 type LockMap = Arc<parking_lot::RwLock<HashMap<String, Arc<TokioRwLock<()>>>>>;
@@ -45,15 +46,23 @@ impl<'a> Drop for LockedKey<'a> {
 }
 
 impl MemoryLocks {
-    fn get_or_create_lock(&self, key: String) -> Arc<TokioRwLock<()>> {
-        let mut locks = self.locks.write();
-        locks
-            .entry(key)
-            .or_insert_with(|| Arc::new(TokioRwLock::new(())))
-            .clone()
+    async fn get_or_create_lock(&self, key: String) -> Arc<TokioRwLock<()>> {
+        let locks = self.locks.clone();
+        // Because `.write()` returns guard with reference to a locked `RwLock`, we need to block on whole body.
+        // `tokio::task::block_in_place()` could be different approach, blocking only `self.locks.write()`, without needing to `.clone()` locks or worrying about lifetimes.
+        spawn_blocking(move || {
+            let mut locks = locks.write();
+            locks
+                .entry(key)
+                .or_insert_with(|| Arc::new(TokioRwLock::new(())))
+                .clone()
+        })
+        .await
+        .expect("`parking_lot::RwLock::write()` panicked")
     }
 }
 
+#[async_trait]
 impl LockStorage for MemoryLocks {
     fn new() -> Box<Self> {
         Box::new(Self {
@@ -61,8 +70,8 @@ impl LockStorage for MemoryLocks {
         })
     }
 
-    fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send> {
-        let lock = self.get_or_create_lock(key.clone());
+    async fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send> {
+        let lock = self.get_or_create_lock(key.clone()).await;
         Box::new(LockedKey {
             lock,
             parent: self,
@@ -80,7 +89,7 @@ mod tests {
     #[tokio::test]
     async fn assert_locks_compile() {
         let memory = MemoryLocks::new();
-        let lock = memory.prepare_lock("1".into());
+        let lock = memory.prepare_lock("1".into()).await;
         let _guard = lock.acquire_exclusive().await;
     }
 
@@ -93,7 +102,7 @@ mod tests {
             let memory = memory.clone();
             let tx = tx.clone();
             tokio::spawn(async move {
-                let lock = memory.prepare_lock("key1".into());
+                let lock = memory.prepare_lock("key1".into()).await;
                 let _guard = lock.acquire_shared().await;
                 tx.send(format!("acquired_{}", i)).await.unwrap();
                 sleep(Duration::from_millis(50)).await;
@@ -121,7 +130,7 @@ mod tests {
         let memory1 = memory.clone();
         let tx1 = tx.clone();
         tokio::spawn(async move {
-            let lock = memory1.prepare_lock("key1".into());
+            let lock = memory1.prepare_lock("key1".into()).await;
             let _guard = lock.acquire_exclusive().await;
             tx1.send("task1_acquired").await.unwrap();
             sleep(Duration::from_millis(100)).await;
@@ -133,7 +142,7 @@ mod tests {
         let memory2 = memory.clone();
         let tx2 = tx.clone();
         tokio::spawn(async move {
-            let lock = memory2.prepare_lock("key1".into());
+            let lock = memory2.prepare_lock("key1".into()).await;
             let _guard = lock.acquire_exclusive().await;
             tx2.send("task2_acquired").await.unwrap();
         });
@@ -161,8 +170,8 @@ mod tests {
         let memory1 = memory.clone();
         let tx1 = tx.clone();
         tokio::spawn(async move {
-            let lock = memory1.prepare_lock("key1".into());
-            let _guard = lock.acquire_shared();
+            let lock = memory1.prepare_lock("key1".into()).await;
+            let _guard = lock.acquire_shared().await;
             tx1.send("shared_acquired").await.unwrap();
             sleep(Duration::from_millis(100)).await;
             tx1.send("shared_released").await.unwrap();
@@ -173,7 +182,7 @@ mod tests {
         let memory2 = memory.clone();
         let tx2 = tx.clone();
         tokio::spawn(async move {
-            let lock = memory2.prepare_lock("key1".into());
+            let lock = memory2.prepare_lock("key1".into()).await;
             let _guard = lock.acquire_exclusive().await;
             tx2.send("exclusive_acquired").await.unwrap();
         });
@@ -198,7 +207,7 @@ mod tests {
         let memory = Arc::new(*MemoryLocks::new());
 
         {
-            let lock = memory.prepare_lock("cleanup_key".into());
+            let lock = memory.prepare_lock("cleanup_key".into()).await;
             let _guard = lock.acquire_exclusive().await;
         }
 
@@ -219,7 +228,7 @@ mod tests {
         let memory1 = memory.clone();
         let tx1 = tx.clone();
         tokio::spawn(async move {
-            let lock = memory1.prepare_lock("key1".into());
+            let lock = memory1.prepare_lock("key1".into()).await;
             let _guard = lock.acquire_exclusive().await;
             tx1.send("key1_acquired").await.unwrap();
             sleep(Duration::from_millis(100)).await;
@@ -231,7 +240,7 @@ mod tests {
         let memory2 = memory.clone();
         let tx2 = tx.clone();
         tokio::spawn(async move {
-            let lock = memory2.prepare_lock("key2".into());
+            let lock = memory2.prepare_lock("key2".into()).await;
             let _guard = lock.acquire_exclusive().await;
             tx2.send("key2_acquired").await.unwrap();
         });
@@ -255,7 +264,7 @@ mod tests {
         let memory1 = memory.clone();
         let tx1 = tx.clone();
         tokio::spawn(async move {
-            let lock = memory1.prepare_lock("shared_key".into());
+            let lock = memory1.prepare_lock("shared_key".into()).await;
             let _guard = lock.acquire_exclusive().await;
             tx1.send("task1_acquired").await.unwrap();
             sleep(Duration::from_millis(50)).await;
@@ -267,7 +276,7 @@ mod tests {
         let memory2 = memory.clone();
         let tx2 = tx.clone();
         tokio::spawn(async move {
-            let lock = memory2.prepare_lock("shared_key".into());
+            let lock = memory2.prepare_lock("shared_key".into()).await;
             let _guard = lock.acquire_exclusive().await;
             tx2.send("task2_acquired").await.unwrap();
             sleep(Duration::from_millis(100)).await;
@@ -279,7 +288,7 @@ mod tests {
         let memory3 = memory.clone();
         let tx3 = tx.clone();
         tokio::spawn(async move {
-            let lock = memory3.prepare_lock("shared_key".into());
+            let lock = memory3.prepare_lock("shared_key".into()).await;
             let _guard = lock.acquire_exclusive().await;
             tx3.send("task3_acquired").await.unwrap();
         });

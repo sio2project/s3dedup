@@ -20,7 +20,7 @@ pub async fn ft_get_file(
     // 1. Acquire file lock (shared lock for read operation)
     let lock_key = locks::file_lock(&state.bucket_name, path);
     let locks_storage = &state.locks;
-    let lock = locks_storage.prepare_lock(lock_key);
+    let lock = locks_storage.prepare_lock(lock_key).await;
     let guard = lock.acquire_shared().await;
 
     // 2. Check if file exists and get metadata

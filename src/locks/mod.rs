@@ -37,10 +37,11 @@ pub(crate) trait Lock {
     async fn acquire_exclusive<'a>(&'a self) -> Box<dyn ExclusiveLockGuard<'a> + Send + 'a>;
 }
 
+#[async_trait]
 pub(crate) trait LockStorage {
     fn new() -> Box<Self>;
 
-    fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send>;
+    async fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send>;
 }
 
 #[allow(private_interfaces)]
@@ -59,9 +60,9 @@ impl LocksStorage {
         }
     }
 
-    pub(crate) fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send> {
+    pub(crate) async fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send> {
         match self {
-            LocksStorage::Memory(memory_locks) => memory_locks.prepare_lock(key),
+            LocksStorage::Memory(memory_locks) => memory_locks.prepare_lock(key).await,
         }
     }
 }

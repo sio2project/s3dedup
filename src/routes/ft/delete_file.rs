@@ -30,7 +30,7 @@ pub async fn ft_delete_file(
     // 2. Acquire file lock (exclusive for write operation)
     let lock_key = locks::file_lock(&state.bucket_name, path);
     let locks_storage = &state.locks;
-    let lock = locks_storage.prepare_lock(lock_key);
+    let lock = locks_storage.prepare_lock(lock_key).await;
     let _guard = lock.acquire_exclusive().await;
 
     // 3. Check if file exists
