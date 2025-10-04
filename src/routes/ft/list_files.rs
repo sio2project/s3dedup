@@ -20,20 +20,29 @@ pub async fn ft_list_files(
     State(state): State<Arc<AppState>>,
     path: Option<Path<String>>,
     Query(query): Query<ListQuery>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     // Extract path or use empty string for root
     let path_str = path.map(|Path(p)| p).unwrap_or_default();
     let path = path_str.strip_prefix('/').unwrap_or(&path_str);
 
-    // Parse the timestamp
-    let timestamp =
-        match crate::routes::ft::utils::conv_rfc2822_to_unix_timestamp(&query.last_modified) {
-            Ok(ts) => ts,
-            Err(_) => {
-                // If parsing fails, use current time
-                chrono::Utc::now().timestamp()
-            }
-        };
+    debug!("LIST request for path: {}", path);
+    debug!("Query params: last_modified={}", query.last_modified);
+    debug!("Headers: last-modified={:?}", headers.get("last-modified"));
+
+    // Parse the timestamp (optional for LIST - defaults to current time if not provided)
+    let timestamp = match crate::routes::ft::utils::extract_timestamp(
+        &headers,
+        Some(&query.last_modified),
+        false,
+    ) {
+        Ok(ts) => ts,
+        Err(e) => {
+            error!("Failed to extract timestamp: {}", e);
+            // For LIST, be lenient - use current time if parsing fails
+            chrono::Utc::now().timestamp()
+        }
+    };
 
     debug!("Handling GET /list/{} (@{})", path, timestamp);
 

@@ -10,20 +10,26 @@ pub async fn ft_delete_file(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
     Query(query): Query<LastModifiedQuery>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     // Remove leading slash from wildcard path
     let path = path.strip_prefix('/').unwrap_or(&path);
 
-    // 1. Parse and validate timestamp
-    let timestamp = utils::conv_rfc2822_to_unix_timestamp(&query.last_modified);
-    if timestamp.is_err() {
-        error!("Failed to parse last_modified");
-        return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body("Failed to parse last_modified".to_string())
-            .unwrap();
-    }
-    let timestamp = timestamp.unwrap();
+    debug!("DELETE request for path: {}", path);
+    debug!("Query params: last_modified={:?}", query.last_modified);
+    debug!("Headers: last-modified={:?}", headers.get("last-modified"));
+
+    // 1. Parse and validate timestamp (required for DELETE)
+    let timestamp = match utils::extract_timestamp(&headers, query.last_modified.as_ref(), true) {
+        Ok(ts) => ts,
+        Err(e) => {
+            error!("Failed to extract timestamp: {}", e);
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(e)
+                .unwrap();
+        }
+    };
 
     debug!("Handling DELETE {}@{}", path, timestamp);
 

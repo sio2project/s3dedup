@@ -16,19 +16,28 @@ pub async fn ft_put_file(
 ) -> impl IntoResponse {
     // Remove leading slash from wildcard path
     let path = path.strip_prefix('/').unwrap_or(&path);
-    debug!("Handling PUT for path: {}", path);
-    debug!("timestamp: {}", query.last_modified);
+    debug!("PUT request for path: {}", path);
+    debug!("Query params: last_modified={:?}", query.last_modified);
+    debug!(
+        "Headers: content-encoding={:?}, sha256-checksum={:?}, logical-size={:?}, content-length={:?}, last-modified={:?}",
+        headers.get("content-encoding"),
+        headers.get("sha256-checksum"),
+        headers.get("logical-size"),
+        headers.get("content-length"),
+        headers.get("last-modified")
+    );
 
-    // 1. Parse and validate timestamp
-    let timestamp = utils::conv_rfc2822_to_unix_timestamp(&query.last_modified);
-    if timestamp.is_err() {
-        error!("Failed to parse last_modified");
-        return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body("Failed to parse last_modified".to_string())
-            .unwrap();
-    }
-    let timestamp = timestamp.unwrap();
+    // 1. Parse and validate timestamp (required for PUT)
+    let timestamp = match utils::extract_timestamp(&headers, query.last_modified.as_ref(), true) {
+        Ok(ts) => ts,
+        Err(e) => {
+            error!("Failed to extract timestamp: {}", e);
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(e)
+                .unwrap();
+        }
+    };
 
     // 2. Extract headers (matching original filetracker behavior)
     let compressed = headers
