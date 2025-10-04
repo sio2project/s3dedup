@@ -11,10 +11,13 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower::util::ServiceExt;
 
+// Type alias for file storage: (data, timestamp)
+type FileStorage = Arc<Mutex<HashMap<String, (Vec<u8>, i64)>>>;
+
 // Mock filetracker server state
 #[derive(Clone)]
 struct MockFiletrackerState {
-    files: Arc<Mutex<HashMap<String, (Vec<u8>, i64)>>>, // (data, timestamp)
+    files: FileStorage,
 }
 
 impl MockFiletrackerState {
@@ -26,7 +29,10 @@ impl MockFiletrackerState {
 
     async fn add_file(&self, path: &str, data: Vec<u8>) {
         let timestamp = chrono::Utc::now().timestamp();
-        self.files.lock().await.insert(path.to_string(), (data, timestamp));
+        self.files
+            .lock()
+            .await
+            .insert(path.to_string(), (data, timestamp));
     }
 }
 
