@@ -184,7 +184,8 @@ impl KVStorageTrait for SQLite {
 
     async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()> {
         sqlx::query(
-            "INSERT OR REPLACE INTO logical_size (bucket, hash, logical_size) VALUES (?1, ?2, ?3)",
+            "INSERT INTO logical_size (bucket, hash, logical_size, compressed_size) VALUES (?1, ?2, ?3, 0)
+             ON CONFLICT (bucket, hash) DO UPDATE SET logical_size = ?3",
         )
         .bind(bucket)
         .bind(hash)
