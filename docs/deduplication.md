@@ -208,13 +208,13 @@ File-level locking ensures consistency during concurrent operations:
 // - File coordination: tokio::sync::RwLock (async, for I/O)
 
 // PUT/DELETE operations
-let lock = locks.prepare_lock(file_lock(bucket, path));
+let lock = locks.prepare_lock(file_lock(bucket, path)).await;
 let _guard = lock.acquire_exclusive().await;
 // ... perform write operation ...
 // Guard drops, lock released
 
 // GET operations
-let lock = locks.prepare_lock(file_lock(bucket, path));
+let lock = locks.prepare_lock(file_lock(bucket, path)).await;
 let _guard = lock.acquire_shared().await;
 // ... perform read operation ...
 // Guard drops, lock released
