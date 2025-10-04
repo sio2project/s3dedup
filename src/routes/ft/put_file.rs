@@ -298,7 +298,8 @@ pub async fn ft_put_file(
 
     // If overwriting with different content, decrement old blob reference
     if let Some(old_hash) = old_hash
-        && !old_hash.is_empty() && old_hash != digest
+        && !old_hash.is_empty()
+        && old_hash != digest
     {
         info!(
             "Overwriting existing link {}. Old hash: {}, new hash: {}",
