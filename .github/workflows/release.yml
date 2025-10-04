@@ -60,8 +60,12 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Strip binary
-        if: matrix.os != 'macos-latest'
+        if: matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64-unknown-linux-gnu'
         run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+      - name: Strip binary (aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: aarch64-linux-gnu-strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
       - name: Upload binary to release
         uses: actions/upload-release-asset@v1
