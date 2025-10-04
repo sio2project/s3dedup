@@ -3,10 +3,12 @@ FROM rustlang/rust:nightly-slim as builder
 
 WORKDIR /usr/src/s3dedup
 
-# Install build dependencies
+# Install build dependencies for vendored OpenSSL
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    perl \
+    make \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy manifests
@@ -17,6 +19,7 @@ COPY src ./src
 COPY tests ./tests
 
 # Build the application in release mode
+# Docker buildx uses QEMU to emulate the target architecture
 RUN cargo build --release
 
 # Runtime stage
