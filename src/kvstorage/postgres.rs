@@ -249,7 +249,7 @@ impl KVStorageTrait for Postgres {
     async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()> {
         let table = self.table_name("logical_size");
         let query = format!(
-            "INSERT INTO {} (bucket, hash, logical_size) VALUES ($1, $2, $3) ON CONFLICT (bucket, hash) DO UPDATE SET logical_size = $3",
+            "INSERT INTO {} (bucket, hash, logical_size, compressed_size) VALUES ($1, $2, $3, 0) ON CONFLICT (bucket, hash) DO UPDATE SET logical_size = $3",
             table
         );
         sqlx::query(&query)

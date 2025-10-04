@@ -1241,6 +1241,133 @@ async fn test_dedup_same_content_same_path_refcount() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_compressed_size_preserved() {
+    use tower::Service;
+
+    let (mut app, state) = create_test_app_with_state().await;
+
+    let content = b"Test content for compressed size tracking";
+
+    use s3dedup::routes::ft::storage_helpers;
+
+    // PUT a file
+    let compressed = storage_helpers::compress_gzip(content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(content);
+
+    let timestamp1 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp1 = urlencoding::encode(&timestamp1);
+
+    let put1 = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/compress/test.txt?last_modified={}",
+                    encoded_timestamp1
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", content.len().to_string())
+                .body(Body::from(compressed.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put1.status(), StatusCode::OK);
+
+    // Verify compressed_size is set correctly (should be size of gzipped data)
+    let compressed_size = state
+        .kvstorage
+        .lock()
+        .await
+        .get_compressed_size(&state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(
+        compressed_size,
+        compressed.len(),
+        "Compressed size should match the gzipped data size"
+    );
+
+    // Verify logical_size is set correctly
+    let logical_size = state
+        .kvstorage
+        .lock()
+        .await
+        .get_logical_size(&state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(
+        logical_size,
+        content.len(),
+        "Logical size should match the uncompressed data size"
+    );
+
+    // PUT same content to same path again with newer timestamp
+    // This calls set_logical_size again, which should NOT overwrite compressed_size
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let timestamp2 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp2 = urlencoding::encode(&timestamp2);
+
+    let put2 = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/compress/test.txt?last_modified={}",
+                    encoded_timestamp2
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", content.len().to_string())
+                .body(Body::from(compressed))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put2.status(), StatusCode::OK);
+
+    // Verify compressed_size is STILL preserved (bug fix test)
+    let compressed_size_after = state
+        .kvstorage
+        .lock()
+        .await
+        .get_compressed_size(&state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(
+        compressed_size_after, compressed_size,
+        "Compressed size should be preserved after second PUT with same content (bug fix)"
+    );
+
+    // Verify logical_size is still correct
+    let logical_size_after = state
+        .kvstorage
+        .lock()
+        .await
+        .get_logical_size(&state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(
+        logical_size_after, logical_size,
+        "Logical size should remain correct"
+    );
+
+    // Verify metrics query works correctly
+    let total_storage = state
+        .kvstorage
+        .lock()
+        .await
+        .get_total_storage_bytes(&state.bucket_name)
+        .await
+        .unwrap();
+    assert_eq!(
+        total_storage, compressed_size as i64,
+        "Total storage bytes should equal compressed size"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_list_files_empty() {
     let app = create_test_app().await;
 
