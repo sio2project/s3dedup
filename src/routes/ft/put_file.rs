@@ -258,13 +258,35 @@ pub async fn ft_put_file(
             .unwrap();
     }
 
-    // Increment reference count
-    if let Err(e) = state
-        .kvstorage
-        .lock()
-        .await
-        .increment_ref_count(&state.bucket_name, &digest)
-        .await
+    // If overwriting existing file, handle reference count updates
+    let old_hash = if current_modified > 0 {
+        state
+            .kvstorage
+            .lock()
+            .await
+            .get_ref_file(&state.bucket_name, path)
+            .await
+            .ok()
+    } else {
+        None
+    };
+
+    // Only increment reference count if we're creating a new link or changing to different content
+    let should_increment = match &old_hash {
+        Some(old) if !old.is_empty() && old == &digest => {
+            debug!("Overwriting {} with same content, keeping refcount", path);
+            false
+        }
+        _ => true,
+    };
+
+    if should_increment
+        && let Err(e) = state
+            .kvstorage
+            .lock()
+            .await
+            .increment_ref_count(&state.bucket_name, &digest)
+            .await
     {
         error!("Failed to increment ref count: {}", e);
         record_metrics("500");
@@ -274,46 +296,35 @@ pub async fn ft_put_file(
             .unwrap();
     }
 
-    // If overwriting existing file, handle deletion of old blob reference
-    if current_modified > 0 {
-        // Get old hash to decrement its reference count (acquire lock, get value, release)
-        let old_hash_result = state
+    // If overwriting with different content, decrement old blob reference
+    if let Some(old_hash) = old_hash
+        && !old_hash.is_empty() && old_hash != digest
+    {
+        info!(
+            "Overwriting existing link {}. Old hash: {}, new hash: {}",
+            path, old_hash, digest
+        );
+        // Decrement old reference count
+        let _ = state
             .kvstorage
             .lock()
             .await
-            .get_ref_file(&state.bucket_name, path)
+            .decrement_ref_count(&state.bucket_name, &old_hash)
             .await;
 
-        if let Ok(old_hash) = old_hash_result
-            && !old_hash.is_empty()
-            && old_hash != digest
+        // Check if we should delete the old blob
+        let old_ref_count_result = state
+            .kvstorage
+            .lock()
+            .await
+            .get_ref_count(&state.bucket_name, &old_hash)
+            .await;
+
+        if let Ok(old_ref_count) = old_ref_count_result
+            && old_ref_count <= 0
         {
-            info!(
-                "Overwriting existing link {}. Old hash: {}, new hash: {}",
-                path, old_hash, digest
-            );
-            // Decrement old reference count
-            let _ = state
-                .kvstorage
-                .lock()
-                .await
-                .decrement_ref_count(&state.bucket_name, &old_hash)
-                .await;
-
-            // Check if we should delete the old blob
-            let old_ref_count_result = state
-                .kvstorage
-                .lock()
-                .await
-                .get_ref_count(&state.bucket_name, &old_hash)
-                .await;
-
-            if let Ok(old_ref_count) = old_ref_count_result
-                && old_ref_count <= 0
-            {
-                debug!("Deleting unused blob: {}", old_hash);
-                let _ = state.s3storage.lock().await.delete_object(&old_hash).await;
-            }
+            debug!("Deleting unused blob: {}", old_hash);
+            let _ = state.s3storage.lock().await.delete_object(&old_hash).await;
         }
     }
 

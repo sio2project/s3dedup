@@ -1128,6 +1128,119 @@ async fn test_dedup_update_same_path() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_dedup_same_content_same_path_refcount() {
+    use tower::Service;
+
+    let (mut app, state) = create_test_app_with_state().await;
+
+    let content = b"Same content uploaded to same path";
+
+    use s3dedup::routes::ft::storage_helpers;
+
+    // PUT content first time
+    let compressed = storage_helpers::compress_gzip(content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(content);
+
+    let timestamp1 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp1 = urlencoding::encode(&timestamp1);
+
+    let put1 = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/refcount/same.txt?last_modified={}",
+                    encoded_timestamp1
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", content.len().to_string())
+                .body(Body::from(compressed.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put1.status(), StatusCode::OK);
+
+    // Verify refcount is 1
+    let refcount1 = state
+        .kvstorage
+        .lock()
+        .await
+        .get_ref_count(&state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(refcount1, 1, "Refcount should be 1 after first PUT");
+
+    // PUT same content to same path again (different timestamp to allow update)
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let timestamp2 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp2 = urlencoding::encode(&timestamp2);
+
+    let put2 = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/refcount/same.txt?last_modified={}",
+                    encoded_timestamp2
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", content.len().to_string())
+                .body(Body::from(compressed))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put2.status(), StatusCode::OK);
+
+    // Verify refcount is STILL 1 (not incremented)
+    let refcount2 = state
+        .kvstorage
+        .lock()
+        .await
+        .get_ref_count(&state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(
+        refcount2, 1,
+        "Refcount should still be 1 after PUTing same content to same path (bug fix)"
+    );
+
+    // Verify blob still exists in S3
+    let blob_exists = state
+        .s3storage
+        .lock()
+        .await
+        .object_exists(&sha256)
+        .await
+        .unwrap();
+    assert!(blob_exists, "Blob should still exist in S3");
+
+    // GET should return the content
+    let get_response = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/refcount/same.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get_response.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, content);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_list_files_empty() {
     let app = create_test_app().await;
 
