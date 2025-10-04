@@ -14,7 +14,7 @@ use tower::util::ServiceExt;
 // Mock filetracker server state
 #[derive(Clone)]
 struct MockFiletrackerState {
-    files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    files: Arc<Mutex<HashMap<String, (Vec<u8>, i64)>>>, // (data, timestamp)
 }
 
 impl MockFiletrackerState {
@@ -25,7 +25,8 @@ impl MockFiletrackerState {
     }
 
     async fn add_file(&self, path: &str, data: Vec<u8>) {
-        self.files.lock().await.insert(path.to_string(), data);
+        let timestamp = chrono::Utc::now().timestamp();
+        self.files.lock().await.insert(path.to_string(), (data, timestamp));
     }
 }
 
@@ -59,10 +60,12 @@ async fn mock_ft_get(
     let files = state.files.lock().await;
 
     match files.get(path) {
-        Some(data) => {
+        Some((data, timestamp)) => {
             // Compress the data with gzip
             let compressed = s3dedup::routes::ft::storage_helpers::compress_gzip(data).unwrap();
-            let last_modified = chrono::Utc::now().to_rfc2822();
+            let last_modified = chrono::DateTime::from_timestamp(*timestamp, 0)
+                .unwrap()
+                .to_rfc2822();
 
             Response::builder()
                 .status(StatusCode::OK)
@@ -89,13 +92,16 @@ async fn mock_ft_put(
     let path = path.strip_prefix('/').unwrap_or(&path);
     let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
 
+    let timestamp = chrono::Utc::now().timestamp();
     state
         .files
         .lock()
         .await
-        .insert(path.to_string(), bytes.to_vec());
+        .insert(path.to_string(), (bytes.to_vec(), timestamp));
 
-    let last_modified = chrono::Utc::now().to_rfc2822();
+    let last_modified = chrono::DateTime::from_timestamp(timestamp, 0)
+        .unwrap()
+        .to_rfc2822();
 
     Response::builder()
         .status(StatusCode::OK)
