@@ -100,6 +100,32 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+          # Determine if this is a prerelease (contains -dev, -alpha, -beta, -rc)
+          if [[ "$VERSION" =~ -dev|-alpha|-beta|-rc ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate Docker tags
+        id: tags
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          IS_PRERELEASE="${{ steps.version.outputs.is_prerelease }}"
+
+          # Always tag with version and latest-dev
+          TAGS="ghcr.io/sio2project/s3dedup:$VERSION"
+          TAGS="${TAGS}\nghcr.io/sio2project/s3dedup:latest-dev"
+
+          # Stable releases also get :latest
+          if [[ "$IS_PRERELEASE" == "false" ]]; then
+            TAGS="${TAGS}\nghcr.io/sio2project/s3dedup:latest"
+          fi
+
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$TAGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -107,8 +133,6 @@ jobs:
           file: ./Dockerfile.cross
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/sio2project/s3dedup:${{ steps.version.outputs.version }}
-            ghcr.io/sio2project/s3dedup:latest
+          tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
