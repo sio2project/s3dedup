@@ -51,7 +51,7 @@ jobs:
         sleep 10
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@nightly
+      uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt, clippy
 
