@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::Serialize;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -13,6 +14,19 @@ pub mod metrics;
 pub mod migration;
 pub mod routes;
 pub mod s3storage;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HealthStatus {
+    pub status: String,
+    pub uptime_seconds: i64,
+    pub checks: HealthChecks,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HealthChecks {
+    pub database: String,
+    pub s3: String,
+}
 
 pub struct AppState {
     pub bucket_name: String,
@@ -97,5 +111,61 @@ impl AppState {
         }
 
         Ok(())
+    }
+
+    /// Check health of database and S3 connectivity
+    pub async fn check_health(&self) -> HealthStatus {
+        let uptime_seconds = self.metrics.start_time.elapsed().as_secs() as i64;
+
+        // Check database connectivity
+        let db_status = match self
+            .kvstorage
+            .lock()
+            .await
+            .get_total_files(&self.bucket_name)
+            .await
+        {
+            Ok(_) => "ok".to_string(),
+            Err(e) => {
+                tracing::error!("Database health check failed: {}", e);
+                "error".to_string()
+            }
+        };
+
+        // Check S3 connectivity
+        let s3_status = match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            self.s3storage.lock().await.check_health(),
+        )
+        .await
+        {
+            Ok(Ok(_)) => "ok".to_string(),
+            Ok(Err(e)) => {
+                tracing::error!("S3 health check failed: {}", e);
+                "error".to_string()
+            }
+            Err(_) => {
+                tracing::error!("S3 health check timed out");
+                "timeout".to_string()
+            }
+        };
+
+        // Determine overall status
+        let status = if db_status == "ok" && s3_status == "ok" {
+            "ok".to_string()
+        } else if db_status == "error" || s3_status == "error" {
+            "error".to_string()
+        } else {
+            "degraded".to_string()
+        };
+
+        HealthStatus {
+            status,
+            uptime_seconds,
+            checks: HealthChecks {
+                database: db_status,
+                s3: s3_status,
+            },
+        }
     }
 }

@@ -163,7 +163,7 @@ lazy_static! {
 
 #[derive(Clone)]
 pub struct Metrics {
-    start_time: std::time::Instant,
+    pub start_time: std::time::Instant,
 }
 
 impl Metrics {
