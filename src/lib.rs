@@ -118,7 +118,13 @@ impl AppState {
         let uptime_seconds = self.metrics.start_time.elapsed().as_secs() as i64;
 
         // Check database connectivity
-        let db_status = match self.kvstorage.lock().await.get_total_files(&self.bucket_name).await {
+        let db_status = match self
+            .kvstorage
+            .lock()
+            .await
+            .get_total_files(&self.bucket_name)
+            .await
+        {
             Ok(_) => "ok".to_string(),
             Err(e) => {
                 tracing::error!("Database health check failed: {}", e);
@@ -129,8 +135,10 @@ impl AppState {
         // Check S3 connectivity
         let s3_status = match tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            self.s3storage.lock().await.check_health()
-        ).await {
+            self.s3storage.lock().await.check_health(),
+        )
+        .await
+        {
             Ok(Ok(_)) => "ok".to_string(),
             Ok(Err(e)) => {
                 tracing::error!("S3 health check failed: {}", e);

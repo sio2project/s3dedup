@@ -209,7 +209,11 @@ impl S3StorageTrait for MinIOClient {
 
     async fn check_health(&self) -> Result<()> {
         debug!("Health check: HEAD bucket {}", self.bucket);
-        self.client.head_bucket().bucket(&self.bucket).send().await?;
+        self.client
+            .head_bucket()
+            .bucket(&self.bucket)
+            .send()
+            .await?;
         debug!("Health check passed for bucket {}", self.bucket);
         Ok(())
     }
