@@ -31,6 +31,9 @@ pub(crate) trait S3StorageTrait {
         &self,
         continuation_token: Option<String>,
     ) -> Result<(Vec<String>, Option<String>)>;
+
+    /// Health check - lightweight operation to verify S3 connectivity
+    async fn check_health(&self) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -91,6 +94,13 @@ impl S3Storage {
         );
         match self {
             S3Storage::MinIO(client) => client.list_objects(continuation_token).await,
+        }
+    }
+
+    pub async fn check_health(&self) -> Result<()> {
+        debug!("Checking S3 health");
+        match self {
+            S3Storage::MinIO(client) => client.check_health().await,
         }
     }
 }

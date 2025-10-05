@@ -122,6 +122,7 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) {
                 "/metrics/json",
                 get(s3dedup::routes::metrics::metrics_json_handler),
             )
+            .route("/health", get(s3dedup::routes::metrics::health_handler))
             .layer(
                 // Logging middleware
                 TraceLayer::new_for_http()
@@ -376,6 +377,7 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
                 "/metrics/json",
                 get(s3dedup::routes::metrics::metrics_json_handler),
             )
+            .route("/health", get(s3dedup::routes::metrics::health_handler))
             .layer(
                 TraceLayer::new_for_http()
                     .make_span_with(DefaultMakeSpan::new().level(Level::INFO))

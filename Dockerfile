@@ -27,10 +27,11 @@ FROM debian:trixie-slim
 
 WORKDIR /app
 
-# Install runtime dependencies
+# Install runtime dependencies including curl for health checks
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the binary from builder
@@ -44,6 +45,10 @@ WORKDIR /app
 
 # Expose default port (can be overridden in config)
 EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
 
 # Run the server command with environment variables by default
 ENTRYPOINT ["s3dedup"]

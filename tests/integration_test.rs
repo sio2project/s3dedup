@@ -117,6 +117,12 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
                 .put(s3dedup::routes::ft::put_file::ft_put_file)
                 .delete(s3dedup::routes::ft::delete_file::ft_delete_file),
         )
+        .route("/health", get(s3dedup::routes::metrics::health_handler))
+        .route("/metrics", get(s3dedup::routes::metrics::metrics_handler))
+        .route(
+            "/metrics/json",
+            get(s3dedup::routes::metrics::metrics_json_handler),
+        )
         .with_state(app_state.clone());
 
     (router, app_state)
@@ -1639,4 +1645,61 @@ async fn test_list_files_with_timestamp() {
     assert_eq!(files.len(), 2);
     assert!(files.contains(&"test/old.txt"));
     assert!(files.contains(&"test/new.txt"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_health_endpoint_healthy() {
+    let app = create_test_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Should return 200 OK when healthy
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Verify JSON response structure
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let health_status: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    assert_eq!(health_status["status"], "ok");
+    assert!(health_status["uptime_seconds"].is_number());
+    assert_eq!(health_status["checks"]["database"], "ok");
+    assert_eq!(health_status["checks"]["s3"], "ok");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_health_endpoint_uptime() {
+    let app = create_test_app().await;
+
+    // Wait a bit to ensure uptime is > 0
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let health_status: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    let uptime = health_status["uptime_seconds"].as_i64().unwrap();
+    assert!(uptime >= 0, "Uptime should be non-negative");
 }

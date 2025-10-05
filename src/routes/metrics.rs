@@ -26,3 +26,16 @@ pub async fn metrics_json_handler(State(state): State<Arc<AppState>>) -> impl In
         ),
     }
 }
+
+pub async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let health_status = state.check_health().await;
+
+    // Return 503 if any checks failed
+    let status_code = if health_status.status == "ok" {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (status_code, Json(health_status))
+}
