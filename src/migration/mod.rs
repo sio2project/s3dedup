@@ -23,9 +23,10 @@ pub async fn migrate_all_files(
     info!("Starting offline migration from filetracker to s3dedup");
     info!("Max concurrency: {}", max_concurrency);
 
-    // List all files from filetracker (using far-future timestamp to get all files)
-    let timestamp = chrono::Utc::now().timestamp() + 100_000_000; // ~3 years in future
-    let files = filetracker_client.list_files("", timestamp).await?;
+    // List all files from filetracker
+    // Don't pass timestamp parameter to avoid triggering a bug in the original Filetracker server
+    // (it defaults to current time, which returns all files anyway)
+    let files = filetracker_client.list_files("", None).await?;
 
     let total_files = files.len();
     info!("Found {} files to migrate", total_files);

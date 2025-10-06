@@ -30,13 +30,23 @@ impl FiletrackerClient {
         Self { base_url, client }
     }
 
-    /// List all files under a path with modification time before the given timestamp
-    pub async fn list_files(&self, path: &str, timestamp: i64) -> Result<Vec<String>> {
-        // The original filetracker expects a Unix timestamp as a string, not RFC2822
-        let url = format!(
-            "{}/list/{}?last_modified={}",
-            self.base_url, path, timestamp
-        );
+    /// List all files under a path.
+    ///
+    /// The `timestamp` parameter is optional - if provided, only returns files with
+    /// modification time <= timestamp. If None, defaults to current time (returns all files).
+    ///
+    /// Note: The original Filetracker has a bug where providing a timestamp as a string
+    /// causes a TypeError. To avoid this bug, we don't send the parameter at all unless
+    /// explicitly needed, letting Filetracker default to current time.
+    pub async fn list_files(&self, path: &str, timestamp: Option<i64>) -> Result<Vec<String>> {
+        // Build URL - only include last_modified parameter if timestamp is provided
+        // This avoids triggering the bug in the original Filetracker server where
+        // string-to-int conversion is missing for the timestamp parameter
+        let url = if let Some(ts) = timestamp {
+            format!("{}/list/{}?last_modified={}", self.base_url, path, ts)
+        } else {
+            format!("{}/list/{}", self.base_url, path)
+        };
 
         debug!("Listing files from filetracker: {}", url);
 
