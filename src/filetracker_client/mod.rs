@@ -43,10 +43,7 @@ impl FiletrackerClient {
         // This avoids triggering the bug in the original Filetracker server where
         // string-to-int conversion is missing for the timestamp parameter
         let url = if let Some(ts) = timestamp {
-            format!(
-                "{}/list/{}?last_modified={}",
-                self.base_url, path, ts
-            )
+            format!("{}/list/{}?last_modified={}", self.base_url, path, ts)
         } else {
             format!("{}/list/{}", self.base_url, path)
         };
