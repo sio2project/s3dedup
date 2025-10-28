@@ -40,7 +40,7 @@ pub struct AppState {
 impl AppState {
     pub async fn new(config: &config::BucketConfig) -> Result<Arc<Self>> {
         let kvstorage = kvstorage::KVStorage::new(config).await?;
-        let locks = locks::LocksStorage::new(config.locks_type);
+        let locks = locks::LocksStorage::new_with_config(config.locks_type, config).await?;
         let s3storage = s3storage::S3Storage::new(config).await?;
         let metrics = Arc::new(metrics::Metrics::new());
         Ok(Arc::new(Self {
@@ -58,7 +58,7 @@ impl AppState {
         filetracker_url: String,
     ) -> Result<Arc<Self>> {
         let kvstorage = kvstorage::KVStorage::new(config).await?;
-        let locks = locks::LocksStorage::new(config.locks_type);
+        let locks = locks::LocksStorage::new_with_config(config.locks_type, config).await?;
         let s3storage = s3storage::S3Storage::new(config).await?;
         let filetracker_client = filetracker_client::FiletrackerClient::new(filetracker_url);
         let metrics = Arc::new(metrics::Metrics::new());
