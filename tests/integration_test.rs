@@ -16,7 +16,9 @@ async fn create_test_app() -> Router {
 // Helper to create test app with access to app state for S3 verification
 async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     use s3dedup::AppState;
-    use s3dedup::config::{BucketConfig, Config, KVStorageType, MinIOConfig, PostgresConfig, SQLiteConfig};
+    use s3dedup::config::{
+        BucketConfig, Config, KVStorageType, MinIOConfig, PostgresConfig, SQLiteConfig,
+    };
     use s3dedup::kvstorage::KVStorage;
     use s3dedup::locks::LocksStorage;
     use s3dedup::s3storage::S3Storage;
