@@ -119,30 +119,27 @@ pub async fn ft_delete_file(
             .unwrap();
     }
 
-    // 6. Decrement reference count
-    if let Err(e) = state
+    // 6. Decrement reference count atomically and get new count
+    let ref_count = match state
         .kvstorage
         .lock()
         .await
         .decrement_ref_count(&state.bucket_name, &hash)
         .await
     {
-        error!("Failed to decrement ref count: {}", e);
-        record_metrics("500");
-        return Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body("Failed to decrement ref count".to_string())
-            .unwrap();
-    }
+        Ok(count) => count,
+        Err(e) => {
+            error!("Failed to decrement ref count: {}", e);
+            record_metrics("500");
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body("Failed to decrement ref count".to_string())
+                .unwrap();
+        }
+    };
 
     // 7. Check if we should delete the blob (ref count is now 0)
-    let ref_count = state
-        .kvstorage
-        .lock()
-        .await
-        .get_ref_count(&state.bucket_name, &hash)
-        .await;
-    if ref_count.is_ok() && ref_count.unwrap() <= 0 {
+    if ref_count <= 0 {
         debug!("Deleting blob with hash: {}", hash);
         // Delete blob from S3
         if let Err(e) = state.s3storage.lock().await.delete_object(&hash).await {

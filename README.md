@@ -73,7 +73,8 @@ docker run -d \
 | `CLEANER_INTERVAL` | `3600` | Cleaner run interval (seconds) |
 | `CLEANER_BATCH_SIZE` | `1000` | Cleaner batch size |
 | `CLEANER_MAX_DELETES` | `10000` | Max deletions per cleaner run |
-| `FILETRACKER_URL` | - | Old Filetracker URL for live migration |
+| `FILETRACKER_URL` | - | Old Filetracker URL for live migration (HTTP fallback) |
+| `FILETRACKER_V1_DIR` | - | V1 Filetracker directory for filesystem-based migration |
 
 For PostgreSQL, use:
 ```
@@ -103,13 +104,15 @@ Environment variables override config file values.
 
 ## Migration
 
-> **📖 Complete Migration Guide**: See [docs/migration.md](docs/migration.md) for comprehensive migration instructions from Filetracker v2.1+
->
-> _Note: Migration from Filetracker v1.x will be supported in a future release._
+> **📖 Complete Migration Guide**: See [docs/migration.md](docs/migration.md) for comprehensive migration instructions
 
-### Quick Start: Offline Migration
+s3dedup supports migration from both Filetracker V1 (filesystem-based) and V2 (HTTP-based) servers.
 
-Migrate all files from old Filetracker while the proxy is offline:
+### V2 Migration (Filetracker 2.1+)
+
+#### Offline Migration
+
+Migrate all files from Filetracker V2 via HTTP while the proxy is offline:
 
 ```bash
 docker run --rm \
@@ -121,7 +124,7 @@ docker run --rm \
   --max-concurrency 10
 ```
 
-### Quick Start: Live Migration (Zero Downtime)
+#### Live Migration (Zero Downtime)
 
 Run the proxy while migrating in the background:
 
@@ -139,10 +142,72 @@ docker run -d \
   live-migrate --env --max-concurrency 10
 ```
 
-During live migration:
+During V2 live migration:
 - **GET**: Falls back to old Filetracker if file not found, migrates on-the-fly
 - **PUT**: Writes to both s3dedup and old Filetracker
 - **DELETE**: Deletes from both systems
+
+### V1 Migration (Legacy Filetracker)
+
+V1 Filetracker stores files directly on the filesystem and serves them via a simple HTTP protocol. 
+The key difference from V2 is that V1 doesn't have a `/list/` endpoint for file discovery, so migration uses 
+filesystem walking.
+
+**Performance**: V1 migration uses chunked processing to handle millions of files efficiently without loading 
+all file paths into memory. The filesystem is scanned in chunks of 10,000 files, keeping memory usage constant 
+regardless of total file count.
+
+#### Offline Migration
+
+Migrate from V1 filesystem (requires access to `$FILETRACKER_DIR`):
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -v s3dedup-data:/app/data \
+  -v /path/to/filetracker:/filetracker:ro \
+  ghcr.io/sio2project/s3dedup:latest \
+  migrate-v1 --env \
+  --v1-directory /filetracker \
+  --max-concurrency 10
+```
+
+#### Live Migration
+
+Run the proxy while migrating from V1 in the background:
+
+```bash
+# With both filesystem access and HTTP fallback
+docker run -d \
+  --name s3dedup \
+  -p 8080:8080 \
+  -v s3dedup-data:/app/data \
+  -v /path/to/filetracker:/filetracker:ro \
+  --env-file .env \
+  ghcr.io/sio2project/s3dedup:latest \
+  live-migrate-v1 --env \
+  --v1-directory /filetracker \
+  --filetracker-url http://old-filetracker-v1:8000 \
+  --max-concurrency 10
+
+# Or with HTTP fallback only (no filesystem access)
+docker run -d \
+  --name s3dedup \
+  -p 8080:8080 \
+  -v s3dedup-data:/app/data \
+  --env-file .env \
+  ghcr.io/sio2project/s3dedup:latest \
+  live-migrate-v1 --env \
+  --filetracker-url http://old-filetracker-v1:8000 \
+  --max-concurrency 10
+```
+
+During V1 live migration:
+- **Background filesystem migration**: If `--v1-directory` is provided, filesystem is scanned in chunks to migrate all files
+  - Chunked processing handles millions of files with constant memory usage
+- **HTTP fallback**: If `--filetracker-url` is provided, GET requests fall back to V1 server if file not found
+  - Automatically migrates files on first access
+- **New requests**: Server accepts PUT/GET/DELETE requests normally during migration
 
 For detailed migration strategies, performance tuning, troubleshooting, and rollback procedures, see the [Migration Guide](docs/migration.md).
 

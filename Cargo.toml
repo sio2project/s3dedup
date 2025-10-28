@@ -33,3 +33,7 @@ anyhow = "1.0.100"
 parking_lot = { version = "0.12.4", features = ["arc_lock", "send_guard"] }
 async-trait = "0.1.77"
 futures-util = "0.3.31"
+walkdir = "2.5.0"
+
+[dev-dependencies]
+tempfile = "3.15.0"

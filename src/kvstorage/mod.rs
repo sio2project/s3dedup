@@ -28,12 +28,14 @@ pub(crate) trait KVStorageTrait {
         self.set_ref_count(bucket, hash, cnt + 1).await
     }
 
-    async fn decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<()> {
+    async fn decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i64> {
         let cnt = self.get_ref_count(bucket, hash).await?;
         if cnt == 0 {
-            return Ok(());
+            return Ok(0);
         }
-        self.set_ref_count(bucket, hash, cnt - 1).await
+        let new_count = cnt - 1;
+        self.set_ref_count(bucket, hash, new_count).await?;
+        Ok(new_count as i64)
     }
 
     async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64>;
@@ -181,8 +183,9 @@ impl KVStorage {
     /**
      * Decrement the reference count for a hash.
      * If the reference count is already 0, do nothing.
+     * Returns the new reference count after decrementing.
      */
-    pub async fn decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<()> {
+    pub async fn decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i64> {
         debug!(
             "Decrementing ref count for bucket: {}, hash: {}",
             bucket, hash

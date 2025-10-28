@@ -305,22 +305,15 @@ pub async fn ft_put_file(
             "Overwriting existing link {}. Old hash: {}, new hash: {}",
             path, old_hash, digest
         );
-        // Decrement old reference count
-        let _ = state
+        // Decrement old reference count atomically and get new count
+        let old_ref_count_result = state
             .kvstorage
             .lock()
             .await
             .decrement_ref_count(&state.bucket_name, &old_hash)
             .await;
 
-        // Check if we should delete the old blob
-        let old_ref_count_result = state
-            .kvstorage
-            .lock()
-            .await
-            .get_ref_count(&state.bucket_name, &old_hash)
-            .await;
-
+        // Delete old blob if no longer referenced
         if let Ok(old_ref_count) = old_ref_count_result
             && old_ref_count <= 0
         {

@@ -43,6 +43,10 @@ pub struct BucketConfig {
     /// Optional filetracker URL for live migration mode
     #[serde(default)]
     pub filetracker_url: Option<String>,
+
+    /// Optional V1 filetracker directory for filesystem-based migration
+    #[serde(default)]
+    pub filetracker_v1_dir: Option<String>,
 }
 
 impl Config {
@@ -251,6 +255,7 @@ impl BucketConfig {
                     .unwrap_or(10000),
             },
             filetracker_url: std::env::var("FILETRACKER_URL").ok(),
+            filetracker_v1_dir: std::env::var("FILETRACKER_V1_DIR").ok(),
         })
     }
 }
