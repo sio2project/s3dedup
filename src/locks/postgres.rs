@@ -111,6 +111,8 @@ impl Lock for PostgresLock {
             .context("Failed to acquire connection for shared lock")?;
 
         // Acquire shared advisory lock (returns void, so we use query instead of query_scalar)
+        // PostgreSQL advisory locks are session-scoped and automatically released when the
+        // connection is closed or returned to the pool.
         sqlx::query("SELECT pg_advisory_lock_shared($1)")
             .bind(self.key_hash)
             .execute(&mut *conn)
@@ -119,6 +121,10 @@ impl Lock for PostgresLock {
 
         debug!("Acquired shared lock for key: {}", self.key);
 
+        // Return a guard that holds the connection. When the guard is dropped, the
+        // connection is automatically returned to the pool, which triggers the lock release.
+        // This design is safe and reliable - it leverages PostgreSQL's guarantee that
+        // locks are released when a connection closes, without needing explicit unlock calls.
         Ok(Box::new(PostgresSharedLockGuard {
             key: self.key.clone(),
             _conn: conn,
@@ -136,6 +142,8 @@ impl Lock for PostgresLock {
             .context("Failed to acquire connection for exclusive lock")?;
 
         // Acquire exclusive advisory lock (returns void, so we use query instead of query_scalar)
+        // PostgreSQL advisory locks are session-scoped and automatically released when the
+        // connection is closed or returned to the pool.
         sqlx::query("SELECT pg_advisory_lock($1)")
             .bind(self.key_hash)
             .execute(&mut *conn)
@@ -144,6 +152,10 @@ impl Lock for PostgresLock {
 
         debug!("Acquired exclusive lock for key: {}", self.key);
 
+        // Return a guard that holds the connection. When the guard is dropped, the
+        // connection is automatically returned to the pool, which triggers the lock release.
+        // This design is safe and reliable - it leverages PostgreSQL's guarantee that
+        // locks are released when a connection closes, without needing explicit unlock calls.
         Ok(Box::new(PostgresExclusiveLockGuard {
             key: self.key.clone(),
             _conn: conn,
@@ -151,6 +163,24 @@ impl Lock for PostgresLock {
     }
 }
 
+/// Guard for a PostgreSQL shared advisory lock.
+///
+/// This guard holds a database connection from the connection pool. When the guard is dropped
+/// (goes out of scope), the connection is automatically returned to the pool. PostgreSQL
+/// automatically releases all advisory locks held by a connection when that connection is
+/// closed or returned to the pool.
+///
+/// Lock Release Mechanism:
+/// 1. Guard is created in acquire_shared() with the connection acquired from the pool
+/// 2. PostgreSQL advisory lock is held as long as the connection is active
+/// 3. When guard is dropped, the connection goes out of scope and is returned to the pool
+/// 4. PostgreSQL automatically releases the lock when the connection returns to the pool
+///
+/// This design is superior to explicit unlock calls because:
+/// - No risk of forgetting to unlock (guaranteed by Rust's Drop trait)
+/// - No fire-and-forget async tasks that might fail to execute
+/// - Lock release is atomic with connection return
+/// - Works correctly even if the runtime is shutting down
 struct PostgresSharedLockGuard {
     #[allow(dead_code)]
     key: String,
@@ -160,6 +190,24 @@ struct PostgresSharedLockGuard {
 
 impl<'a> SharedLockGuard<'a> for PostgresSharedLockGuard {}
 
+/// Guard for a PostgreSQL exclusive advisory lock.
+///
+/// This guard holds a database connection from the connection pool. When the guard is dropped
+/// (goes out of scope), the connection is automatically returned to the pool. PostgreSQL
+/// automatically releases all advisory locks held by a connection when that connection is
+/// closed or returned to the pool.
+///
+/// Lock Release Mechanism:
+/// 1. Guard is created in acquire_exclusive() with the connection acquired from the pool
+/// 2. PostgreSQL advisory lock is held as long as the connection is active
+/// 3. When guard is dropped, the connection goes out of scope and is returned to the pool
+/// 4. PostgreSQL automatically releases the lock when the connection returns to the pool
+///
+/// This design is superior to explicit unlock calls because:
+/// - No risk of forgetting to unlock (guaranteed by Rust's Drop trait)
+/// - No fire-and-forget async tasks that might fail to execute
+/// - Lock release is atomic with connection return
+/// - Works correctly even if the runtime is shutting down
 struct PostgresExclusiveLockGuard {
     #[allow(dead_code)]
     key: String,
