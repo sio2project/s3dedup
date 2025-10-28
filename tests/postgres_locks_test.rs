@@ -7,20 +7,37 @@ mod postgres_locks_tests {
     //!
     //! NOTE: These tests require a running PostgreSQL instance with the DATABASE_URL environment variable set.
     //! If DATABASE_URL is not set, the tests are skipped.
-    use s3dedup::config::{BucketConfig, KVStorageType, MinIOConfig, PostgresConfig};
+    use s3dedup::config::{BucketConfig, Config, KVStorageType, MinIOConfig, PostgresConfig};
     use s3dedup::locks::{LocksStorage, LocksType};
     use std::sync::Arc;
 
-    fn get_postgres_config() -> Option<BucketConfig> {
+    fn get_postgres_config() -> Option<Config> {
         // Only run PostgreSQL tests if DATABASE_URL is set
         if std::env::var("DATABASE_URL").is_err() {
             return None;
         }
 
-        Some(BucketConfig {
+        let bucket_config = BucketConfig {
             name: "test-postgres-locks".to_string(),
             address: "127.0.0.1".to_string(),
             port: 3001,
+            s3storage_type: s3dedup::s3storage::S3StorageType::MinIO,
+            minio: Some(MinIOConfig {
+                endpoint: "http://localhost:9000".to_string(),
+                access_key: "minioadmin".to_string(),
+                secret_key: "minioadmin".to_string(),
+                force_path_style: true,
+            }),
+            cleaner: s3dedup::cleaner::CleanerConfig::default(),
+            filetracker_url: None,
+            filetracker_v1_dir: None,
+        };
+
+        Some(Config {
+            logging: s3dedup::logging::LoggingConfig {
+                level: "info".to_string(),
+                json: false,
+            },
             kvstorage_type: KVStorageType::Postgres,
             sqlite: None,
             postgres: Some(PostgresConfig {
@@ -32,16 +49,7 @@ mod postgres_locks_tests {
                 pool_size: 10,
             }),
             locks_type: LocksType::Postgres,
-            s3storage_type: s3dedup::s3storage::S3StorageType::MinIO,
-            minio: Some(MinIOConfig {
-                endpoint: "http://localhost:9000".to_string(),
-                access_key: "minioadmin".to_string(),
-                secret_key: "minioadmin".to_string(),
-                force_path_style: true,
-            }),
-            cleaner: s3dedup::cleaner::CleanerConfig::default(),
-            filetracker_url: None,
-            filetracker_v1_dir: None,
+            bucket: bucket_config,
         })
     }
 

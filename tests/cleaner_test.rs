@@ -1,5 +1,5 @@
 use s3dedup::cleaner::{Cleaner, CleanerConfig};
-use s3dedup::config::BucketConfig;
+use s3dedup::config::Config;
 use s3dedup::kvstorage::KVStorage;
 use s3dedup::s3storage::S3Storage;
 use std::sync::Arc;
@@ -7,29 +7,35 @@ use tokio::sync::Mutex;
 
 // Helper to check if MinIO is available
 async fn is_minio_available() -> bool {
-    let bucket_config = create_test_bucket_config("health_check");
-    S3Storage::new(&bucket_config).await.is_ok()
+    let config = create_test_config("health_check");
+    S3Storage::new(&config.bucket).await.is_ok()
 }
 
-// Helper to create test bucket config
-fn create_test_bucket_config(bucket_name: &str) -> BucketConfig {
+// Helper to create test config
+fn create_test_config(bucket_name: &str) -> Config {
     let config_str = format!(
         r#"{{
-            "name": "{}",
-            "address": "0.0.0.0",
-            "port": 3000,
+            "logging": {{
+                "level": "info",
+                "json": false
+            }},
             "kvstorage_type": "sqlite",
             "sqlite": {{
                 "path": ":memory:",
                 "pool_size": 5
             }},
             "locks_type": "memory",
-            "s3storage_type": "minio",
-            "minio": {{
-                "endpoint": "http://localhost:9000",
-                "access_key": "minioadmin",
-                "secret_key": "minioadmin",
-                "force_path_style": true
+            "bucket": {{
+                "name": "{}",
+                "address": "0.0.0.0",
+                "port": 3000,
+                "s3storage_type": "minio",
+                "minio": {{
+                    "endpoint": "http://localhost:9000",
+                    "access_key": "minioadmin",
+                    "secret_key": "minioadmin",
+                    "force_path_style": true
+                }}
             }}
         }}"#,
         bucket_name
@@ -46,10 +52,10 @@ async fn setup_test_env(
     Arc<Mutex<Box<S3Storage>>>,
     String,
 ) {
-    let bucket_config = create_test_bucket_config(bucket_name);
+    let config = create_test_config(bucket_name);
 
-    let kvstorage = KVStorage::new(&bucket_config).await.unwrap();
-    let s3storage = S3Storage::new(&bucket_config).await.unwrap();
+    let kvstorage = KVStorage::new(&config).await.unwrap();
+    let s3storage = S3Storage::new(&config.bucket).await.unwrap();
 
     let kvstorage = Arc::new(Mutex::new(kvstorage));
     let s3storage = Arc::new(Mutex::new(s3storage));
