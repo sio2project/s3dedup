@@ -1,7 +1,8 @@
 use lazy_static::lazy_static;
 use prometheus::{
-    Encoder, Gauge, HistogramVec, IntCounterVec, IntGauge, TextEncoder, register_gauge,
-    register_histogram_vec, register_int_counter_vec, register_int_gauge,
+    Encoder, Gauge, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, TextEncoder,
+    register_gauge, register_histogram_vec, register_int_counter_vec, register_int_gauge,
+    register_int_gauge_vec,
 };
 use serde_json::{Value, json};
 
@@ -184,6 +185,14 @@ lazy_static! {
         "s3dedup_db_connection_acquire_errors_total",
         "Total failed database connection acquisitions",
         &["storage_type", "reason"]
+    )
+    .unwrap();
+
+    // Version tracking
+    pub static ref INSTANCE_VERSION: IntGaugeVec = register_int_gauge_vec!(
+        "s3dedup_instance_version_info",
+        "Instance version information (value is always 1, use label 'version' for version string)",
+        &["version"]
     )
     .unwrap();
 }

@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 use s3dedup::AppState;
 use s3dedup::cleaner::Cleaner;
 use s3dedup::config;
+use s3dedup::metrics;
 use s3dedup::routes::ft::delete_file::ft_delete_file;
 use s3dedup::routes::ft::get_file::ft_get_file;
 use s3dedup::routes::ft::list_files::ft_list_files;
@@ -179,6 +180,18 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) -> anyhow:
         .setup()
         .await
         .context("Failed to setup KV storage")?;
+
+    // Store instance version
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .set_version(&config.bucket.name, env!("CARGO_PKG_VERSION"))
+        .await
+        .context("Failed to store instance version")?;
+    metrics::INSTANCE_VERSION
+        .with_label_values(&[env!("CARGO_PKG_VERSION")])
+        .set(1);
 
     start_background_tasks(app_state.clone(), &config.bucket);
 

@@ -128,6 +128,13 @@ pub(crate) trait KVStorageTrait {
     /// Get total logical bytes (sum of logical_size * refcount for all blobs - what storage would be without dedup)
     async fn get_total_logical_bytes(&mut self, bucket: &str) -> Result<i64>;
 
+    // Version tracking
+    /// Get the stored instance version for a bucket
+    async fn get_version(&mut self, bucket: &str) -> Result<Option<String>>;
+
+    /// Store the instance version for a bucket
+    async fn set_version(&mut self, bucket: &str, version: &str) -> Result<()>;
+
     /// Get deduplicated bytes saved (sum of (refcount - 1) * logical_size for all blobs)
     async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64>;
 
@@ -518,6 +525,20 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_pool_stats(),
             KVStorage::SQLite(storage) => storage.get_pool_stats(),
+        }
+    }
+
+    pub async fn get_version(&mut self, bucket: &str) -> Result<Option<String>> {
+        match self {
+            KVStorage::Postgres(storage) => storage.get_version(bucket).await,
+            KVStorage::SQLite(storage) => storage.get_version(bucket).await,
+        }
+    }
+
+    pub async fn set_version(&mut self, bucket: &str, version: &str) -> Result<()> {
+        match self {
+            KVStorage::Postgres(storage) => storage.set_version(bucket, version).await,
+            KVStorage::SQLite(storage) => storage.set_version(bucket, version).await,
         }
     }
 }

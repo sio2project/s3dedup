@@ -122,6 +122,15 @@ impl KVStorageTrait for Postgres {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS version (
+                bucket VARCHAR(255) NOT NULL PRIMARY KEY,
+                version VARCHAR(255) NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -539,5 +548,26 @@ impl KVStorageTrait for Postgres {
         let idle_connections = self.pool.num_idle() as u32;
         let active_connections = total_connections.saturating_sub(idle_connections);
         (active_connections, idle_connections)
+    }
+
+    async fn get_version(&mut self, bucket: &str) -> Result<Option<String>> {
+        let result: Option<(String,)> =
+            sqlx::query_as("SELECT version FROM version WHERE bucket = $1")
+                .bind(bucket)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(result.map(|r| r.0))
+    }
+
+    async fn set_version(&mut self, bucket: &str, version: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO version (bucket, version) VALUES ($1, $2) \
+             ON CONFLICT (bucket) DO UPDATE SET version = EXCLUDED.version",
+        )
+        .bind(bucket)
+        .bind(version)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
