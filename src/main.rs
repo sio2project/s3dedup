@@ -1,3 +1,4 @@
+use anyhow::Context;
 use axum::Router;
 use axum::routing::get;
 use clap::{Parser, Subcommand};
@@ -97,9 +98,12 @@ enum Commands {
     },
 }
 
-async fn run_server(addr: SocketAddr, app: Router) {
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+async fn run_server(addr: SocketAddr, app: Router) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .context("Failed to bind TCP listener")?;
+    axum::serve(listener, app).await.context("Server error")?;
+    Ok(())
 }
 
 /// Create the router with all Filetracker routes
@@ -154,27 +158,36 @@ fn start_background_tasks(app_state: Arc<AppState>, bucket_config: &config::Buck
     });
 }
 
-async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) {
+async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) -> anyhow::Result<()> {
     let config = if use_env {
-        config::Config::from_env().unwrap()
+        config::Config::from_env().context("Failed to load configuration from environment")?
     } else {
-        config::Config::new(config_path.unwrap_or("config.json")).unwrap()
+        config::Config::new(config_path.unwrap_or("config.json"))
+            .context("Failed to load configuration from file")?
     };
-    s3dedup::logging::setup(&config.logging).unwrap();
+    s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting server for bucket: {}", config.bucket.name);
 
-    let app_state = AppState::new(&config).await.unwrap();
-    app_state.kvstorage.lock().await.setup().await.unwrap();
+    let app_state = AppState::new(&config)
+        .await
+        .context("Failed to initialize app state")?;
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .setup()
+        .await
+        .context("Failed to setup KV storage")?;
 
     start_background_tasks(app_state.clone(), &config.bucket);
 
     let app = create_router(app_state);
     let address: SocketAddr = format!("{}:{}", config.bucket.address, config.bucket.port)
         .parse()
-        .unwrap();
+        .context("Failed to parse socket address")?;
 
-    run_server(address, app).await;
+    run_server(address, app).await
 }
 
 async fn run_migrate(
@@ -182,13 +195,14 @@ async fn run_migrate(
     use_env: bool,
     filetracker_url: &str,
     max_concurrency: usize,
-) {
+) -> anyhow::Result<()> {
     let config = if use_env {
-        config::Config::from_env().unwrap()
+        config::Config::from_env().context("Failed to load configuration from environment")?
     } else {
-        config::Config::new(config_path.unwrap_or("config.json")).unwrap()
+        config::Config::new(config_path.unwrap_or("config.json"))
+            .context("Failed to load configuration from file")?
     };
-    s3dedup::logging::setup(&config.logging).unwrap();
+    s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting offline migration from old filetracker to s3dedup");
     if use_env {
@@ -201,19 +215,18 @@ async fn run_migrate(
     info!("Max concurrency: {}", max_concurrency);
 
     // Initialize AppState
-    let app_state = match AppState::new(&config).await {
-        Ok(state) => state,
-        Err(e) => {
-            error!("Failed to initialize app state: {}", e);
-            return;
-        }
-    };
+    let app_state = AppState::new(&config)
+        .await
+        .context("Failed to initialize app state")?;
 
     // Setup KV storage
-    if let Err(e) = app_state.kvstorage.lock().await.setup().await {
-        error!("Failed to setup KV storage: {}", e);
-        return;
-    }
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .setup()
+        .await
+        .context("Failed to setup KV storage")?;
 
     // Initialize filetracker client
     let filetracker_client = Arc::new(s3dedup::filetracker_client::FiletrackerClient::new(
@@ -221,26 +234,23 @@ async fn run_migrate(
     ));
 
     // Run migration with specified concurrency
-    match s3dedup::migration::migrate_all_files(filetracker_client, app_state, max_concurrency)
-        .await
-    {
-        Ok(stats) => {
-            info!("Migration completed successfully");
-            info!("Total files: {}", stats.total_files);
-            info!("Migrated: {}", stats.migrated);
-            info!("Skipped: {}", stats.skipped);
-            info!("Failed: {}", stats.failed);
+    let stats =
+        s3dedup::migration::migrate_all_files(filetracker_client, app_state, max_concurrency)
+            .await
+            .context("Migration failed")?;
 
-            if stats.failed > 0 {
-                warn!("{} files failed to migrate", stats.failed);
-                std::process::exit(1);
-            }
-        }
-        Err(e) => {
-            error!("Migration failed: {}", e);
-            std::process::exit(1);
-        }
+    info!("Migration completed successfully");
+    info!("Total files: {}", stats.total_files);
+    info!("Migrated: {}", stats.migrated);
+    info!("Skipped: {}", stats.skipped);
+    info!("Failed: {}", stats.failed);
+
+    if stats.failed > 0 {
+        warn!("{} files failed to migrate", stats.failed);
+        std::process::exit(1);
     }
+
+    Ok(())
 }
 
 async fn run_migrate_v1(
@@ -248,13 +258,14 @@ async fn run_migrate_v1(
     use_env: bool,
     v1_directory: &str,
     max_concurrency: usize,
-) {
+) -> anyhow::Result<()> {
     let config = if use_env {
-        config::Config::from_env().unwrap()
+        config::Config::from_env().context("Failed to load configuration from environment")?
     } else {
-        config::Config::new(config_path.unwrap_or("config.json")).unwrap()
+        config::Config::new(config_path.unwrap_or("config.json"))
+            .context("Failed to load configuration from file")?
     };
-    s3dedup::logging::setup(&config.logging).unwrap();
+    s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting offline V1 filesystem migration to s3dedup");
     if use_env {
@@ -267,50 +278,51 @@ async fn run_migrate_v1(
     info!("Max concurrency: {}", max_concurrency);
 
     // Initialize AppState
-    let app_state = match AppState::new(&config).await {
-        Ok(state) => state,
-        Err(e) => {
-            error!("Failed to initialize app state: {}", e);
-            return;
-        }
-    };
+    let app_state = AppState::new(&config)
+        .await
+        .context("Failed to initialize app state")?;
 
     // Setup KV storage
-    if let Err(e) = app_state.kvstorage.lock().await.setup().await {
-        error!("Failed to setup KV storage: {}", e);
-        return;
-    }
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .setup()
+        .await
+        .context("Failed to setup KV storage")?;
 
     // Run V1 filesystem migration
-    match s3dedup::migration::migrate_all_files_from_v1_fs(v1_directory, app_state, max_concurrency)
-        .await
-    {
-        Ok(stats) => {
-            info!("V1 migration completed successfully");
-            info!("Total files: {}", stats.total_files);
-            info!("Migrated: {}", stats.migrated);
-            info!("Skipped: {}", stats.skipped);
-            info!("Failed: {}", stats.failed);
+    let stats =
+        s3dedup::migration::migrate_all_files_from_v1_fs(v1_directory, app_state, max_concurrency)
+            .await
+            .context("V1 migration failed")?;
 
-            if stats.failed > 0 {
-                warn!("{} files failed to migrate", stats.failed);
-                std::process::exit(1);
-            }
-        }
-        Err(e) => {
-            error!("V1 migration failed: {}", e);
-            std::process::exit(1);
-        }
+    info!("V1 migration completed successfully");
+    info!("Total files: {}", stats.total_files);
+    info!("Migrated: {}", stats.migrated);
+    info!("Skipped: {}", stats.skipped);
+    info!("Failed: {}", stats.failed);
+
+    if stats.failed > 0 {
+        warn!("{} files failed to migrate", stats.failed);
+        std::process::exit(1);
     }
+
+    Ok(())
 }
 
-async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurrency: usize) {
+async fn run_live_migrate(
+    config_path: Option<&str>,
+    use_env: bool,
+    max_concurrency: usize,
+) -> anyhow::Result<()> {
     let config = if use_env {
-        config::Config::from_env().unwrap()
+        config::Config::from_env().context("Failed to load configuration from environment")?
     } else {
-        config::Config::new(config_path.unwrap_or("config.json")).unwrap()
+        config::Config::new(config_path.unwrap_or("config.json"))
+            .context("Failed to load configuration from file")?
     };
-    s3dedup::logging::setup(&config.logging).unwrap();
+    s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting live migration from old filetracker to s3dedup");
     if use_env {
@@ -341,19 +353,30 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
     let app_state = if let Some(url) = filetracker_url {
         AppState::new_with_filetracker(&config, url.clone())
             .await
-            .unwrap()
+            .context("Failed to initialize app state with filetracker")?
     } else {
-        AppState::new(&config).await.unwrap()
+        AppState::new(&config)
+            .await
+            .context("Failed to initialize app state")?
     };
 
-    app_state.kvstorage.lock().await.setup().await.unwrap();
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .setup()
+        .await
+        .context("Failed to setup KV storage")?;
 
     start_background_tasks(app_state.clone(), &config.bucket);
 
     // Start background migration worker if filetracker URL is configured
     if filetracker_url.is_some() {
         let migration_app_state = app_state.clone();
-        let migration_client = app_state.filetracker_client.clone().unwrap();
+        let migration_client = app_state
+            .filetracker_client
+            .clone()
+            .context("Filetracker client not available")?;
         tokio::spawn(async move {
             s3dedup::migration::live_migration_worker(
                 migration_client,
@@ -367,9 +390,9 @@ async fn run_live_migrate(config_path: Option<&str>, use_env: bool, max_concurre
     let app = create_router(app_state);
     let address: SocketAddr = format!("{}:{}", config.bucket.address, config.bucket.port)
         .parse()
-        .unwrap();
+        .context("Failed to parse socket address")?;
 
-    run_server(address, app).await;
+    run_server(address, app).await
 }
 
 async fn run_live_migrate_v1(
@@ -378,13 +401,14 @@ async fn run_live_migrate_v1(
     v1_directory: Option<&str>,
     filetracker_url: Option<&str>,
     max_concurrency: usize,
-) {
+) -> anyhow::Result<()> {
     let config = if use_env {
-        config::Config::from_env().unwrap()
+        config::Config::from_env().context("Failed to load configuration from environment")?
     } else {
-        config::Config::new(config_path.unwrap_or("config.json")).unwrap()
+        config::Config::new(config_path.unwrap_or("config.json"))
+            .context("Failed to load configuration from file")?
     };
-    s3dedup::logging::setup(&config.logging).unwrap();
+    s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting live migration from V1 filetracker to s3dedup");
     if use_env {
@@ -415,11 +439,19 @@ async fn run_live_migrate_v1(
         info!("Creating app state with V1 filetracker client for HTTP fallback");
         AppState::new_with_filetracker(&config, ft_url.clone())
             .await
-            .unwrap()
+            .context("Failed to initialize app state with filetracker")?
     } else {
-        AppState::new(&config).await.unwrap()
+        AppState::new(&config)
+            .await
+            .context("Failed to initialize app state")?
     };
-    app_state.kvstorage.lock().await.setup().await.unwrap();
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .setup()
+        .await
+        .context("Failed to setup KV storage")?;
 
     start_background_tasks(app_state.clone(), &config.bucket);
 
@@ -462,18 +494,18 @@ async fn run_live_migrate_v1(
     let app = create_router(app_state);
     let address: SocketAddr = format!("{}:{}", config.bucket.address, config.bucket.port)
         .parse()
-        .unwrap();
+        .context("Failed to parse socket address")?;
 
-    run_server(address, app).await;
+    run_server(address, app).await
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Server { config, env } => {
-            run_s3dedup_server(config.as_deref(), env).await;
+            run_s3dedup_server(config.as_deref(), env).await?;
         }
         Commands::Migrate {
             config,
@@ -481,14 +513,14 @@ async fn main() {
             filetracker_url,
             max_concurrency,
         } => {
-            run_migrate(config.as_deref(), env, &filetracker_url, max_concurrency).await;
+            run_migrate(config.as_deref(), env, &filetracker_url, max_concurrency).await?;
         }
         Commands::LiveMigrate {
             config,
             env,
             max_concurrency,
         } => {
-            run_live_migrate(config.as_deref(), env, max_concurrency).await;
+            run_live_migrate(config.as_deref(), env, max_concurrency).await?;
         }
         Commands::MigrateV1 {
             config,
@@ -496,7 +528,7 @@ async fn main() {
             v1_directory,
             max_concurrency,
         } => {
-            run_migrate_v1(config.as_deref(), env, &v1_directory, max_concurrency).await;
+            run_migrate_v1(config.as_deref(), env, &v1_directory, max_concurrency).await?;
         }
         Commands::LiveMigrateV1 {
             config,
@@ -512,7 +544,9 @@ async fn main() {
                 filetracker_url.as_deref(),
                 max_concurrency,
             )
-            .await;
+            .await?;
         }
     }
+
+    Ok(())
 }

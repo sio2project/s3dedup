@@ -36,8 +36,12 @@ pub trait ExclusiveLockGuard<'a> {}
 #[async_trait]
 #[must_use = "preparing temporary lock makes no sense"]
 pub trait Lock {
-    async fn acquire_shared<'a>(&'a self) -> Box<dyn SharedLockGuard<'a> + Send + 'a>;
-    async fn acquire_exclusive<'a>(&'a self) -> Box<dyn ExclusiveLockGuard<'a> + Send + 'a>;
+    async fn acquire_shared<'a>(
+        &'a self,
+    ) -> anyhow::Result<Box<dyn SharedLockGuard<'a> + Send + 'a>>;
+    async fn acquire_exclusive<'a>(
+        &'a self,
+    ) -> anyhow::Result<Box<dyn ExclusiveLockGuard<'a> + Send + 'a>>;
 }
 
 #[async_trait]

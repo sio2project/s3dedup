@@ -21,7 +21,23 @@ pub async fn ft_get_file(
     let lock_key = locks::file_lock(&state.bucket_name, path);
     let locks_storage = &state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
-    let guard = lock.acquire_shared().await;
+    let guard = match lock.acquire_shared().await {
+        Ok(g) => g,
+        Err(e) => {
+            error!("Failed to acquire shared lock: {}", e);
+            metrics::HTTP_REQUESTS_TOTAL
+                .with_label_values(&["GET", "/ft/files", "500"])
+                .inc();
+            metrics::HTTP_REQUEST_DURATION_SECONDS
+                .with_label_values(&["GET", "/ft/files"])
+                .observe(start.elapsed().as_secs_f64());
+
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::empty())
+                .unwrap();
+        }
+    };
 
     // 2. Check if file exists and get metadata
     let modified_time = state

@@ -159,6 +159,33 @@ lazy_static! {
         "Server uptime in seconds"
     )
     .unwrap();
+
+    // Database connection pool metrics
+    pub static ref DB_CONNECTIONS_ACTIVE: IntGauge = register_int_gauge!(
+        "s3dedup_db_connections_active",
+        "Number of active database connections"
+    )
+    .unwrap();
+
+    pub static ref DB_CONNECTIONS_IDLE: IntGauge = register_int_gauge!(
+        "s3dedup_db_connections_idle",
+        "Number of idle connections in the pool"
+    )
+    .unwrap();
+
+    pub static ref DB_CONNECTION_ACQUIRE_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
+        "s3dedup_db_connection_acquire_duration_seconds",
+        "Time to acquire a database connection",
+        &["storage_type"]
+    )
+    .unwrap();
+
+    pub static ref DB_CONNECTION_ACQUIRE_ERRORS_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "s3dedup_db_connection_acquire_errors_total",
+        "Total failed database connection acquisitions",
+        &["storage_type", "reason"]
+    )
+    .unwrap();
 }
 
 #[derive(Clone)]

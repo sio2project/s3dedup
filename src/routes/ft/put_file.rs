@@ -94,7 +94,17 @@ pub async fn ft_put_file(
     let lock_key = locks::file_lock(&state.bucket_name, path);
     let locks_storage = &state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
-    let _guard = lock.acquire_exclusive().await;
+    let _guard = match lock.acquire_exclusive().await {
+        Ok(g) => g,
+        Err(e) => {
+            error!("Failed to acquire exclusive lock: {}", e);
+            record_metrics("500");
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body("Failed to acquire lock".to_string())
+                .unwrap();
+        }
+    };
 
     // 5. Check existing version (matching original logic)
     let current_modified = state
@@ -354,6 +364,9 @@ pub async fn ft_put_file(
     }
 
     debug!("Created link {}.", path);
+
+    // Release lock early since all critical metadata operations are complete
+    drop(_guard);
 
     // 9. Dual-write to filetracker if in live migration mode
     if let Some(filetracker_client) = &state.filetracker_client {

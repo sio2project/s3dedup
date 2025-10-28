@@ -80,6 +80,11 @@ impl AppState {
     pub async fn update_storage_metrics(&self) -> Result<()> {
         let mut kv = self.kvstorage.lock().await;
 
+        // Update database connection pool metrics
+        let (active_conns, idle_conns) = kv.get_pool_stats();
+        metrics::DB_CONNECTIONS_ACTIVE.set(active_conns as i64);
+        metrics::DB_CONNECTIONS_IDLE.set(idle_conns as i64);
+
         // Get all stats
         let total_files = kv.get_total_files(&self.bucket_name).await?;
         let total_blobs = kv.get_total_blobs(&self.bucket_name).await?;

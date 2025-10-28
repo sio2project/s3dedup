@@ -1,9 +1,10 @@
 use crate::config::Config;
 use crate::kvstorage::KVStorageTrait;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
+use std::time::Duration;
 use tracing::debug;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -34,14 +35,31 @@ impl KVStorageTrait for Postgres {
     async fn new(config: &Config) -> Result<Box<Self>> {
         let pg_config = config.postgres.as_ref().unwrap();
         let db_url = format!(
-            "postgres://{}:{}@{}:{}/{}",
+            "postgres://{}:{}@{}:{}/{}?connect_timeout=10",
             pg_config.user, pg_config.password, pg_config.host, pg_config.port, pg_config.dbname
         );
-        debug!("Connecting to Postgres database: {}", db_url);
+        debug!(
+            "Connecting to Postgres: postgres://{}:****@{}:{}/{}",
+            pg_config.user, pg_config.host, pg_config.port, pg_config.dbname
+        );
+
         let pool = PgPoolOptions::new()
             .max_connections(pg_config.pool_size)
+            .acquire_timeout(Duration::from_secs(30))
+            .idle_timeout(Some(Duration::from_secs(600)))
+            .max_lifetime(Some(Duration::from_secs(1800)))
             .connect(&db_url)
-            .await?;
+            .await
+            .context("Failed to connect to PostgreSQL")?;
+
+        // Validate connection works
+        sqlx::query("SELECT 1")
+            .execute(&pool)
+            .await
+            .context("PostgreSQL connection validation failed")?;
+
+        debug!("Successfully validated PostgreSQL connection");
+
         Ok(Box::new(Postgres {
             pool,
             bucket: config.bucket.name.clone(),
@@ -139,6 +157,48 @@ impl KVStorageTrait for Postgres {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+        let table = self.table_name("refcount");
+        // PostgreSQL: atomic increment using INSERT...ON CONFLICT...DO UPDATE...RETURNING
+        let query = format!(
+            "INSERT INTO {} (bucket, hash, refcount) VALUES ($1, $2, 1)
+             ON CONFLICT (bucket, hash) DO UPDATE SET refcount = refcount + 1
+             RETURNING refcount",
+            table
+        );
+        let (count,): (i32,) = sqlx::query_as(&query)
+            .bind(bucket)
+            .bind(hash)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
+    }
+
+    async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+        let table = self.table_name("refcount");
+        // PostgreSQL: atomic decrement using UPDATE...RETURNING with GREATEST to prevent negative
+        let query = format!(
+            "UPDATE {} SET refcount = GREATEST(0, refcount - 1)
+             WHERE bucket = $1 AND hash = $2
+             RETURNING refcount",
+            table
+        );
+        let result = sqlx::query_as::<_, (i32,)>(&query)
+            .bind(bucket)
+            .bind(hash)
+            .fetch_optional(&self.pool)
+            .await;
+
+        match result {
+            Ok(Some((count,))) => Ok(count),
+            Ok(None) => {
+                // Row not found, return 0
+                Ok(0)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64> {
@@ -472,5 +532,12 @@ impl KVStorageTrait for Postgres {
             .fetch_one(&self.pool)
             .await?;
         Ok(total)
+    }
+
+    fn get_pool_stats(&self) -> (u32, u32) {
+        let total_connections = self.pool.size();
+        let idle_connections = self.pool.num_idle() as u32;
+        let active_connections = total_connections.saturating_sub(idle_connections);
+        (active_connections, idle_connections)
     }
 }

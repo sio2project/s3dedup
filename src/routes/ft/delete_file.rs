@@ -51,7 +51,17 @@ pub async fn ft_delete_file(
     let lock_key = locks::file_lock(&state.bucket_name, path);
     let locks_storage = &state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
-    let _guard = lock.acquire_exclusive().await;
+    let _guard = match lock.acquire_exclusive().await {
+        Ok(g) => g,
+        Err(e) => {
+            error!("Failed to acquire exclusive lock: {}", e);
+            record_metrics("500");
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body("Failed to acquire lock".to_string())
+                .unwrap();
+        }
+    };
 
     // 3. Check if file exists
     let current_modified = state
@@ -188,6 +198,9 @@ pub async fn ft_delete_file(
     }
 
     debug!("Deleted file {}", path);
+
+    // Release lock early since all critical metadata operations are complete
+    drop(_guard);
 
     // 9. Dual-delete from filetracker if in live migration mode
     if let Some(filetracker_client) = &state.filetracker_client {

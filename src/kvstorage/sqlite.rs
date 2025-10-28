@@ -1,9 +1,10 @@
 use crate::config::Config;
 use crate::kvstorage::KVStorageTrait;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::path::Path;
+use std::time::Duration;
 use tracing::debug;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -21,18 +22,29 @@ impl KVStorageTrait for SQLite {
     async fn new(config: &Config) -> Result<Box<Self>> {
         let sqlite_config = config.sqlite.as_ref().unwrap();
 
-        if !Path::new(&sqlite_config.path).exists() {
-            std::fs::File::create(&sqlite_config.path)?;
+        // Ensure parent directory exists
+        if let Some(parent) = Path::new(&sqlite_config.path).parent() {
+            std::fs::create_dir_all(parent)?;
         }
 
+        // SQLite with mode=rwc creates file atomically if needed
         let db_url = format!("sqlite://{}?mode=rwc", sqlite_config.path);
         debug!("Connecting to SQLite database: {}", db_url);
 
         let pool = SqlitePoolOptions::new()
             .max_connections(sqlite_config.pool_size)
-            .acquire_timeout(std::time::Duration::from_secs(30))
+            .acquire_timeout(Duration::from_secs(30))
             .connect(&db_url)
-            .await?;
+            .await
+            .context("Failed to connect to SQLite")?;
+
+        // Validate connection works
+        sqlx::query("SELECT 1")
+            .execute(&pool)
+            .await
+            .context("SQLite connection validation failed")?;
+
+        debug!("Successfully validated SQLite connection");
 
         // Enable WAL mode for better concurrency
         sqlx::query("PRAGMA journal_mode=WAL")
@@ -100,6 +112,62 @@ impl KVStorageTrait for SQLite {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+        // SQLite atomic increment using UPDATE...RETURNING (SQLite 3.35+)
+        // First try INSERT if not exists, then UPDATE to increment
+        let result: Result<(i32,), sqlx::Error> = sqlx::query_as(
+            "INSERT OR IGNORE INTO refcount (bucket, hash, refcount) VALUES (?1, ?2, 1);
+             UPDATE refcount SET refcount = refcount + 1 WHERE bucket = ?1 AND hash = ?2;
+             SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2",
+        )
+        .bind(bucket)
+        .bind(hash)
+        .bind(bucket)
+        .bind(hash)
+        .bind(bucket)
+        .bind(hash)
+        .fetch_one(&self.pool)
+        .await;
+
+        match result {
+            Ok((count,)) => Ok(count),
+            Err(_) => {
+                // Fallback to explicit increment if UPDATE...RETURNING not supported
+                let cnt = self.get_ref_count(bucket, hash).await?;
+                self.set_ref_count(bucket, hash, cnt + 1).await?;
+                Ok(cnt + 1)
+            }
+        }
+    }
+
+    async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+        // SQLite atomic decrement using UPDATE...RETURNING (SQLite 3.35+)
+        let result: Result<(i32,), sqlx::Error> = sqlx::query_as(
+            "UPDATE refcount SET refcount = MAX(0, refcount - 1) WHERE bucket = ?1 AND hash = ?2;
+             SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2",
+        )
+        .bind(bucket)
+        .bind(hash)
+        .bind(bucket)
+        .bind(hash)
+        .fetch_one(&self.pool)
+        .await;
+
+        match result {
+            Ok((count,)) => Ok(count),
+            Err(_) => {
+                // Fallback to explicit decrement if UPDATE...RETURNING not supported
+                let cnt = self.get_ref_count(bucket, hash).await?;
+                if cnt == 0 {
+                    return Ok(0);
+                }
+                let new_count = cnt - 1;
+                self.set_ref_count(bucket, hash, new_count).await?;
+                Ok(new_count)
+            }
+        }
     }
 
     async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64> {
@@ -366,5 +434,12 @@ impl KVStorageTrait for SQLite {
         .fetch_one(&self.pool)
         .await?;
         Ok(total.unwrap_or(0))
+    }
+
+    fn get_pool_stats(&self) -> (u32, u32) {
+        let total_connections = self.pool.size();
+        let idle_connections = self.pool.num_idle() as u32;
+        let active_connections = total_connections.saturating_sub(idle_connections);
+        (active_connections, idle_connections)
     }
 }

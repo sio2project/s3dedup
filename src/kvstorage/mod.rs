@@ -23,6 +23,30 @@ pub(crate) trait KVStorageTrait {
     async fn setup(&mut self) -> Result<()>;
     async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32>;
     async fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<()>;
+    /// Atomically increment the reference count (database-level atomic operation)
+    /// Prefer this over get_ref_count + set_ref_count to avoid race conditions
+    async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+        // Default implementation: non-atomic. Database implementations should override.
+        let cnt = self.get_ref_count(bucket, hash).await?;
+        self.set_ref_count(bucket, hash, cnt + 1).await?;
+        Ok(cnt + 1)
+    }
+
+    /// Atomically decrement the reference count (database-level atomic operation)
+    /// Prefer this over get_ref_count + set_ref_count to avoid race conditions
+    /// If the reference count is already 0, do nothing and return 0.
+    /// Returns the new reference count after decrementing.
+    async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+        // Default implementation: non-atomic. Database implementations should override.
+        let cnt = self.get_ref_count(bucket, hash).await?;
+        if cnt == 0 {
+            return Ok(0);
+        }
+        let new_count = cnt - 1;
+        self.set_ref_count(bucket, hash, new_count).await?;
+        Ok(new_count)
+    }
+
     async fn increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<()> {
         let cnt = self.get_ref_count(bucket, hash).await?;
         self.set_ref_count(bucket, hash, cnt + 1).await
@@ -106,6 +130,13 @@ pub(crate) trait KVStorageTrait {
 
     /// Get deduplicated bytes saved (sum of (refcount - 1) * logical_size for all blobs)
     async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64>;
+
+    /// Get connection pool statistics (active connections, idle connections)
+    /// Returns (active, idle)
+    fn get_pool_stats(&self) -> (u32, u32) {
+        // Default implementation for non-database backends
+        (0, 0)
+    }
 }
 
 #[derive(Clone)]
@@ -163,6 +194,39 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.set_ref_count(bucket, hash, ref_cnt).await,
             KVStorage::SQLite(storage) => storage.set_ref_count(bucket, hash, ref_cnt).await,
+        }
+    }
+
+    /**
+     * Atomically increment the reference count (database-level atomic operation).
+     * Returns the new reference count after incrementing.
+     * Prefer this over increment_ref_count to avoid race conditions.
+     */
+    pub async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+        debug!(
+            "Atomically incrementing ref count for bucket: {}, hash: {}",
+            bucket, hash
+        );
+        match self {
+            KVStorage::Postgres(storage) => storage.atomic_increment_ref_count(bucket, hash).await,
+            KVStorage::SQLite(storage) => storage.atomic_increment_ref_count(bucket, hash).await,
+        }
+    }
+
+    /**
+     * Atomically decrement the reference count (database-level atomic operation).
+     * If the reference count is already 0, do nothing and return 0.
+     * Returns the new reference count after decrementing.
+     * Prefer this over decrement_ref_count to avoid race conditions.
+     */
+    pub async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+        debug!(
+            "Atomically decrementing ref count for bucket: {}, hash: {}",
+            bucket, hash
+        );
+        match self {
+            KVStorage::Postgres(storage) => storage.atomic_decrement_ref_count(bucket, hash).await,
+            KVStorage::SQLite(storage) => storage.atomic_decrement_ref_count(bucket, hash).await,
         }
     }
 
@@ -447,6 +511,13 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_deduplicated_bytes_saved(bucket).await,
             KVStorage::SQLite(storage) => storage.get_deduplicated_bytes_saved(bucket).await,
+        }
+    }
+
+    pub fn get_pool_stats(&self) -> (u32, u32) {
+        match self {
+            KVStorage::Postgres(storage) => storage.get_pool_stats(),
+            KVStorage::SQLite(storage) => storage.get_pool_stats(),
         }
     }
 }
