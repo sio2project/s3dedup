@@ -38,13 +38,13 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn new(config: &config::BucketConfig) -> Result<Arc<Self>> {
+    pub async fn new(config: &config::Config) -> Result<Arc<Self>> {
         let kvstorage = kvstorage::KVStorage::new(config).await?;
         let locks = locks::LocksStorage::new_with_config(config.locks_type, config).await?;
-        let s3storage = s3storage::S3Storage::new(config).await?;
+        let s3storage = s3storage::S3Storage::new(&config.bucket).await?;
         let metrics = Arc::new(metrics::Metrics::new());
         Ok(Arc::new(Self {
-            bucket_name: config.name.clone(),
+            bucket_name: config.bucket.name.clone(),
             kvstorage: Arc::new(Mutex::new(kvstorage)),
             locks,
             s3storage: Arc::new(Mutex::new(s3storage)),
@@ -54,12 +54,12 @@ impl AppState {
     }
 
     pub async fn new_with_filetracker(
-        config: &config::BucketConfig,
+        config: &config::Config,
         filetracker_url: String,
     ) -> Result<Arc<Self>> {
         let kvstorage = kvstorage::KVStorage::new(config).await?;
         let locks = locks::LocksStorage::new_with_config(config.locks_type, config).await?;
-        let s3storage = s3storage::S3Storage::new(config).await?;
+        let s3storage = s3storage::S3Storage::new(&config.bucket).await?;
         let filetracker_client = filetracker_client::FiletrackerClient::new(filetracker_url);
         let metrics = Arc::new(metrics::Metrics::new());
 
@@ -67,7 +67,7 @@ impl AppState {
         metrics::MIGRATION_ACTIVE.set(1);
 
         Ok(Arc::new(Self {
-            bucket_name: config.name.clone(),
+            bucket_name: config.bucket.name.clone(),
             kvstorage: Arc::new(Mutex::new(kvstorage)),
             locks,
             s3storage: Arc::new(Mutex::new(s3storage)),

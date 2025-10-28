@@ -13,14 +13,6 @@ pub use crate::s3storage::minio::MinIOConfig;
 #[derive(Debug, serde::Deserialize, Clone)]
 pub struct Config {
     pub logging: LoggingConfig,
-    pub buckets: Vec<BucketConfig>,
-}
-
-#[derive(Debug, serde::Deserialize, Clone)]
-pub struct BucketConfig {
-    pub name: String,
-    pub address: String,
-    pub port: u16,
 
     pub kvstorage_type: KVStorageType,
 
@@ -31,6 +23,15 @@ pub struct BucketConfig {
     pub sqlite: Option<SQLiteConfig>,
 
     pub locks_type: LocksType,
+
+    pub bucket: BucketConfig,
+}
+
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct BucketConfig {
+    pub name: String,
+    pub address: String,
+    pub port: u16,
 
     pub s3storage_type: S3StorageType,
 
@@ -54,10 +55,8 @@ impl Config {
         let config_str = std::fs::read_to_string(path)?;
         let mut config: Config = serde_json::from_str(config_str.as_str())?;
 
-        // Apply environment variable overrides for the first bucket
-        if !config.buckets.is_empty() {
-            config.buckets[0].apply_env_overrides();
-        }
+        // Apply environment variable overrides
+        config.apply_env_overrides();
 
         Ok(config)
     }
@@ -72,89 +71,6 @@ impl Config {
                 .unwrap_or(false),
         };
 
-        let bucket = BucketConfig::from_env()?;
-
-        Ok(Config {
-            logging,
-            buckets: vec![bucket],
-        })
-    }
-}
-
-impl BucketConfig {
-    /// Apply environment variable overrides to this bucket config
-    fn apply_env_overrides(&mut self) {
-        if let Ok(val) = std::env::var("BUCKET_NAME") {
-            self.name = val;
-        }
-        if let Ok(val) = std::env::var("LISTEN_ADDRESS") {
-            self.address = val;
-        }
-        if let Ok(val) = std::env::var("LISTEN_PORT")
-            && let Ok(port) = val.parse()
-        {
-            self.port = port;
-        }
-
-        // SQLite overrides
-        if let Some(ref mut sqlite) = self.sqlite {
-            if let Ok(val) = std::env::var("SQLITE_PATH") {
-                sqlite.path = val;
-            }
-            if let Ok(val) = std::env::var("SQLITE_MAX_CONNECTIONS")
-                && let Ok(pool_size) = val.parse()
-            {
-                sqlite.pool_size = pool_size;
-            }
-        }
-
-        // PostgreSQL overrides
-        if let Some(ref mut postgres) = self.postgres {
-            if let Ok(val) = std::env::var("POSTGRES_HOST") {
-                postgres.host = val;
-            }
-            if let Ok(val) = std::env::var("POSTGRES_PORT")
-                && let Ok(port) = val.parse()
-            {
-                postgres.port = port;
-            }
-            if let Ok(val) = std::env::var("POSTGRES_USER") {
-                postgres.user = val;
-            }
-            if let Ok(val) = std::env::var("POSTGRES_PASSWORD") {
-                postgres.password = val;
-            }
-            if let Ok(val) = std::env::var("POSTGRES_DB") {
-                postgres.dbname = val;
-            }
-            if let Ok(val) = std::env::var("POSTGRES_MAX_CONNECTIONS")
-                && let Ok(pool_size) = val.parse()
-            {
-                postgres.pool_size = pool_size;
-            }
-        }
-
-        // MinIO/S3 overrides
-        if let Some(ref mut minio) = self.minio {
-            if let Ok(val) = std::env::var("S3_ENDPOINT") {
-                minio.endpoint = val;
-            }
-            if let Ok(val) = std::env::var("S3_ACCESS_KEY") {
-                minio.access_key = val;
-            }
-            if let Ok(val) = std::env::var("S3_SECRET_KEY") {
-                minio.secret_key = val;
-            }
-        }
-
-        // Filetracker URL for live migration
-        if let Ok(val) = std::env::var("FILETRACKER_URL") {
-            self.filetracker_url = Some(val);
-        }
-    }
-
-    /// Create a bucket config from environment variables only
-    fn from_env() -> Result<Self> {
         let kvstorage_type_str =
             std::env::var("KVSTORAGE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
         let kvstorage_type = match kvstorage_type_str.as_str() {
@@ -195,6 +111,108 @@ impl BucketConfig {
             None
         };
 
+        let locks_type = {
+            let locks_type_str =
+                std::env::var("LOCKS_TYPE").unwrap_or_else(|_| "memory".to_string());
+            match locks_type_str.as_str() {
+                "memory" => LocksType::Memory,
+                _ => LocksType::Memory, // Default to memory
+            }
+        };
+
+        let bucket = BucketConfig::from_env()?;
+
+        Ok(Config {
+            logging,
+            kvstorage_type,
+            postgres,
+            sqlite,
+            locks_type,
+            bucket,
+        })
+    }
+
+    /// Apply environment variable overrides to this config
+    fn apply_env_overrides(&mut self) {
+        // SQLite overrides
+        if let Some(ref mut sqlite) = self.sqlite {
+            if let Ok(val) = std::env::var("SQLITE_PATH") {
+                sqlite.path = val;
+            }
+            if let Ok(val) = std::env::var("SQLITE_MAX_CONNECTIONS")
+                && let Ok(pool_size) = val.parse()
+            {
+                sqlite.pool_size = pool_size;
+            }
+        }
+
+        // PostgreSQL overrides
+        if let Some(ref mut postgres) = self.postgres {
+            if let Ok(val) = std::env::var("POSTGRES_HOST") {
+                postgres.host = val;
+            }
+            if let Ok(val) = std::env::var("POSTGRES_PORT")
+                && let Ok(port) = val.parse()
+            {
+                postgres.port = port;
+            }
+            if let Ok(val) = std::env::var("POSTGRES_USER") {
+                postgres.user = val;
+            }
+            if let Ok(val) = std::env::var("POSTGRES_PASSWORD") {
+                postgres.password = val;
+            }
+            if let Ok(val) = std::env::var("POSTGRES_DB") {
+                postgres.dbname = val;
+            }
+            if let Ok(val) = std::env::var("POSTGRES_MAX_CONNECTIONS")
+                && let Ok(pool_size) = val.parse()
+            {
+                postgres.pool_size = pool_size;
+            }
+        }
+
+        // Apply bucket-specific overrides
+        self.bucket.apply_env_overrides();
+    }
+}
+
+impl BucketConfig {
+    /// Apply environment variable overrides to this bucket config
+    fn apply_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("BUCKET_NAME") {
+            self.name = val;
+        }
+        if let Ok(val) = std::env::var("LISTEN_ADDRESS") {
+            self.address = val;
+        }
+        if let Ok(val) = std::env::var("LISTEN_PORT")
+            && let Ok(port) = val.parse()
+        {
+            self.port = port;
+        }
+
+        // MinIO/S3 overrides
+        if let Some(ref mut minio) = self.minio {
+            if let Ok(val) = std::env::var("S3_ENDPOINT") {
+                minio.endpoint = val;
+            }
+            if let Ok(val) = std::env::var("S3_ACCESS_KEY") {
+                minio.access_key = val;
+            }
+            if let Ok(val) = std::env::var("S3_SECRET_KEY") {
+                minio.secret_key = val;
+            }
+        }
+
+        // Filetracker URL for live migration
+        if let Ok(val) = std::env::var("FILETRACKER_URL") {
+            self.filetracker_url = Some(val);
+        }
+    }
+
+    /// Create a bucket config from environment variables only
+    fn from_env() -> Result<Self> {
         let s3storage_type_str =
             std::env::var("S3STORAGE_TYPE").unwrap_or_else(|_| "minio".to_string());
         let s3storage_type = match s3storage_type_str.as_str() {
@@ -223,17 +241,6 @@ impl BucketConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(8080),
-            kvstorage_type,
-            sqlite,
-            postgres,
-            locks_type: {
-                let locks_type_str =
-                    std::env::var("LOCKS_TYPE").unwrap_or_else(|_| "memory".to_string());
-                match locks_type_str.as_str() {
-                    "memory" => LocksType::Memory,
-                    _ => LocksType::Memory, // Default to memory
-                }
-            },
             s3storage_type,
             minio,
             cleaner: CleanerConfig {

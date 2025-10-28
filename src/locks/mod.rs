@@ -69,7 +69,7 @@ impl LocksStorage {
 
     pub async fn new_with_config(
         lock_type: LocksType,
-        bucket_config: &crate::config::BucketConfig,
+        config: &crate::config::Config,
     ) -> anyhow::Result<Box<Self>> {
         match lock_type {
             LocksType::Memory => {
@@ -78,7 +78,7 @@ impl LocksStorage {
             }
             LocksType::Postgres => {
                 info!("Using PostgreSQL as locks storage");
-                let pg_locks = postgres::PostgresLocks::new_with_config(bucket_config).await?;
+                let pg_locks = postgres::PostgresLocks::new_with_config(config).await?;
                 Ok(Box::new(LocksStorage::Postgres(pg_locks)))
             }
         }

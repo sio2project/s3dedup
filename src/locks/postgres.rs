@@ -1,4 +1,4 @@
-use crate::config::BucketConfig;
+use crate::config::Config;
 use crate::locks::{ExclusiveLockGuard, Lock, LockStorage, SharedLockGuard};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -37,7 +37,7 @@ impl PostgresLocks {
 
 impl PostgresLocks {
     /// Create a new PostgreSQL locks instance with configuration
-    pub async fn new_with_config(config: &BucketConfig) -> Result<Box<Self>> {
+    pub async fn new_with_config(config: &Config) -> Result<Box<Self>> {
         let pg_config = config.postgres.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "PostgreSQL locks require PostgreSQL configuration, but none was provided"

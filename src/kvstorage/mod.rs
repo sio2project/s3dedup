@@ -1,4 +1,4 @@
-use crate::config::BucketConfig;
+use crate::config::Config;
 use anyhow::Result;
 use serde::Deserialize;
 use tracing::{debug, info};
@@ -16,7 +16,7 @@ pub enum KVStorageType {
 }
 
 pub(crate) trait KVStorageTrait {
-    async fn new(config: &BucketConfig) -> Result<Box<Self>>
+    async fn new(config: &Config) -> Result<Box<Self>>
     where
         Self: Sized;
 
@@ -115,7 +115,7 @@ pub enum KVStorage {
 }
 
 impl KVStorage {
-    pub async fn new(config: &BucketConfig) -> Result<Box<Self>> {
+    pub async fn new(config: &Config) -> Result<Box<Self>> {
         match config.kvstorage_type {
             KVStorageType::Postgres => {
                 info!("Using Postgres as KV storage");

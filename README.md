@@ -14,7 +14,7 @@ S3 deduplication proxy server with Filetracker protocol compatibility.
 - **Distributed Locking**: PostgreSQL advisory locks for distributed, high-availability deployments
 - **Migration Support**: Offline and live migration from old Filetracker instances
 - **Auto Cleanup**: Background cleaner removes unreferenced S3 objects
-- **Multi-bucket**: Run multiple independent buckets on different ports
+- **Single-instance per bucket**: Each instance handles exactly one bucket; scale horizontally with multiple instances
 
 ## Quick Start with Docker
 
@@ -223,6 +223,47 @@ docker run -d \
 ```
 
 Environment variables override config file values.
+
+## Deployment and Scaling
+
+### Single-Instance per Bucket Architecture
+
+s3dedup follows a **single-bucket-per-instance** design pattern, consistent with 12-factor application principles:
+
+- **One Instance = One Bucket**: Each s3dedup instance manages exactly one S3 bucket and serves one Filetracker endpoint
+- **Horizontal Scaling**: For multiple buckets, run multiple s3dedup instances (one per bucket)
+- **Simplified Configuration**: Cleaner config files, easier to reason about, better for container orchestration
+
+### High-Availability Deployments
+
+For a single bucket with high availability, run multiple instances with PostgreSQL locks and shared database:
+
+```bash
+# All instances share the same PostgreSQL database and use PostgreSQL locks
+docker run -d \
+  --name s3dedup-ha-1 \
+  -p 8001:8080 \
+  -e BUCKET_NAME=files \
+  -e LISTEN_PORT=8080 \
+  -e KVSTORAGE_TYPE=postgres \
+  -e LOCKS_TYPE=postgres \
+  -e POSTGRES_HOST=postgres-db \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=s3dedup \
+  -e S3_ENDPOINT=http://minio:9000 \
+  -e S3_ACCESS_KEY=minioadmin \
+  -e S3_SECRET_KEY=minioadmin \
+  ghcr.io/sio2project/s3dedup:latest server --env
+
+# Repeat for instances 2, 3, etc., on different ports
+```
+
+**Benefits of HA Setup**:
+- **Load Balancing**: Requests can be distributed across multiple instances
+- **Fault Tolerance**: If one instance fails, others continue serving requests
+- **Coordinated Access**: PostgreSQL locks ensure safe concurrent file operations
+- **Shared Metadata**: Single database prevents data inconsistency
 
 ## Migration
 

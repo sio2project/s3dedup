@@ -1,4 +1,4 @@
-use crate::config::BucketConfig;
+use crate::config::Config;
 use crate::kvstorage::KVStorageTrait;
 use anyhow::Result;
 use serde::Deserialize;
@@ -31,7 +31,7 @@ impl Postgres {
 }
 
 impl KVStorageTrait for Postgres {
-    async fn new(config: &BucketConfig) -> Result<Box<Self>> {
+    async fn new(config: &Config) -> Result<Box<Self>> {
         let pg_config = config.postgres.as_ref().unwrap();
         let db_url = format!(
             "postgres://{}:{}@{}:{}/{}",
@@ -44,7 +44,7 @@ impl KVStorageTrait for Postgres {
             .await?;
         Ok(Box::new(Postgres {
             pool,
-            bucket: config.name.clone(),
+            bucket: config.bucket.name.clone(),
         }))
     }
     async fn setup(&mut self) -> Result<()> {
