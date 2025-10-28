@@ -167,7 +167,9 @@ pub struct PostgresSharedLockGuard {
 }
 
 impl<'a> SharedLockGuard<'a> for PostgresSharedLockGuard {
-    fn release(mut self: Box<Self>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+    fn release(
+        mut self: Box<Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             if let Some(mut conn) = self.conn.take() {
                 sqlx::query("SELECT pg_advisory_unlock_shared($1)")
@@ -196,7 +198,9 @@ pub struct PostgresExclusiveLockGuard {
 }
 
 impl<'a> ExclusiveLockGuard<'a> for PostgresExclusiveLockGuard {
-    fn release(mut self: Box<Self>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+    fn release(
+        mut self: Box<Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             if let Some(mut conn) = self.conn.take() {
                 sqlx::query("SELECT pg_advisory_unlock($1)")

@@ -28,8 +28,8 @@ pub enum LocksType {
     Postgres,
 }
 
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
 
 #[must_use = "droping temporary lock makes no sense"]
 pub trait SharedLockGuard<'a> {

@@ -160,8 +160,14 @@ mod postgres_locks_tests {
         let lock1 = locks.prepare_lock(lock_key.clone()).await;
         let lock2 = locks.prepare_lock(lock_key.clone()).await;
 
-        let guard1 = lock1.acquire_shared().await.expect("Should acquire shared lock");
-        let guard2 = lock2.acquire_shared().await.expect("Should acquire shared lock");
+        let guard1 = lock1
+            .acquire_shared()
+            .await
+            .expect("Should acquire shared lock");
+        let guard2 = lock2
+            .acquire_shared()
+            .await
+            .expect("Should acquire shared lock");
 
         // Both guards are held - this should not deadlock
         let _ = guard1.release().await;
@@ -190,7 +196,10 @@ mod postgres_locks_tests {
 
         // Acquire an exclusive lock
         let lock1 = locks.prepare_lock(lock_key.clone()).await;
-        let guard1 = lock1.acquire_exclusive().await.expect("Should acquire exclusive lock");
+        let guard1 = lock1
+            .acquire_exclusive()
+            .await
+            .expect("Should acquire exclusive lock");
 
         // Try to acquire a shared lock in another task
         let locks_clone = locks.clone();
@@ -198,7 +207,10 @@ mod postgres_locks_tests {
 
         let task = tokio::spawn(async move {
             let lock2 = locks_clone.prepare_lock(lock_key_clone).await;
-            let guard2 = lock2.acquire_shared().await.expect("Should acquire shared lock");
+            let guard2 = lock2
+                .acquire_shared()
+                .await
+                .expect("Should acquire shared lock");
             let _ = guard2.release().await;
             true
         });
@@ -251,10 +263,16 @@ mod postgres_locks_tests {
         let lock1 = locks.prepare_lock(lock_key1).await;
         let lock2 = locks.prepare_lock(lock_key2).await;
 
-        let guard1 = lock1.acquire_exclusive().await.expect("Should acquire exclusive lock");
+        let guard1 = lock1
+            .acquire_exclusive()
+            .await
+            .expect("Should acquire exclusive lock");
 
         // Should be able to acquire exclusive lock on different key immediately
-        let guard2 = lock2.acquire_exclusive().await.expect("Should acquire exclusive lock");
+        let guard2 = lock2
+            .acquire_exclusive()
+            .await
+            .expect("Should acquire exclusive lock");
 
         // Both locks should be held independently
         let _ = guard1.release().await;
@@ -284,7 +302,10 @@ mod postgres_locks_tests {
         // Acquire and release lock in a scope
         {
             let lock1 = locks.prepare_lock(lock_key.clone()).await;
-            let guard1 = lock1.acquire_exclusive().await.expect("Should acquire lock");
+            let guard1 = lock1
+                .acquire_exclusive()
+                .await
+                .expect("Should acquire lock");
             // Explicitly release before scope ends
             let _ = guard1.release().await;
         }
@@ -294,7 +315,10 @@ mod postgres_locks_tests {
 
         // Should be able to acquire the lock immediately
         let lock2 = locks.prepare_lock(lock_key.clone()).await;
-        let guard2 = lock2.acquire_exclusive().await.expect("Should acquire lock after release");
+        let guard2 = lock2
+            .acquire_exclusive()
+            .await
+            .expect("Should acquire lock after release");
 
         // If we get here, the lock was successfully released and reacquired
         let _ = guard2.release().await;

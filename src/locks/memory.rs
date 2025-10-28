@@ -19,18 +19,22 @@ struct LockedKey<'a> {
 }
 
 impl<'a> SharedLockGuard<'a> for RwLockReadGuard<'a, ()> {
-    fn release(self: Box<Self>) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
+    fn release(
+        self: Box<Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            drop(self);  // Explicitly drop the guard to release the read lock
+            drop(self); // Explicitly drop the guard to release the read lock
             Ok(())
         })
     }
 }
 
 impl<'a> ExclusiveLockGuard<'a> for RwLockWriteGuard<'a, ()> {
-    fn release(self: Box<Self>) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
+    fn release(
+        self: Box<Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            drop(self);  // Explicitly drop the guard to release the write lock
+            drop(self); // Explicitly drop the guard to release the write lock
             Ok(())
         })
     }
