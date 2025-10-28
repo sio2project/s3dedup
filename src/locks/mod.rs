@@ -28,10 +28,28 @@ pub enum LocksType {
     Postgres,
 }
 
+use std::pin::Pin;
+use std::future::Future;
+
 #[must_use = "droping temporary lock makes no sense"]
-pub trait SharedLockGuard<'a> {}
+pub trait SharedLockGuard<'a> {
+    /// Release the lock explicitly before the guard is dropped.
+    /// For PostgreSQL locks, this unlocks the advisory lock in the database.
+    /// For memory locks, this drops the Tokio RwLock guard.
+    fn release(self: Box<Self>) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 #[must_use = "droping temporary lock makes no sense"]
-pub trait ExclusiveLockGuard<'a> {}
+pub trait ExclusiveLockGuard<'a> {
+    /// Release the lock explicitly before the guard is dropped.
+    /// For PostgreSQL locks, this unlocks the advisory lock in the database.
+    /// For memory locks, this drops the Tokio RwLock guard.
+    fn release(self: Box<Self>) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 #[async_trait]
 #[must_use = "preparing temporary lock makes no sense"]

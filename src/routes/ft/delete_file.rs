@@ -51,7 +51,7 @@ pub async fn ft_delete_file(
     let lock_key = locks::file_lock(&state.bucket_name, path);
     let locks_storage = &state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
-    let _guard = match lock.acquire_exclusive().await {
+    let guard = match lock.acquire_exclusive().await {
         Ok(g) => g,
         Err(e) => {
             error!("Failed to acquire exclusive lock: {}", e);
@@ -73,6 +73,7 @@ pub async fn ft_delete_file(
     if current_modified.is_err() {
         error!("Failed to get current modified");
         record_metrics("500");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to get current modified".to_string())
@@ -84,6 +85,7 @@ pub async fn ft_delete_file(
     if current_modified == 0 {
         debug!("File {} not found", path);
         record_metrics("404");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body("File not found".to_string())
@@ -97,6 +99,7 @@ pub async fn ft_delete_file(
             path, timestamp, current_modified
         );
         record_metrics("200");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::OK)
             .body("".to_string())
@@ -113,6 +116,7 @@ pub async fn ft_delete_file(
     if hash.is_err() {
         error!("Failed to get ref file");
         record_metrics("500");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to get ref file".to_string())
@@ -123,6 +127,7 @@ pub async fn ft_delete_file(
     if hash.is_empty() {
         error!("File {} has no hash reference", path);
         record_metrics("404");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body("File has no hash reference".to_string())
@@ -141,6 +146,7 @@ pub async fn ft_delete_file(
         Err(e) => {
             error!("Failed to decrement ref count: {}", e);
             record_metrics("500");
+            let _ = guard.release().await;
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Failed to decrement ref count".to_string())
@@ -176,6 +182,7 @@ pub async fn ft_delete_file(
     {
         error!("Failed to delete ref file: {}", e);
         record_metrics("500");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to delete ref file".to_string())
@@ -191,6 +198,7 @@ pub async fn ft_delete_file(
     {
         error!("Failed to delete modified time: {}", e);
         record_metrics("500");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to delete modified time".to_string())
@@ -200,7 +208,7 @@ pub async fn ft_delete_file(
     debug!("Deleted file {}", path);
 
     // Release lock early since all critical metadata operations are complete
-    drop(_guard);
+    let _ = guard.release().await;
 
     // 9. Dual-delete from filetracker if in live migration mode
     if let Some(filetracker_client) = &state.filetracker_client {

@@ -94,7 +94,7 @@ pub async fn ft_put_file(
     let lock_key = locks::file_lock(&state.bucket_name, path);
     let locks_storage = &state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
-    let _guard = match lock.acquire_exclusive().await {
+    let guard = match lock.acquire_exclusive().await {
         Ok(g) => g,
         Err(e) => {
             error!("Failed to acquire exclusive lock: {}", e);
@@ -116,6 +116,7 @@ pub async fn ft_put_file(
     if current_modified.is_err() {
         error!("Failed to get current modified");
         record_metrics("500");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to get current modified".to_string())
@@ -130,6 +131,7 @@ pub async fn ft_put_file(
             path, timestamp, current_modified
         );
         record_metrics("200");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "text/plain")
@@ -155,6 +157,7 @@ pub async fn ft_put_file(
                 Err(e) => {
                     error!("Failed to decompress gzip data: {}", e);
                     record_metrics("400");
+                    let _ = guard.release().await;
                     return Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body("Failed to decompress gzip data".to_string())
@@ -177,6 +180,7 @@ pub async fn ft_put_file(
                 Err(e) => {
                     error!("Failed to compress data: {}", e);
                     record_metrics("500");
+                    let _ = guard.release().await;
                     return Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .body("Failed to compress data".to_string())
@@ -198,6 +202,7 @@ pub async fn ft_put_file(
         Err(e) => {
             error!("Failed to check object existence: {}", e);
             record_metrics("500");
+            let _ = guard.release().await;
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Failed to check object existence".to_string())
@@ -229,6 +234,7 @@ pub async fn ft_put_file(
         {
             error!("Failed to store object in S3: {}", e);
             record_metrics("500");
+            let _ = guard.release().await;
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Failed to store object".to_string())
@@ -245,6 +251,7 @@ pub async fn ft_put_file(
         {
             error!("Failed to store compressed size: {}", e);
             record_metrics("500");
+            let _ = guard.release().await;
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Failed to store compressed size".to_string())
@@ -262,6 +269,7 @@ pub async fn ft_put_file(
     {
         error!("Failed to store logical size: {}", e);
         record_metrics("500");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to store logical size".to_string())
@@ -300,6 +308,7 @@ pub async fn ft_put_file(
     {
         error!("Failed to increment ref count: {}", e);
         record_metrics("500");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to increment ref count".to_string())
@@ -342,6 +351,7 @@ pub async fn ft_put_file(
     {
         error!("Failed to set ref file: {}", e);
         record_metrics("500");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to set ref file".to_string())
@@ -357,6 +367,7 @@ pub async fn ft_put_file(
     {
         error!("Failed to set modified time: {}", e);
         record_metrics("500");
+        let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to set modified time".to_string())
@@ -366,7 +377,7 @@ pub async fn ft_put_file(
     debug!("Created link {}.", path);
 
     // Release lock early since all critical metadata operations are complete
-    drop(_guard);
+    let _ = guard.release().await;
 
     // 9. Dual-write to filetracker if in live migration mode
     if let Some(filetracker_client) = &state.filetracker_client {
