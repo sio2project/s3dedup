@@ -42,6 +42,7 @@ async fn create_test_app_state() -> Arc<AppState> {
         }),
         cleaner: Default::default(),
         filetracker_url: None,
+        filetracker_v1_dir: None,
     };
 
     let app_state = AppState::new(&config).await.unwrap();
@@ -275,6 +276,7 @@ async fn test_migration_active_metric() {
         }),
         cleaner: Default::default(),
         filetracker_url: Some("http://localhost:8000".to_string()),
+        filetracker_v1_dir: None,
     };
 
     let app_state = AppState::new_with_filetracker(&config, "http://localhost:8000".to_string())

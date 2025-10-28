@@ -1,11 +1,14 @@
 use crate::AppState;
 use crate::filetracker_client::{FileMetadata, FiletrackerClient};
 use crate::routes::ft::storage_helpers;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures_util::future::join_all;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
+
+pub mod v1_filesystem;
 
 pub struct MigrationStats {
     pub total_files: usize,
@@ -74,7 +77,14 @@ pub async fn migrate_all_files(
 
             let handle = tokio::spawn(async move {
                 // Acquire semaphore permit
-                let _permit = semaphore.acquire().await.unwrap();
+                let _permit = match semaphore.acquire().await {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        error!("Semaphore closed unexpectedly for file: {}", path);
+                        *failed.lock().await += 1;
+                        return;
+                    }
+                };
 
                 // Log progress every 100 files
                 if file_idx.is_multiple_of(100) && file_idx > 0 {
@@ -223,29 +233,27 @@ pub async fn migrate_single_file_from_metadata(
             .await?;
 
         if !old_hash.is_empty() && old_hash != digest {
-            // Decrement old reference count
-            app_state
+            // Decrement old reference count atomically and get new count
+            let old_ref_count = app_state
                 .kvstorage
                 .lock()
                 .await
                 .decrement_ref_count(&app_state.bucket_name, &old_hash)
                 .await?;
 
-            // Check if we should delete the old blob
-            let old_ref_count = app_state
-                .kvstorage
-                .lock()
-                .await
-                .get_ref_count(&app_state.bucket_name, &old_hash)
-                .await?;
-
-            if old_ref_count <= 0 {
-                let _ = app_state
+            // Delete blob if no longer referenced
+            if old_ref_count <= 0
+                && let Err(e) = app_state
                     .s3storage
                     .lock()
                     .await
                     .delete_object(&old_hash)
-                    .await;
+                    .await
+            {
+                warn!(
+                    "Failed to delete orphaned S3 object {} during migration: {}",
+                    old_hash, e
+                );
             }
         }
     }
@@ -366,29 +374,27 @@ async fn migrate_single_file(
             .await?;
 
         if !old_hash.is_empty() && old_hash != digest {
-            // Decrement old reference count
-            app_state
+            // Decrement old reference count atomically and get new count
+            let old_ref_count = app_state
                 .kvstorage
                 .lock()
                 .await
                 .decrement_ref_count(&app_state.bucket_name, &old_hash)
                 .await?;
 
-            // Check if we should delete the old blob
-            let old_ref_count = app_state
-                .kvstorage
-                .lock()
-                .await
-                .get_ref_count(&app_state.bucket_name, &old_hash)
-                .await?;
-
-            if old_ref_count <= 0 {
-                let _ = app_state
+            // Delete blob if no longer referenced
+            if old_ref_count <= 0
+                && let Err(e) = app_state
                     .s3storage
                     .lock()
                     .await
                     .delete_object(&old_hash)
-                    .await;
+                    .await
+            {
+                warn!(
+                    "Failed to delete orphaned S3 object {} during migration: {}",
+                    old_hash, e
+                );
             }
         }
     }
@@ -442,4 +448,318 @@ pub async fn live_migration_worker(
     // Reset migration_active gauge to indicate migration is complete
     crate::metrics::MIGRATION_ACTIVE.set(0);
     info!("Background migration worker finished, migration_active set to 0");
+}
+
+/// Migrate all files from V1 filetracker filesystem to s3dedup
+///
+/// This function uses chunked processing to avoid loading all file metadata into memory,
+/// making it suitable for directories with millions of files.
+pub async fn migrate_all_files_from_v1_fs(
+    v1_dir: &str,
+    app_state: Arc<AppState>,
+    max_concurrency: usize,
+) -> Result<MigrationStats> {
+    info!(
+        "Starting V1 filesystem migration from directory: {}",
+        v1_dir
+    );
+    info!("Max concurrency: {}", max_concurrency);
+    info!("Processing directory in chunks to handle large file counts efficiently");
+
+    // Track stats across all chunks using atomics to avoid async locks in sync context
+    let total_files = Arc::new(AtomicUsize::new(0));
+    let migrated = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicUsize::new(0));
+    let skipped = Arc::new(AtomicUsize::new(0));
+    let semaphore = Arc::new(Semaphore::new(max_concurrency));
+
+    // Chunk size for filesystem walking: 10,000 files per chunk
+    // This keeps memory usage reasonable while still being efficient
+    let filesystem_chunk_size = 10_000;
+
+    // Task batch size: spawn tasks in smaller batches to avoid too many concurrent tasks
+    let task_batch_size = max_concurrency * 10;
+
+    // Create a channel to send chunks from blocking walker to async processor
+    let (chunk_tx, mut chunk_rx) =
+        tokio::sync::mpsc::unbounded_channel::<Vec<v1_filesystem::V1FileInfo>>();
+
+    let v1_dir_owned = v1_dir.to_string();
+
+    // Spawn the filesystem walker in a blocking task to avoid nested block_on
+    let walker_handle = tokio::task::spawn_blocking(move || {
+        v1_filesystem::walk_v1_directory_chunked(
+            &v1_dir_owned,
+            filesystem_chunk_size,
+            |file_chunk| {
+                // Send chunk to async processor
+                // If receiver is dropped, stop walking
+                if chunk_tx.send(file_chunk.to_vec()).is_err() {
+                    anyhow::bail!("Chunk receiver dropped");
+                }
+                Ok(())
+            },
+        )
+    });
+
+    // Process chunks as they arrive
+    let mut chunk_count = 0;
+    while let Some(file_chunk) = chunk_rx.recv().await {
+        chunk_count += 1;
+        let chunk_size = file_chunk.len();
+        total_files.fetch_add(chunk_size, Ordering::Relaxed);
+        let total_so_far = total_files.load(Ordering::Relaxed);
+
+        info!(
+            "Processing filesystem chunk {} with {} files (total discovered: {})",
+            chunk_count, chunk_size, total_so_far
+        );
+
+        // Process this chunk in task batches
+        let total_batches = file_chunk.chunks(task_batch_size).len();
+        for (batch_idx, batch) in file_chunk.chunks(task_batch_size).enumerate() {
+            let mut handles = vec![];
+
+            for file_info in batch.iter() {
+                let app_state = app_state.clone();
+                let migrated = migrated.clone();
+                let failed = failed.clone();
+                let skipped = skipped.clone();
+                let semaphore = semaphore.clone();
+                let file_info = file_info.clone();
+
+                let handle = tokio::spawn(async move {
+                    // Acquire semaphore permit
+                    let _permit = match semaphore.acquire().await {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            error!(
+                                "Semaphore closed unexpectedly for file: {}",
+                                file_info.relative_path
+                            );
+                            failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            return;
+                        }
+                    };
+
+                    // Migrate the file
+                    match migrate_single_file_from_v1_fs(app_state, &file_info).await {
+                        Ok(true) => {
+                            migrated.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Ok(false) => {
+                            skipped.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(e) => {
+                            error!("Failed to migrate file {}: {}", file_info.relative_path, e);
+                            failed.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                });
+
+                handles.push(handle);
+            }
+
+            // Wait for this task batch to complete
+            let _ = join_all(handles).await;
+
+            // Log progress periodically
+            if batch_idx % 10 == 0 || batch_idx == total_batches - 1 {
+                let current_migrated = migrated.load(Ordering::Relaxed);
+                let current_failed = failed.load(Ordering::Relaxed);
+                let current_skipped = skipped.load(Ordering::Relaxed);
+                info!(
+                    "Progress: {} files discovered (migrated: {}, skipped: {}, failed: {})",
+                    total_so_far, current_migrated, current_skipped, current_failed
+                );
+            }
+        }
+    }
+
+    // Wait for walker to complete
+    match walker_handle.await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            error!("Filesystem walker failed: {}", e);
+            anyhow::bail!("Filesystem walker failed: {}", e);
+        }
+        Err(e) => {
+            error!("Walker task panicked: {}", e);
+            anyhow::bail!("Walker task panicked: {}", e);
+        }
+    }
+
+    let total_count = total_files.load(Ordering::Relaxed);
+    let migrated_count = migrated.load(Ordering::Relaxed);
+    let failed_count = failed.load(Ordering::Relaxed);
+    let skipped_count = skipped.load(Ordering::Relaxed);
+
+    info!("V1 filesystem migration complete:");
+    info!("  Total files: {}", total_count);
+    info!("  Migrated: {}", migrated_count);
+    info!("  Skipped: {}", skipped_count);
+    info!("  Failed: {}", failed_count);
+
+    Ok(MigrationStats {
+        total_files: total_count,
+        migrated: migrated_count,
+        failed: failed_count,
+        skipped: skipped_count,
+    })
+}
+
+/// Migrate a single file from V1 filetracker filesystem to s3dedup
+/// Returns Ok(true) if migrated, Ok(false) if skipped, Err if failed
+async fn migrate_single_file_from_v1_fs(
+    app_state: Arc<AppState>,
+    file_info: &v1_filesystem::V1FileInfo,
+) -> Result<bool> {
+    let path = &file_info.relative_path;
+
+    // Check if file already exists in s3dedup with same or newer version
+    let current_modified = app_state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state.bucket_name, path)
+        .await?;
+
+    if current_modified >= file_info.last_modified {
+        // File already exists with same or newer version, skip
+        return Ok(false);
+    }
+
+    // Move blocking operations (file I/O, SHA256, compression) to blocking thread pool
+    // to avoid blocking the async runtime
+    let file_info_clone = file_info.clone();
+    let (uncompressed_data, digest, compressed_data) = tokio::task::spawn_blocking(move || {
+        // Read file data from filesystem (blocking I/O)
+        let uncompressed_data = v1_filesystem::read_v1_file(&file_info_clone)?;
+
+        // Compute SHA256 hash (CPU-intensive)
+        let digest = storage_helpers::compute_sha256(&uncompressed_data);
+
+        // Compress data (CPU-intensive)
+        let compressed_data = storage_helpers::compress_gzip(&uncompressed_data)?;
+
+        Ok::<_, anyhow::Error>((uncompressed_data, digest, compressed_data))
+    })
+    .await
+    .context("Task panicked during file processing")?
+    .context("Failed to read and process V1 file")?;
+
+    let logical_size = uncompressed_data.len();
+
+    // Acquire file lock
+    let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
+    let locks_storage = &app_state.locks;
+    let lock = locks_storage.prepare_lock(lock_key).await;
+    let _guard = lock.acquire_exclusive().await;
+
+    // Recheck if file was already migrated after acquiring lock (race condition protection)
+    let current_modified_after_lock = app_state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state.bucket_name, path)
+        .await?;
+
+    if current_modified_after_lock >= file_info.last_modified {
+        // File was migrated by another concurrent task, skip
+        return Ok(false);
+    }
+
+    // Check if blob already exists in S3
+    let blob_exists = app_state
+        .s3storage
+        .lock()
+        .await
+        .object_exists(&digest)
+        .await?;
+
+    // Store blob if it doesn't exist
+    if !blob_exists {
+        app_state
+            .s3storage
+            .lock()
+            .await
+            .put_object(&digest, compressed_data.clone())
+            .await?;
+    }
+
+    // Store logical size metadata
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .set_logical_size(&app_state.bucket_name, &digest, logical_size)
+        .await?;
+
+    // Store compressed size metadata
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .set_compressed_size(&app_state.bucket_name, &digest, compressed_data.len())
+        .await?;
+
+    // Increment reference count
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .increment_ref_count(&app_state.bucket_name, &digest)
+        .await?;
+
+    // Handle overwriting existing file
+    if current_modified > 0 {
+        let old_hash = app_state
+            .kvstorage
+            .lock()
+            .await
+            .get_ref_file(&app_state.bucket_name, path)
+            .await?;
+
+        if !old_hash.is_empty() && old_hash != digest {
+            // Decrement old reference count atomically and get new count
+            let old_ref_count = app_state
+                .kvstorage
+                .lock()
+                .await
+                .decrement_ref_count(&app_state.bucket_name, &old_hash)
+                .await?;
+
+            // Delete blob if no longer referenced
+            if old_ref_count <= 0
+                && let Err(e) = app_state
+                    .s3storage
+                    .lock()
+                    .await
+                    .delete_object(&old_hash)
+                    .await
+            {
+                warn!(
+                    "Failed to delete orphaned S3 object {} during migration: {}",
+                    old_hash, e
+                );
+            }
+        }
+    }
+
+    // Update file metadata
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .set_ref_file(&app_state.bucket_name, path, &digest)
+        .await?;
+
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .set_modified(&app_state.bucket_name, path, file_info.last_modified)
+        .await?;
+
+    Ok(true)
 }
