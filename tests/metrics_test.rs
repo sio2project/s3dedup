@@ -3,7 +3,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::get;
 use s3dedup::AppState;
-use s3dedup::config::BucketConfig;
+use s3dedup::config::{BucketConfig, Config};
 use std::sync::Arc;
 use tower::util::ServiceExt;
 
@@ -22,17 +22,10 @@ async fn create_test_app_state() -> Arc<AppState> {
 
     std::fs::create_dir_all("db").ok();
 
-    let config = BucketConfig {
+    let bucket_config = BucketConfig {
         name: test_bucket,
         address: "127.0.0.1".to_string(),
         port: 3000,
-        kvstorage_type: s3dedup::config::KVStorageType::SQLite,
-        sqlite: Some(s3dedup::config::SQLiteConfig {
-            path: format!("db/test-metrics-{}.db", unique_id),
-            pool_size: 10,
-        }),
-        postgres: None,
-        locks_type: s3dedup::config::LocksType::Memory,
         s3storage_type: s3dedup::config::S3StorageType::MinIO,
         minio: Some(s3dedup::config::MinIOConfig {
             endpoint: "http://localhost:9000".to_string(),
@@ -43,6 +36,21 @@ async fn create_test_app_state() -> Arc<AppState> {
         cleaner: Default::default(),
         filetracker_url: None,
         filetracker_v1_dir: None,
+    };
+
+    let config = Config {
+        logging: s3dedup::logging::LoggingConfig {
+            level: "info".to_string(),
+            json: false,
+        },
+        kvstorage_type: s3dedup::config::KVStorageType::SQLite,
+        sqlite: Some(s3dedup::config::SQLiteConfig {
+            path: format!("db/test-metrics-{}.db", unique_id),
+            pool_size: 10,
+        }),
+        postgres: None,
+        locks_type: s3dedup::config::LocksType::Memory,
+        bucket: bucket_config,
     };
 
     let app_state = AppState::new(&config).await.unwrap();
@@ -256,17 +264,10 @@ async fn test_migration_active_metric() {
     std::fs::create_dir_all("db").ok();
 
     // Create app with filetracker client (migration mode)
-    let config = BucketConfig {
+    let bucket_config = BucketConfig {
         name: test_bucket,
         address: "127.0.0.1".to_string(),
         port: 3000,
-        kvstorage_type: s3dedup::config::KVStorageType::SQLite,
-        sqlite: Some(s3dedup::config::SQLiteConfig {
-            path: format!("db/test-migration-{}.db", unique_id),
-            pool_size: 10,
-        }),
-        postgres: None,
-        locks_type: s3dedup::config::LocksType::Memory,
         s3storage_type: s3dedup::config::S3StorageType::MinIO,
         minio: Some(s3dedup::config::MinIOConfig {
             endpoint: "http://localhost:9000".to_string(),
@@ -277,6 +278,21 @@ async fn test_migration_active_metric() {
         cleaner: Default::default(),
         filetracker_url: Some("http://localhost:8000".to_string()),
         filetracker_v1_dir: None,
+    };
+
+    let config = Config {
+        logging: s3dedup::logging::LoggingConfig {
+            level: "info".to_string(),
+            json: false,
+        },
+        kvstorage_type: s3dedup::config::KVStorageType::SQLite,
+        sqlite: Some(s3dedup::config::SQLiteConfig {
+            path: format!("db/test-migration-{}.db", unique_id),
+            pool_size: 10,
+        }),
+        postgres: None,
+        locks_type: s3dedup::config::LocksType::Memory,
+        bucket: bucket_config,
     };
 
     let app_state = AppState::new_with_filetracker(&config, "http://localhost:8000".to_string())

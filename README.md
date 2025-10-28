@@ -14,7 +14,7 @@ S3 deduplication proxy server with Filetracker protocol compatibility.
 - **Distributed Locking**: PostgreSQL advisory locks for distributed, high-availability deployments
 - **Migration Support**: Offline and live migration from old Filetracker instances
 - **Auto Cleanup**: Background cleaner removes unreferenced S3 objects
-- **Multi-bucket**: Run multiple independent buckets on different ports
+- **Single-instance per bucket**: Each instance handles exactly one bucket; scale horizontally with multiple instances
 
 ## Quick Start with Docker
 
@@ -93,7 +93,7 @@ POSTGRES_MAX_CONNECTIONS=10
 
 ### Distributed Locking (PostgreSQL Advisory Locks)
 
-For high-availability deployments with multiple s3dedup instances, enable PostgreSQL-based distributed locks:
+For distributed locking across multiple instances in high-availability setups, enable PostgreSQL-based advisory locks:
 
 ```
 LOCKS_TYPE=postgres
@@ -105,109 +105,22 @@ POSTGRES_DB=s3dedup
 POSTGRES_MAX_CONNECTIONS=10
 ```
 
-**Benefits of PostgreSQL Locks**:
-- **Distributed Locking**: Multiple s3dedup instances can safely coordinate file operations
-- **High Availability**: If one instance fails, others can continue with the same locks
-- **Load Balancing**: Multiple instances can share the same database for coordinated access
-- **Atomic Operations**: Prevents race conditions in concurrent file operations
+**When to Use**:
+- **Single-instance deployments**: Use default memory-based locking (LOCKS_TYPE=memory)
+- **Multi-instance HA deployments**: Use PostgreSQL-based locking for coordinated access
 
-**How It Works**:
-- Uses PostgreSQL's built-in advisory locks (`pg_advisory_lock`, `pg_advisory_lock_shared`)
-- Lock keys are hashed to 64-bit integers for PostgreSQL's lock API
-- Shared locks allow concurrent reads; exclusive locks ensure serialized writes
-- Automatic lock release when guard is dropped (via background cleanup tasks)
-
-**Note**: PostgreSQL locks require the same PostgreSQL instance used for KV storage. Connection pool is shared between both uses.
+**Note**: PostgreSQL locks share the connection pool with KV storage. Ensure sufficient pool size for concurrent operations. See [DEVELOPMENT.md](DEVELOPMENT.md) for implementation details.
 
 ### Connection Pool Sizing
 
-The `POSTGRES_MAX_CONNECTIONS` setting controls the maximum number of concurrent database connections from a single s3dedup instance. This **single pool** is shared between KV storage operations and lock management.
+The `POSTGRES_MAX_CONNECTIONS` setting controls the maximum number of concurrent database connections. This pool is shared between KV storage operations and lock management.
 
-**How to Choose Pool Size:**
+**Quick Start Recommendations:**
+- **Development**: `POSTGRES_MAX_CONNECTIONS=10`
+- **Small Production (1-3 instances)**: `POSTGRES_MAX_CONNECTIONS=20-30`
+- **Large Production (5+ instances)**: `POSTGRES_MAX_CONNECTIONS=50-100`
 
-```
-Pool Size = (Concurrent Requests × 1.5) + Lock Overhead
-```
-
-**General Guidelines:**
-
-| Deployment | Concurrency | Recommended Pool Size | Notes |
-|------------|-------------|----------------------|-------|
-| **Low** | 1-5 concurrent requests | 10 | Default, suitable for development/testing |
-| **Medium** | 5-20 concurrent requests | 20-30 | Small production deployments |
-| **High** | 20-100 concurrent requests | 50-100 | Large production deployments |
-| **Very High** | 100+ concurrent requests | 100-200 | Use multiple instances with load balancing |
-
-**Factors to Consider:**
-
-1. **Number of s3dedup Instances**
-   - If you have N instances, each needs its own pool
-   - Total connections = N instances × pool_size
-   - PostgreSQL must have enough capacity for all instances
-   - Example: 3 instances × 30 pool_size = 90 connections needed
-
-2. **Lock Contention**
-   - File operations acquire locks (1 connection per lock)
-   - Concurrent uploads/downloads increase lock pressure
-   - Add 20% overhead for lock operations
-   - Example: 20 concurrent requests → pool_size = (20 × 1.5) + overhead ≈ 35
-
-3. **Database Configuration**
-   - Check PostgreSQL `max_connections` setting
-   - Reserve connections for maintenance, monitoring, backups
-   - Example: PostgreSQL with 200 max_connections:
-     - Reserve 10 for maintenance
-     - If 3 s3dedup instances: (200 - 10) / 3 ≈ 63 per instance
-
-4. **Memory Usage Per Connection**
-   - Each connection uses ~5-10 MB of memory
-   - Pool size 50 = ~250-500 MB per instance
-   - Monitor actual usage and adjust accordingly
-
-**Example Configurations:**
-
-**Development (1 instance, low throughput):**
-```json
-"postgres": {
-  "pool_size": 10
-}
-```
-
-**Production (3 instances, medium throughput):**
-```json
-"postgres": {
-  "pool_size": 30
-}
-```
-With PostgreSQL `max_connections = 100`:
-- 3 × 30 = 90 connections (10 reserved)
-
-**High-Availability (5 instances, high throughput with PostgreSQL max_connections = 200):**
-```json
-"postgres": {
-  "pool_size": 35
-}
-```
-- 5 × 35 = 175 connections (25 reserved for other operations)
-
-**Monitoring and Tuning:**
-
-Monitor these metrics to optimize pool size:
-
-1. **Connection Utilization**: Check if connections are frequently exhausted
-   ```sql
-   SELECT count(*) FROM pg_stat_activity WHERE datname = 's3dedup';
-   ```
-
-2. **Lock Wait Times**: Monitor if operations wait for available connections
-3. **Memory Usage**: Watch instance memory as pool size increases
-
-**Scaling Strategy:**
-
-- **Start Conservative**: Begin with pool_size = 10-20
-- **Monitor Usage**: Track connection utilization over 1-2 weeks
-- **Increase Gradually**: Increment by 10-20 when you see high utilization
-- **Scale Horizontally**: Instead of very large pools (>100), use more instances with moderate pools
+For detailed pool sizing guidance, monitoring strategies, and tuning considerations, see [DEVELOPMENT.md](DEVELOPMENT.md#connection-pool-sizing).
 
 ### Config File
 
@@ -223,6 +136,47 @@ docker run -d \
 ```
 
 Environment variables override config file values.
+
+## Deployment and Scaling
+
+### Single-Instance per Bucket Architecture
+
+s3dedup follows a **single-bucket-per-instance** design pattern, consistent with 12-factor application principles:
+
+- **One Instance = One Bucket**: Each s3dedup instance manages exactly one S3 bucket and serves one Filetracker endpoint
+- **Horizontal Scaling**: For multiple buckets, run multiple s3dedup instances (one per bucket)
+- **Simplified Configuration**: Cleaner config files, easier to reason about, better for container orchestration
+
+### High-Availability Deployments
+
+For a single bucket with high availability, run multiple instances with PostgreSQL locks and shared database:
+
+```bash
+# All instances share the same PostgreSQL database and use PostgreSQL locks
+docker run -d \
+  --name s3dedup-ha-1 \
+  -p 8001:8080 \
+  -e BUCKET_NAME=files \
+  -e LISTEN_PORT=8080 \
+  -e KVSTORAGE_TYPE=postgres \
+  -e LOCKS_TYPE=postgres \
+  -e POSTGRES_HOST=postgres-db \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=s3dedup \
+  -e S3_ENDPOINT=http://minio:9000 \
+  -e S3_ACCESS_KEY=minioadmin \
+  -e S3_SECRET_KEY=minioadmin \
+  ghcr.io/sio2project/s3dedup:latest server --env
+
+# Repeat for instances 2, 3, etc., on different ports
+```
+
+**Benefits of HA Setup**:
+- **Load Balancing**: Requests can be distributed across multiple instances
+- **Fault Tolerance**: If one instance fails, others continue serving requests
+- **Coordinated Access**: PostgreSQL locks ensure safe concurrent file operations
+- **Shared Metadata**: Single database prevents data inconsistency
 
 ## Migration
 
@@ -344,27 +298,43 @@ Compatible with Filetracker protocol v2:
 - `PUT /ft/files/{path}` - Upload file
 - `DELETE /ft/files/{path}` - Delete file
 
-## Building from Source
+
+## Testing
+
+For comprehensive testing guide, see **[DEVELOPMENT.md](DEVELOPMENT.md)**.
+
+Quick start:
 
 ```bash
-# Build binary
-cargo build --release
+# Run unit tests (no external dependencies)
+cargo test --lib
 
-# Build Docker image
-docker build -t s3dedup:1.0.0-dev .
-
-# Run tests
+# Run all tests (requires PostgreSQL + MinIO)
+docker-compose up -d
+export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
 cargo test
+docker-compose down
 ```
 
 ## Development
 
+See **[DEVELOPMENT.md](DEVELOPMENT.md)** for detailed development instructions including:
+
+- Building from source
+- Running tests with different configurations
+- PostgreSQL advisory lock implementation details
+- Contributing guidelines
+- Performance considerations
+
+Quick start:
+
 ```bash
-# Run with Docker Compose (includes MinIO)
+# Run with Docker Compose (includes PostgreSQL + MinIO)
 docker-compose up
 
-# Run locally
-cargo run -- server --config config.json
+# In another terminal, run tests
+export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
+cargo test
 ```
 
 ## Architecture
@@ -378,10 +348,13 @@ cargo run -- server --config config.json
   - PostgreSQL locks: Distributed coordination, suitable for multi-instance HA setups
 - **Cleaner**: Background worker that removes unreferenced S3 objects
 
-For detailed architecture documentation, see [docs/deduplication.md](docs/deduplication.md).
+For detailed architecture documentation, see:
+- [docs/deduplication.md](docs/deduplication.md) - Deduplication architecture and performance
+- [DEVELOPMENT.md](DEVELOPMENT.md) - Lock implementation details and code architecture
 
 ## Documentation
 
+- **[Development Guide](DEVELOPMENT.md)** - Building, testing, lock implementation details, and contributing
 - **[Migration Guide](docs/migration.md)** - Migrating from Filetracker v2.1+ (offline and live migration strategies)
 - **[Deduplication Architecture](docs/deduplication.md)** - How content-based deduplication works, data flows, and performance characteristics
 

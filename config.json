@@ -3,30 +3,28 @@
     "level": "debug",
     "json": false
   },
-  "buckets": [
-    {
-      "name": "bucket1",
-      "address": "0.0.0.0",
-      "port": 3000,
-      "kvstorage_type": "sqlite",
-      "sqlite": {
-        "path": "db/kv.db",
-        "pool_size": 10
-      },
-      "locks_type": "memory",
-      "s3storage_type": "minio",
-      "minio": {
-        "endpoint": "http://localhost:9000",
-        "access_key": "minioadmin",
-        "secret_key": "minioadmin",
-        "force_path_style": true
-      },
-      "cleaner": {
-        "enabled": false,
-        "interval_seconds": 3600,
-        "batch_size": 1000,
-        "max_deletes_per_run": 10000
-      }
+  "kvstorage_type": "sqlite",
+  "sqlite": {
+    "path": "db/kv.db",
+    "pool_size": 10
+  },
+  "locks_type": "memory",
+  "bucket": {
+    "name": "default",
+    "address": "0.0.0.0",
+    "port": 8080,
+    "s3storage_type": "minio",
+    "minio": {
+      "endpoint": "http://localhost:9000",
+      "access_key": "minioadmin",
+      "secret_key": "minioadmin",
+      "force_path_style": true
+    },
+    "cleaner": {
+      "enabled": false,
+      "interval_seconds": 3600,
+      "batch_size": 1000,
+      "max_deletes_per_run": 10000
     }
-  ]
+  }
 }

@@ -7,20 +7,37 @@ mod postgres_locks_tests {
     //!
     //! NOTE: These tests require a running PostgreSQL instance with the DATABASE_URL environment variable set.
     //! If DATABASE_URL is not set, the tests are skipped.
-    use s3dedup::config::{BucketConfig, KVStorageType, MinIOConfig, PostgresConfig};
+    use s3dedup::config::{BucketConfig, Config, KVStorageType, MinIOConfig, PostgresConfig};
     use s3dedup::locks::{LocksStorage, LocksType};
     use std::sync::Arc;
 
-    fn get_postgres_config() -> Option<BucketConfig> {
+    fn get_postgres_config() -> Option<Config> {
         // Only run PostgreSQL tests if DATABASE_URL is set
         if std::env::var("DATABASE_URL").is_err() {
             return None;
         }
 
-        Some(BucketConfig {
+        let bucket_config = BucketConfig {
             name: "test-postgres-locks".to_string(),
             address: "127.0.0.1".to_string(),
             port: 3001,
+            s3storage_type: s3dedup::s3storage::S3StorageType::MinIO,
+            minio: Some(MinIOConfig {
+                endpoint: "http://localhost:9000".to_string(),
+                access_key: "minioadmin".to_string(),
+                secret_key: "minioadmin".to_string(),
+                force_path_style: true,
+            }),
+            cleaner: s3dedup::cleaner::CleanerConfig::default(),
+            filetracker_url: None,
+            filetracker_v1_dir: None,
+        };
+
+        Some(Config {
+            logging: s3dedup::logging::LoggingConfig {
+                level: "info".to_string(),
+                json: false,
+            },
             kvstorage_type: KVStorageType::Postgres,
             sqlite: None,
             postgres: Some(PostgresConfig {
@@ -32,16 +49,7 @@ mod postgres_locks_tests {
                 pool_size: 10,
             }),
             locks_type: LocksType::Postgres,
-            s3storage_type: s3dedup::s3storage::S3StorageType::MinIO,
-            minio: Some(MinIOConfig {
-                endpoint: "http://localhost:9000".to_string(),
-                access_key: "minioadmin".to_string(),
-                secret_key: "minioadmin".to_string(),
-                force_path_style: true,
-            }),
-            cleaner: s3dedup::cleaner::CleanerConfig::default(),
-            filetracker_url: None,
-            filetracker_v1_dir: None,
+            bucket: bucket_config,
         })
     }
 
@@ -86,7 +94,10 @@ mod postgres_locks_tests {
 
         // First exclusive lock should acquire successfully
         let lock1 = locks.prepare_lock(lock_key.clone()).await;
-        let guard1 = lock1.acquire_exclusive().await;
+        let guard1 = lock1
+            .acquire_exclusive()
+            .await
+            .expect("Should acquire first exclusive lock");
 
         // Spawn a task to try to acquire the same lock
         let locks_for_task = locks.clone();
@@ -95,8 +106,12 @@ mod postgres_locks_tests {
         let task = tokio::spawn(async move {
             // This should block until guard1 is released
             let lock2 = locks_for_task.prepare_lock(lock_key_clone).await;
-            let _guard2 = lock2.acquire_exclusive().await;
+            let guard2 = lock2
+                .acquire_exclusive()
+                .await
+                .expect("Should acquire second exclusive lock");
             // If we get here, the lock was acquired (after guard1 was dropped)
+            let _ = guard2.release().await;
             true
         });
 
@@ -109,8 +124,8 @@ mod postgres_locks_tests {
             "Lock should be held and task should be waiting"
         );
 
-        // Drop the first lock
-        drop(guard1);
+        // Release the first lock explicitly (required for PostgreSQL locks)
+        let _ = guard1.release().await;
 
         // Now the task should be able to acquire the lock
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), task)
@@ -145,12 +160,18 @@ mod postgres_locks_tests {
         let lock1 = locks.prepare_lock(lock_key.clone()).await;
         let lock2 = locks.prepare_lock(lock_key.clone()).await;
 
-        let guard1 = lock1.acquire_shared().await;
-        let guard2 = lock2.acquire_shared().await;
+        let guard1 = lock1
+            .acquire_shared()
+            .await
+            .expect("Should acquire shared lock");
+        let guard2 = lock2
+            .acquire_shared()
+            .await
+            .expect("Should acquire shared lock");
 
         // Both guards are held - this should not deadlock
-        drop(guard1);
-        drop(guard2);
+        let _ = guard1.release().await;
+        let _ = guard2.release().await;
     }
 
     #[tokio::test]
@@ -175,7 +196,10 @@ mod postgres_locks_tests {
 
         // Acquire an exclusive lock
         let lock1 = locks.prepare_lock(lock_key.clone()).await;
-        let guard1 = lock1.acquire_exclusive().await;
+        let guard1 = lock1
+            .acquire_exclusive()
+            .await
+            .expect("Should acquire exclusive lock");
 
         // Try to acquire a shared lock in another task
         let locks_clone = locks.clone();
@@ -183,7 +207,11 @@ mod postgres_locks_tests {
 
         let task = tokio::spawn(async move {
             let lock2 = locks_clone.prepare_lock(lock_key_clone).await;
-            let _guard2 = lock2.acquire_shared().await;
+            let guard2 = lock2
+                .acquire_shared()
+                .await
+                .expect("Should acquire shared lock");
+            let _ = guard2.release().await;
             true
         });
 
@@ -196,8 +224,8 @@ mod postgres_locks_tests {
             "Shared lock should be blocked by exclusive lock"
         );
 
-        // Drop the exclusive lock
-        drop(guard1);
+        // Release the exclusive lock explicitly
+        let _ = guard1.release().await;
 
         // Now the task should be able to acquire the shared lock
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), task)
@@ -235,14 +263,20 @@ mod postgres_locks_tests {
         let lock1 = locks.prepare_lock(lock_key1).await;
         let lock2 = locks.prepare_lock(lock_key2).await;
 
-        let guard1 = lock1.acquire_exclusive().await;
+        let guard1 = lock1
+            .acquire_exclusive()
+            .await
+            .expect("Should acquire exclusive lock");
 
         // Should be able to acquire exclusive lock on different key immediately
-        let guard2 = lock2.acquire_exclusive().await;
+        let guard2 = lock2
+            .acquire_exclusive()
+            .await
+            .expect("Should acquire exclusive lock");
 
         // Both locks should be held independently
-        drop(guard1);
-        drop(guard2);
+        let _ = guard1.release().await;
+        let _ = guard2.release().await;
     }
 
     #[tokio::test]
@@ -268,18 +302,25 @@ mod postgres_locks_tests {
         // Acquire and release lock in a scope
         {
             let lock1 = locks.prepare_lock(lock_key.clone()).await;
-            let _guard1 = lock1.acquire_exclusive().await;
-            // Guard is dropped here
+            let guard1 = lock1
+                .acquire_exclusive()
+                .await
+                .expect("Should acquire lock");
+            // Explicitly release before scope ends
+            let _ = guard1.release().await;
         }
 
-        // Give time for the background task to release the lock
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Give time for the connection to be returned to the pool
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Should be able to acquire the lock immediately
         let lock2 = locks.prepare_lock(lock_key.clone()).await;
-        let guard2 = lock2.acquire_exclusive().await;
+        let guard2 = lock2
+            .acquire_exclusive()
+            .await
+            .expect("Should acquire lock after release");
 
         // If we get here, the lock was successfully released and reacquired
-        drop(guard2);
+        let _ = guard2.release().await;
     }
 }

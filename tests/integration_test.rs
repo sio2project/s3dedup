@@ -16,7 +16,9 @@ async fn create_test_app() -> Router {
 // Helper to create test app with access to app state for S3 verification
 async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     use s3dedup::AppState;
-    use s3dedup::config::{BucketConfig, KVStorageType, MinIOConfig, PostgresConfig, SQLiteConfig};
+    use s3dedup::config::{
+        BucketConfig, Config, KVStorageType, MinIOConfig, PostgresConfig, SQLiteConfig,
+    };
     use s3dedup::kvstorage::KVStorage;
     use s3dedup::locks::LocksStorage;
     use s3dedup::s3storage::S3Storage;
@@ -67,14 +69,10 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         )
     };
 
-    let config = BucketConfig {
+    let bucket_config = BucketConfig {
         name: test_bucket.clone(),
         address: "127.0.0.1".to_string(),
         port: 3001,
-        kvstorage_type,
-        sqlite: sqlite_config,
-        postgres: postgres_config,
-        locks_type: s3dedup::locks::LocksType::Memory,
         s3storage_type: s3dedup::s3storage::S3StorageType::MinIO,
         minio: Some(MinIOConfig {
             endpoint: "http://localhost:9000".to_string(),
@@ -87,14 +85,26 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         filetracker_v1_dir: None,
     };
 
+    let config = Config {
+        logging: s3dedup::logging::LoggingConfig {
+            level: "info".to_string(),
+            json: false,
+        },
+        kvstorage_type,
+        sqlite: sqlite_config,
+        postgres: postgres_config,
+        locks_type: s3dedup::locks::LocksType::Memory,
+        bucket: bucket_config,
+    };
+
     let kvstorage = KVStorage::new(&config).await.unwrap();
     let locks = LocksStorage::new_with_config(config.locks_type, &config)
         .await
         .unwrap();
-    let s3storage = S3Storage::new(&config).await.unwrap();
+    let s3storage = S3Storage::new(&config.bucket).await.unwrap();
 
     let app_state = Arc::new(AppState {
-        bucket_name: config.name,
+        bucket_name: config.bucket.name.clone(),
         kvstorage: Arc::new(Mutex::new(kvstorage)),
         locks,
         s3storage: Arc::new(Mutex::new(s3storage)),

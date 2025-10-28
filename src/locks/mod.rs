@@ -28,16 +28,38 @@ pub enum LocksType {
     Postgres,
 }
 
+use std::future::Future;
+use std::pin::Pin;
+
 #[must_use = "droping temporary lock makes no sense"]
-pub trait SharedLockGuard<'a> {}
+pub trait SharedLockGuard<'a> {
+    /// Release the lock explicitly before the guard is dropped.
+    /// For PostgreSQL locks, this unlocks the advisory lock in the database.
+    /// For memory locks, this drops the Tokio RwLock guard.
+    fn release(self: Box<Self>) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 #[must_use = "droping temporary lock makes no sense"]
-pub trait ExclusiveLockGuard<'a> {}
+pub trait ExclusiveLockGuard<'a> {
+    /// Release the lock explicitly before the guard is dropped.
+    /// For PostgreSQL locks, this unlocks the advisory lock in the database.
+    /// For memory locks, this drops the Tokio RwLock guard.
+    fn release(self: Box<Self>) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 #[async_trait]
 #[must_use = "preparing temporary lock makes no sense"]
 pub trait Lock {
-    async fn acquire_shared<'a>(&'a self) -> Box<dyn SharedLockGuard<'a> + Send + 'a>;
-    async fn acquire_exclusive<'a>(&'a self) -> Box<dyn ExclusiveLockGuard<'a> + Send + 'a>;
+    async fn acquire_shared<'a>(
+        &'a self,
+    ) -> anyhow::Result<Box<dyn SharedLockGuard<'a> + Send + 'a>>;
+    async fn acquire_exclusive<'a>(
+        &'a self,
+    ) -> anyhow::Result<Box<dyn ExclusiveLockGuard<'a> + Send + 'a>>;
 }
 
 #[async_trait]
@@ -69,7 +91,7 @@ impl LocksStorage {
 
     pub async fn new_with_config(
         lock_type: LocksType,
-        bucket_config: &crate::config::BucketConfig,
+        config: &crate::config::Config,
     ) -> anyhow::Result<Box<Self>> {
         match lock_type {
             LocksType::Memory => {
@@ -78,7 +100,7 @@ impl LocksStorage {
             }
             LocksType::Postgres => {
                 info!("Using PostgreSQL as locks storage");
-                let pg_locks = postgres::PostgresLocks::new_with_config(bucket_config).await?;
+                let pg_locks = postgres::PostgresLocks::new_with_config(config).await?;
                 Ok(Box::new(LocksStorage::Postgres(pg_locks)))
             }
         }

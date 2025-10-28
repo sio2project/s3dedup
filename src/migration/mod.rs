@@ -174,7 +174,10 @@ pub async fn migrate_single_file_from_metadata(
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
     let locks = &app_state.locks;
     let lock = locks.prepare_lock(lock_key).await;
-    let _guard = lock.acquire_exclusive().await;
+    let guard = lock
+        .acquire_exclusive()
+        .await
+        .context("Failed to acquire exclusive lock for migration")?;
 
     // Recheck if file was already migrated after acquiring lock (race condition protection)
     let current_modified_after_lock = app_state
@@ -186,6 +189,7 @@ pub async fn migrate_single_file_from_metadata(
 
     if current_modified_after_lock >= file_metadata.last_modified {
         // File was migrated by another concurrent task, skip
+        let _ = guard.release().await;
         return Ok(());
     }
 
@@ -272,6 +276,8 @@ pub async fn migrate_single_file_from_metadata(
         .await
         .set_modified(&app_state.bucket_name, path, file_metadata.last_modified)
         .await?;
+
+    let _ = guard.release().await;
     Ok(())
 }
 
@@ -315,7 +321,10 @@ async fn migrate_single_file(
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
     let locks_storage = &app_state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
-    let _guard = lock.acquire_exclusive().await;
+    let guard = lock
+        .acquire_exclusive()
+        .await
+        .context("Failed to acquire exclusive lock for migration")?;
 
     // Recheck if file was already migrated after acquiring lock (race condition protection)
     let current_modified_after_lock = app_state
@@ -327,6 +336,7 @@ async fn migrate_single_file(
 
     if current_modified_after_lock >= file_metadata.last_modified {
         // File was migrated by another concurrent task, skip
+        let _ = guard.release().await;
         return Ok(false);
     }
 
@@ -414,6 +424,7 @@ async fn migrate_single_file(
         .set_modified(&app_state.bucket_name, path, file_metadata.last_modified)
         .await?;
 
+    let _ = guard.release().await;
     Ok(true)
 }
 
@@ -654,7 +665,10 @@ async fn migrate_single_file_from_v1_fs(
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
     let locks_storage = &app_state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
-    let _guard = lock.acquire_exclusive().await;
+    let guard = lock
+        .acquire_exclusive()
+        .await
+        .context("Failed to acquire exclusive lock for migration")?;
 
     // Recheck if file was already migrated after acquiring lock (race condition protection)
     let current_modified_after_lock = app_state
@@ -666,6 +680,7 @@ async fn migrate_single_file_from_v1_fs(
 
     if current_modified_after_lock >= file_info.last_modified {
         // File was migrated by another concurrent task, skip
+        let _ = guard.release().await;
         return Ok(false);
     }
 
@@ -761,5 +776,6 @@ async fn migrate_single_file_from_v1_fs(
         .set_modified(&app_state.bucket_name, path, file_info.last_modified)
         .await?;
 
+    let _ = guard.release().await;
     Ok(true)
 }
