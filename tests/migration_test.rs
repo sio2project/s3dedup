@@ -208,7 +208,9 @@ async fn create_test_app_state() -> Arc<AppState> {
     };
 
     let kvstorage = KVStorage::new(&config).await.unwrap();
-    let locks = LocksStorage::new(config.locks_type);
+    let locks = LocksStorage::new_with_config(config.locks_type, &config)
+        .await
+        .unwrap();
     let s3storage = S3Storage::new(&config).await.unwrap();
 
     let app_state = Arc::new(AppState {

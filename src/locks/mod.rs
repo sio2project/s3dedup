@@ -3,6 +3,7 @@ use serde::Deserialize;
 use tracing::info;
 
 pub mod memory;
+pub mod postgres;
 
 /**
  * Get key for lock on file
@@ -23,16 +24,18 @@ fn hash_lock(bucket: &str, hash: &str) -> String {
 pub enum LocksType {
     #[serde(rename = "memory")]
     Memory,
+    #[serde(rename = "postgres")]
+    Postgres,
 }
 
 #[must_use = "droping temporary lock makes no sense"]
-pub(crate) trait SharedLockGuard<'a> {}
+pub trait SharedLockGuard<'a> {}
 #[must_use = "droping temporary lock makes no sense"]
-pub(crate) trait ExclusiveLockGuard<'a> {}
+pub trait ExclusiveLockGuard<'a> {}
 
 #[async_trait]
 #[must_use = "preparing temporary lock makes no sense"]
-pub(crate) trait Lock {
+pub trait Lock {
     async fn acquire_shared<'a>(&'a self) -> Box<dyn SharedLockGuard<'a> + Send + 'a>;
     async fn acquire_exclusive<'a>(&'a self) -> Box<dyn ExclusiveLockGuard<'a> + Send + 'a>;
 }
@@ -48,6 +51,7 @@ pub(crate) trait LockStorage {
 #[derive(Clone)]
 pub enum LocksStorage {
     Memory(memory::MemoryLocks),
+    Postgres(Box<postgres::PostgresLocks>),
 }
 
 impl LocksStorage {
@@ -57,12 +61,33 @@ impl LocksStorage {
                 info!("Using memory as locks storage");
                 Box::new(LocksStorage::Memory(*memory::MemoryLocks::new()))
             }
+            LocksType::Postgres => {
+                panic!("PostgreSQL locks must be initialized with config via new_with_config")
+            }
         }
     }
 
-    pub(crate) async fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send> {
+    pub async fn new_with_config(
+        lock_type: LocksType,
+        bucket_config: &crate::config::BucketConfig,
+    ) -> anyhow::Result<Box<Self>> {
+        match lock_type {
+            LocksType::Memory => {
+                info!("Using memory as locks storage");
+                Ok(Box::new(LocksStorage::Memory(*memory::MemoryLocks::new())))
+            }
+            LocksType::Postgres => {
+                info!("Using PostgreSQL as locks storage");
+                let pg_locks = postgres::PostgresLocks::new_with_config(bucket_config).await?;
+                Ok(Box::new(LocksStorage::Postgres(pg_locks)))
+            }
+        }
+    }
+
+    pub async fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send> {
         match self {
             LocksStorage::Memory(memory_locks) => memory_locks.prepare_lock(key).await,
+            LocksStorage::Postgres(postgres_locks) => postgres_locks.prepare_lock(key).await,
         }
     }
 }

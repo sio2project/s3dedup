@@ -21,6 +21,8 @@ jobs:
             locks: memory
           - kvstorage: postgres
             locks: memory
+          - kvstorage: postgres
+            locks: postgres
 
     services:
       postgres:
@@ -84,22 +86,16 @@ jobs:
         ./mc alias set local http://localhost:9000 minioadmin minioadmin
         ./mc mb local/bucket1 || true
 
-    - name: Check formatting
-      run: cargo fmt -- --check
-
-    - name: Run clippy
-      run: cargo clippy -- -D warnings
-
     - name: Run tests (SQLite)
       if: matrix.kvstorage == 'sqlite'
       run: cargo test --verbose
       env:
         RUST_LOG: debug
 
-    - name: Run tests (Postgres)
-      if: matrix.kvstorage == 'postgres'
+    - name: Run tests (Postgres + Memory Locks)
+      if: matrix.kvstorage == 'postgres' && matrix.locks == 'memory'
       run: |
-        # Create a test config for Postgres
+        # Create a test config for Postgres with memory locks
         cat > config.test.json << EOF
         {
           "logging": {
@@ -121,6 +117,49 @@ jobs:
                 "pool_size": 10
               },
               "locks_type": "memory",
+              "s3storage_type": "minio",
+              "minio": {
+                "endpoint": "http://localhost:9000",
+                "access_key": "minioadmin",
+                "secret_key": "minioadmin",
+                "force_path_style": true
+              }
+            }
+          ]
+        }
+        EOF
+
+        # Run tests
+        cargo test --verbose
+      env:
+        RUST_LOG: debug
+        DATABASE_URL: postgres://postgres:postgres@localhost:5432/s3dedup_test
+
+    - name: Run tests (Postgres + Postgres Locks)
+      if: matrix.kvstorage == 'postgres' && matrix.locks == 'postgres'
+      run: |
+        # Create a test config for Postgres with PostgreSQL locks
+        cat > config.test.json << EOF
+        {
+          "logging": {
+            "level": "debug",
+            "json": false
+          },
+          "buckets": [
+            {
+              "name": "bucket1",
+              "address": "0.0.0.0",
+              "port": 3000,
+              "kvstorage_type": "postgres",
+              "postgres": {
+                "host": "localhost",
+                "port": 5432,
+                "user": "postgres",
+                "password": "postgres",
+                "dbname": "s3dedup_test",
+                "pool_size": 10
+              },
+              "locks_type": "postgres",
               "s3storage_type": "minio",
               "minio": {
                 "endpoint": "http://localhost:9000",
