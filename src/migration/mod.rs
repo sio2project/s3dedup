@@ -249,12 +249,12 @@ pub async fn migrate_single_file_from_metadata(
                     .await
                     .delete_object(&old_hash)
                     .await
-                {
-                    warn!(
-                        "Failed to delete orphaned S3 object {} during migration: {}",
-                        old_hash, e
-                    );
-                }
+            {
+                warn!(
+                    "Failed to delete orphaned S3 object {} during migration: {}",
+                    old_hash, e
+                );
+            }
         }
     }
 
@@ -390,12 +390,12 @@ async fn migrate_single_file(
                     .await
                     .delete_object(&old_hash)
                     .await
-                {
-                    warn!(
-                        "Failed to delete orphaned S3 object {} during migration: {}",
-                        old_hash, e
-                    );
-                }
+            {
+                warn!(
+                    "Failed to delete orphaned S3 object {} during migration: {}",
+                    old_hash, e
+                );
+            }
         }
     }
 
@@ -737,12 +737,12 @@ async fn migrate_single_file_from_v1_fs(
                     .await
                     .delete_object(&old_hash)
                     .await
-                {
-                    warn!(
-                        "Failed to delete orphaned S3 object {} during migration: {}",
-                        old_hash, e
-                    );
-                }
+            {
+                warn!(
+                    "Failed to delete orphaned S3 object {} during migration: {}",
+                    old_hash, e
+                );
+            }
         }
     }
 
