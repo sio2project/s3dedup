@@ -110,8 +110,11 @@ impl AppState {
         }
 
         if total_logical_bytes > 0 {
-            let savings_ratio =
-                (total_logical_bytes - total_storage_bytes) as f64 / total_logical_bytes as f64;
+            // Clamp to 0 minimum - negative "savings" can happen when compression
+            // overhead exceeds gains (tiny files), but we report 0% not negative
+            let savings_ratio = ((total_logical_bytes - total_storage_bytes) as f64
+                / total_logical_bytes as f64)
+                .max(0.0);
             metrics::STORAGE_SAVINGS_RATIO.set(savings_ratio);
         }
 

@@ -391,11 +391,16 @@ impl KVStorageTrait for SQLite {
     }
 
     async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64> {
-        let (total,): (Option<i64>,) =
-            sqlx::query_as("SELECT SUM(compressed_size) FROM logical_size WHERE bucket = ?1")
-                .bind(bucket)
-                .fetch_one(&self.pool)
-                .await?;
+        // Only count storage for blobs that are actually referenced (refcount > 0)
+        let (total,): (Option<i64>,) = sqlx::query_as(
+            "SELECT SUM(l.compressed_size)
+             FROM logical_size l
+             INNER JOIN refcount r ON l.bucket = r.bucket AND l.hash = r.hash
+             WHERE l.bucket = ?1 AND r.refcount > 0",
+        )
+        .bind(bucket)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(total.unwrap_or(0))
     }
 

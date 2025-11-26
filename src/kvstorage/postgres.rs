@@ -507,10 +507,15 @@ impl KVStorageTrait for Postgres {
     }
 
     async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64> {
-        let table = self.table_name("logical_size");
+        // Only count storage for blobs that are actually referenced (refcount > 0)
+        let refcount_table = self.table_name("refcount");
+        let logical_size_table = self.table_name("logical_size");
         let query = format!(
-            "SELECT COALESCE(SUM(compressed_size), 0)::BIGINT FROM {} WHERE bucket = $1",
-            table
+            "SELECT COALESCE(SUM(l.compressed_size), 0)::BIGINT
+             FROM {} l
+             INNER JOIN {} r ON l.bucket = r.bucket AND l.hash = r.hash
+             WHERE l.bucket = $1 AND r.refcount > 0",
+            logical_size_table, refcount_table
         );
         let (total,): (i64,) = sqlx::query_as(&query)
             .bind(bucket)
