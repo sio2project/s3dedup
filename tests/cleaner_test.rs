@@ -203,13 +203,19 @@ async fn test_clean_unreferenced_refcounts() {
     kvstorage
         .lock()
         .await
-        .set_ref_count(&bucket_name, "hash1", 1)
+        .atomic_increment_ref_count(&bucket_name, "hash1")
         .await
         .unwrap();
     kvstorage
         .lock()
         .await
-        .set_ref_count(&bucket_name, "hash2", 2)
+        .atomic_increment_ref_count(&bucket_name, "hash2")
+        .await
+        .unwrap();
+    kvstorage
+        .lock()
+        .await
+        .atomic_increment_ref_count(&bucket_name, "hash2")
         .await
         .unwrap();
 
@@ -223,7 +229,7 @@ async fn test_clean_unreferenced_refcounts() {
     kvstorage
         .lock()
         .await
-        .set_ref_count(&bucket_name, "hash3", 1)
+        .atomic_increment_ref_count(&bucket_name, "hash3")
         .await
         .unwrap();
 
@@ -315,7 +321,7 @@ async fn test_clean_unused_s3_objects() {
     kvstorage
         .lock()
         .await
-        .set_ref_count(&bucket_name, "hash3", 1)
+        .atomic_increment_ref_count(&bucket_name, "hash3")
         .await
         .unwrap();
 
@@ -387,7 +393,7 @@ async fn test_clean_orphaned_logical_sizes() {
     kvstorage
         .lock()
         .await
-        .set_ref_count(&bucket_name, "hash3", 1)
+        .atomic_increment_ref_count(&bucket_name, "hash3")
         .await
         .unwrap();
 
@@ -594,7 +600,7 @@ async fn test_full_cleanup_cycle() {
     kvstorage
         .lock()
         .await
-        .set_ref_count(&bucket_name, "crash_hash", 1)
+        .atomic_increment_ref_count(&bucket_name, "crash_hash")
         .await
         .unwrap();
 
@@ -619,7 +625,7 @@ async fn test_full_cleanup_cycle() {
     kvstorage
         .lock()
         .await
-        .set_ref_count(&bucket_name, "good_hash", 1)
+        .atomic_increment_ref_count(&bucket_name, "good_hash")
         .await
         .unwrap();
     kvstorage

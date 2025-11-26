@@ -410,12 +410,12 @@ pub async fn migrate_single_file_from_metadata(
         .set_compressed_size(&app_state.bucket_name, &digest, compressed_size)
         .await?;
 
-    // Increment reference count
+    // Increment reference count atomically
     app_state
         .kvstorage
         .lock()
         .await
-        .increment_ref_count(&app_state.bucket_name, &digest)
+        .atomic_increment_ref_count(&app_state.bucket_name, &digest)
         .await?;
 
     // Release new hash lock
@@ -446,7 +446,7 @@ pub async fn migrate_single_file_from_metadata(
                 .kvstorage
                 .lock()
                 .await
-                .decrement_ref_count(&app_state.bucket_name, &old_hash)
+                .atomic_decrement_ref_count(&app_state.bucket_name, &old_hash)
                 .await?;
 
             // Delete blob if no longer referenced
@@ -596,12 +596,12 @@ async fn migrate_single_file(
         .set_compressed_size(&app_state.bucket_name, &digest, compressed_size)
         .await?;
 
-    // Increment reference count
+    // Increment reference count atomically
     app_state
         .kvstorage
         .lock()
         .await
-        .increment_ref_count(&app_state.bucket_name, &digest)
+        .atomic_increment_ref_count(&app_state.bucket_name, &digest)
         .await?;
 
     // Release new hash lock
@@ -632,7 +632,7 @@ async fn migrate_single_file(
                 .kvstorage
                 .lock()
                 .await
-                .decrement_ref_count(&app_state.bucket_name, &old_hash)
+                .atomic_decrement_ref_count(&app_state.bucket_name, &old_hash)
                 .await?;
 
             // Delete blob if no longer referenced
@@ -1045,12 +1045,12 @@ async fn migrate_single_file_from_v1_fs(
         .set_compressed_size(&app_state.bucket_name, &digest, compressed_data.len())
         .await?;
 
-    // Increment reference count
+    // Increment reference count atomically
     app_state
         .kvstorage
         .lock()
         .await
-        .increment_ref_count(&app_state.bucket_name, &digest)
+        .atomic_increment_ref_count(&app_state.bucket_name, &digest)
         .await?;
 
     // Release new hash lock
@@ -1081,7 +1081,7 @@ async fn migrate_single_file_from_v1_fs(
                 .kvstorage
                 .lock()
                 .await
-                .decrement_ref_count(&app_state.bucket_name, &old_hash)
+                .atomic_decrement_ref_count(&app_state.bucket_name, &old_hash)
                 .await?;
 
             // Delete blob if no longer referenced

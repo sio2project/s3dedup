@@ -91,7 +91,8 @@ impl KVStorageTrait for SQLite {
             CREATE TABLE IF NOT EXISTS version (
                 bucket TEXT NOT NULL PRIMARY KEY,
                 version TEXT NOT NULL
-            );",
+            );
+            CREATE INDEX IF NOT EXISTS idx_ref_file_hash ON ref_file(bucket, hash);",
         )
         .execute(&self.pool)
         .await?;
@@ -112,70 +113,34 @@ impl KVStorageTrait for SQLite {
         }
     }
 
-    async fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<()> {
-        sqlx::query("INSERT OR REPLACE INTO refcount (bucket, hash, refcount) VALUES (?1, ?2, ?3)")
-            .bind(bucket)
-            .bind(hash)
-            .bind(ref_cnt)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
-        // SQLite atomic increment using UPDATE...RETURNING (SQLite 3.35+)
-        // First try INSERT if not exists, then UPDATE to increment
-        let result: Result<(i32,), sqlx::Error> = sqlx::query_as(
-            "INSERT OR IGNORE INTO refcount (bucket, hash, refcount) VALUES (?1, ?2, 1);
-             UPDATE refcount SET refcount = refcount + 1 WHERE bucket = ?1 AND hash = ?2;
-             SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2",
+        // SQLite atomic increment using INSERT...ON CONFLICT...RETURNING (SQLite 3.35+)
+        // - New hash: INSERT with refcount=1, return 1
+        // - Existing hash: UPDATE refcount = refcount + 1, return new value
+        let (count,): (i32,) = sqlx::query_as(
+            "INSERT INTO refcount (bucket, hash, refcount) VALUES (?1, ?2, 1)
+             ON CONFLICT (bucket, hash) DO UPDATE SET refcount = refcount + 1
+             RETURNING refcount",
         )
         .bind(bucket)
         .bind(hash)
-        .bind(bucket)
-        .bind(hash)
-        .bind(bucket)
-        .bind(hash)
         .fetch_one(&self.pool)
-        .await;
-
-        match result {
-            Ok((count,)) => Ok(count),
-            Err(_) => {
-                // Fallback to explicit increment if UPDATE...RETURNING not supported
-                let cnt = self.get_ref_count(bucket, hash).await?;
-                self.set_ref_count(bucket, hash, cnt + 1).await?;
-                Ok(cnt + 1)
-            }
-        }
+        .await?;
+        Ok(count)
     }
 
     async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
         // SQLite atomic decrement using UPDATE...RETURNING (SQLite 3.35+)
-        let result: Result<(i32,), sqlx::Error> = sqlx::query_as(
-            "UPDATE refcount SET refcount = MAX(0, refcount - 1) WHERE bucket = ?1 AND hash = ?2;
-             SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2",
+        let (count,): (i32,) = sqlx::query_as(
+            "UPDATE refcount SET refcount = MAX(0, refcount - 1)
+             WHERE bucket = ?1 AND hash = ?2
+             RETURNING refcount",
         )
         .bind(bucket)
         .bind(hash)
-        .bind(bucket)
-        .bind(hash)
         .fetch_one(&self.pool)
-        .await;
-
-        match result {
-            Ok((count,)) => Ok(count),
-            Err(_) => {
-                // Fallback to explicit decrement if UPDATE...RETURNING not supported
-                let cnt = self.get_ref_count(bucket, hash).await?;
-                if cnt == 0 {
-                    return Ok(0);
-                }
-                let new_count = cnt - 1;
-                self.set_ref_count(bucket, hash, new_count).await?;
-                Ok(new_count)
-            }
-        }
+        .await?;
+        Ok(count)
     }
 
     async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64> {

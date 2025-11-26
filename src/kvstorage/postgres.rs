@@ -132,6 +132,15 @@ impl KVStorageTrait for Postgres {
         .execute(&self.pool)
         .await?;
 
+        // Create index on ref_file(bucket, hash) for efficient hash lookups by cleaner
+        sqlx::query(&format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_hash ON {}(bucket, hash)",
+            ref_file_table.replace('.', "_"),
+            ref_file_table
+        ))
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -151,22 +160,6 @@ impl KVStorageTrait for Postgres {
             Ok((refcount,)) => Ok(refcount),
             Err(_) => Ok(0),
         }
-    }
-
-    async fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<()> {
-        let table = self.table_name("refcount");
-        let query = format!(
-            "INSERT INTO {} (bucket, hash, refcount) VALUES ($1, $2, $3)
-            ON CONFLICT (bucket, hash) DO UPDATE SET refcount = $3",
-            table
-        );
-        sqlx::query(&query)
-            .bind(bucket)
-            .bind(hash)
-            .bind(ref_cnt)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 
     async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {

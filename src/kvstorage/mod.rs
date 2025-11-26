@@ -22,45 +22,15 @@ pub(crate) trait KVStorageTrait {
 
     async fn setup(&mut self) -> Result<()>;
     async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32>;
-    async fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<()>;
+
     /// Atomically increment the reference count (database-level atomic operation)
-    /// Prefer this over get_ref_count + set_ref_count to avoid race conditions
-    async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
-        // Default implementation: non-atomic. Database implementations should override.
-        let cnt = self.get_ref_count(bucket, hash).await?;
-        self.set_ref_count(bucket, hash, cnt + 1).await?;
-        Ok(cnt + 1)
-    }
+    /// Returns the new reference count after incrementing.
+    async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32>;
 
     /// Atomically decrement the reference count (database-level atomic operation)
-    /// Prefer this over get_ref_count + set_ref_count to avoid race conditions
     /// If the reference count is already 0, do nothing and return 0.
     /// Returns the new reference count after decrementing.
-    async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
-        // Default implementation: non-atomic. Database implementations should override.
-        let cnt = self.get_ref_count(bucket, hash).await?;
-        if cnt == 0 {
-            return Ok(0);
-        }
-        let new_count = cnt - 1;
-        self.set_ref_count(bucket, hash, new_count).await?;
-        Ok(new_count)
-    }
-
-    async fn increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<()> {
-        let cnt = self.get_ref_count(bucket, hash).await?;
-        self.set_ref_count(bucket, hash, cnt + 1).await
-    }
-
-    async fn decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i64> {
-        let cnt = self.get_ref_count(bucket, hash).await?;
-        if cnt == 0 {
-            return Ok(0);
-        }
-        let new_count = cnt - 1;
-        self.set_ref_count(bucket, hash, new_count).await?;
-        Ok(new_count as i64)
-    }
+    async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32>;
 
     async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64>;
     async fn set_modified(&mut self, bucket: &str, path: &str, modified: i64) -> Result<()>;
@@ -195,23 +165,8 @@ impl KVStorage {
     }
 
     /**
-     * Set the reference count for a hash.
-     */
-    pub async fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<()> {
-        debug!(
-            "Setting ref count for bucket: {}, hash: {} to {}",
-            bucket, hash, ref_cnt
-        );
-        match self {
-            KVStorage::Postgres(storage) => storage.set_ref_count(bucket, hash, ref_cnt).await,
-            KVStorage::SQLite(storage) => storage.set_ref_count(bucket, hash, ref_cnt).await,
-        }
-    }
-
-    /**
      * Atomically increment the reference count (database-level atomic operation).
      * Returns the new reference count after incrementing.
-     * Prefer this over increment_ref_count to avoid race conditions.
      */
     pub async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
         debug!(
@@ -228,7 +183,6 @@ impl KVStorage {
      * Atomically decrement the reference count (database-level atomic operation).
      * If the reference count is already 0, do nothing and return 0.
      * Returns the new reference count after decrementing.
-     * Prefer this over decrement_ref_count to avoid race conditions.
      */
     pub async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
         debug!(
@@ -238,36 +192,6 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.atomic_decrement_ref_count(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.atomic_decrement_ref_count(bucket, hash).await,
-        }
-    }
-
-    /**
-     * Increment the reference count for a hash.
-     */
-    pub async fn increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<()> {
-        debug!(
-            "Incrementing ref count for bucket: {}, hash: {}",
-            bucket, hash
-        );
-        match self {
-            KVStorage::Postgres(storage) => storage.increment_ref_count(bucket, hash).await,
-            KVStorage::SQLite(storage) => storage.increment_ref_count(bucket, hash).await,
-        }
-    }
-
-    /**
-     * Decrement the reference count for a hash.
-     * If the reference count is already 0, do nothing.
-     * Returns the new reference count after decrementing.
-     */
-    pub async fn decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i64> {
-        debug!(
-            "Decrementing ref count for bucket: {}, hash: {}",
-            bucket, hash
-        );
-        match self {
-            KVStorage::Postgres(storage) => storage.decrement_ref_count(bucket, hash).await,
-            KVStorage::SQLite(storage) => storage.decrement_ref_count(bucket, hash).await,
         }
     }
 
