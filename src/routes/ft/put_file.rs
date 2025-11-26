@@ -227,8 +227,8 @@ pub async fn ft_put_file(
         Ok(exists) => exists,
         Err(e) => {
             error!(
-                "Failed to check object existence (bucket={}, key={}): {}",
-                state.bucket_name, s3_key, e
+                "Failed to check object existence for path '{}' (bucket={}, key={}): {}",
+                path, state.bucket_name, s3_key, e
             );
             record_metrics("500");
             if let Err(e) = hash_guard.release().await {
@@ -267,8 +267,8 @@ pub async fn ft_put_file(
             .await
         {
             error!(
-                "Failed to store object in S3 (bucket={}, key={}): {}",
-                state.bucket_name, s3_key, e
+                "Failed to store object in S3 for path '{}' (bucket={}, key={}): {}",
+                path, state.bucket_name, s3_key, e
             );
             record_metrics("500");
             if let Err(e) = hash_guard.release().await {
