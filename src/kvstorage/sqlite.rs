@@ -131,16 +131,22 @@ impl KVStorageTrait for SQLite {
 
     async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
         // SQLite atomic decrement using UPDATE...RETURNING (SQLite 3.35+)
-        let (count,): (i32,) = sqlx::query_as(
+        // Use fetch_optional to return 0 if row doesn't exist (matches PostgreSQL behavior)
+        let result = sqlx::query_as::<_, (i32,)>(
             "UPDATE refcount SET refcount = MAX(0, refcount - 1)
              WHERE bucket = ?1 AND hash = ?2
              RETURNING refcount",
         )
         .bind(bucket)
         .bind(hash)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(count)
+        .fetch_optional(&self.pool)
+        .await;
+
+        match result {
+            Ok(Some((count,))) => Ok(count),
+            Ok(None) => Ok(0), // Row not found, return 0
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64> {
