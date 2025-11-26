@@ -1,0 +1,34 @@
+{
+  "logging": {
+    "level": "info",
+    "json": false
+  },
+  "kvstorage_type": "postgres",
+  "postgres": {
+    "host": "localhost",
+    "port": 5432,
+    "user": "postgres",
+    "password": "postgres",
+    "dbname": "s3dedup",
+    "pool_size": 20
+  },
+  "locks_type": "postgres",
+  "bucket": {
+    "name": "stress-test",
+    "address": "0.0.0.0",
+    "port": 8080,
+    "s3storage_type": "minio",
+    "minio": {
+      "endpoint": "http://localhost:9000",
+      "access_key": "minioadmin",
+      "secret_key": "minioadmin",
+      "force_path_style": true
+    },
+    "cleaner": {
+      "enabled": false,
+      "interval_seconds": 3600,
+      "batch_size": 1000,
+      "max_deletes_per_run": 10000
+    }
+  }
+}
