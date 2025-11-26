@@ -193,6 +193,14 @@ pub async fn migrate_single_file_from_metadata(
         return Ok(());
     }
 
+    // Acquire hash lock for S3/refcount operations
+    let hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &digest);
+    let hash_lock = locks.prepare_lock(hash_lock_key).await;
+    let hash_guard = hash_lock
+        .acquire_exclusive()
+        .await
+        .context("Failed to acquire hash lock for migration")?;
+
     // Check if blob already exists in S3
     let blob_exists = app_state
         .s3storage
@@ -227,6 +235,9 @@ pub async fn migrate_single_file_from_metadata(
         .increment_ref_count(&app_state.bucket_name, &digest)
         .await?;
 
+    // Release new hash lock
+    let _ = hash_guard.release().await;
+
     // Handle overwriting existing file
     if current_modified > 0 {
         let old_hash = app_state
@@ -237,6 +248,14 @@ pub async fn migrate_single_file_from_metadata(
             .await?;
 
         if !old_hash.is_empty() && old_hash != digest {
+            // Acquire lock on old hash before decrement
+            let old_hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &old_hash);
+            let old_hash_lock = locks.prepare_lock(old_hash_lock_key).await;
+            let old_hash_guard = old_hash_lock
+                .acquire_exclusive()
+                .await
+                .context("Failed to acquire old hash lock for migration")?;
+
             // Decrement old reference count atomically and get new count
             let old_ref_count = app_state
                 .kvstorage
@@ -259,6 +278,9 @@ pub async fn migrate_single_file_from_metadata(
                     old_hash, e
                 );
             }
+
+            // Release old hash lock
+            let _ = old_hash_guard.release().await;
         }
     }
 
@@ -340,6 +362,14 @@ async fn migrate_single_file(
         return Ok(false);
     }
 
+    // Acquire hash lock for S3/refcount operations
+    let hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &digest);
+    let hash_lock = locks_storage.prepare_lock(hash_lock_key).await;
+    let hash_guard = hash_lock
+        .acquire_exclusive()
+        .await
+        .context("Failed to acquire hash lock for migration")?;
+
     // Check if blob already exists in S3
     let blob_exists = app_state
         .s3storage
@@ -374,6 +404,9 @@ async fn migrate_single_file(
         .increment_ref_count(&app_state.bucket_name, &digest)
         .await?;
 
+    // Release new hash lock
+    let _ = hash_guard.release().await;
+
     // Handle overwriting existing file
     if current_modified > 0 {
         let old_hash = app_state
@@ -384,6 +417,14 @@ async fn migrate_single_file(
             .await?;
 
         if !old_hash.is_empty() && old_hash != digest {
+            // Acquire lock on old hash before decrement
+            let old_hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &old_hash);
+            let old_hash_lock = locks_storage.prepare_lock(old_hash_lock_key).await;
+            let old_hash_guard = old_hash_lock
+                .acquire_exclusive()
+                .await
+                .context("Failed to acquire old hash lock for migration")?;
+
             // Decrement old reference count atomically and get new count
             let old_ref_count = app_state
                 .kvstorage
@@ -406,6 +447,9 @@ async fn migrate_single_file(
                     old_hash, e
                 );
             }
+
+            // Release old hash lock
+            let _ = old_hash_guard.release().await;
         }
     }
 
@@ -684,6 +728,14 @@ async fn migrate_single_file_from_v1_fs(
         return Ok(false);
     }
 
+    // Acquire hash lock for S3/refcount operations
+    let hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &digest);
+    let hash_lock = locks_storage.prepare_lock(hash_lock_key).await;
+    let hash_guard = hash_lock
+        .acquire_exclusive()
+        .await
+        .context("Failed to acquire hash lock for migration")?;
+
     // Check if blob already exists in S3
     let blob_exists = app_state
         .s3storage
@@ -726,6 +778,9 @@ async fn migrate_single_file_from_v1_fs(
         .increment_ref_count(&app_state.bucket_name, &digest)
         .await?;
 
+    // Release new hash lock
+    let _ = hash_guard.release().await;
+
     // Handle overwriting existing file
     if current_modified > 0 {
         let old_hash = app_state
@@ -736,6 +791,14 @@ async fn migrate_single_file_from_v1_fs(
             .await?;
 
         if !old_hash.is_empty() && old_hash != digest {
+            // Acquire lock on old hash before decrement
+            let old_hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &old_hash);
+            let old_hash_lock = locks_storage.prepare_lock(old_hash_lock_key).await;
+            let old_hash_guard = old_hash_lock
+                .acquire_exclusive()
+                .await
+                .context("Failed to acquire old hash lock for migration")?;
+
             // Decrement old reference count atomically and get new count
             let old_ref_count = app_state
                 .kvstorage
@@ -758,6 +821,9 @@ async fn migrate_single_file_from_v1_fs(
                     old_hash, e
                 );
             }
+
+            // Release old hash lock
+            let _ = old_hash_guard.release().await;
         }
     }
 

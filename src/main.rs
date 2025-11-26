@@ -142,6 +142,7 @@ fn start_background_tasks(app_state: Arc<AppState>, bucket_config: &config::Buck
         bucket_config.name.clone(),
         app_state.kvstorage.clone(),
         app_state.s3storage.clone(),
+        app_state.locks.clone(),
         bucket_config.cleaner.clone(),
     ));
     cleaner.start();

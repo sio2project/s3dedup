@@ -192,7 +192,23 @@ pub async fn ft_put_file(
         (computed_digest, logical_size, final_data)
     };
 
-    // 7. Handle deduplication (use hash directly as S3 key for better performance)
+    // 7. Acquire hash lock for refcount/S3 operations
+    let hash_lock_key = locks::hash_lock(&state.bucket_name, &digest);
+    let hash_lock = locks_storage.prepare_lock(hash_lock_key).await;
+    let hash_guard = match hash_lock.acquire_exclusive().await {
+        Ok(g) => g,
+        Err(e) => {
+            error!("Failed to acquire hash lock: {}", e);
+            record_metrics("500");
+            let _ = guard.release().await;
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body("Failed to acquire hash lock".to_string())
+                .unwrap();
+        }
+    };
+
+    // 8. Handle deduplication (use hash directly as S3 key for better performance)
     let s3_key = &digest;
 
     debug!("Checking if blob {} already exists", s3_key);
@@ -202,6 +218,7 @@ pub async fn ft_put_file(
         Err(e) => {
             error!("Failed to check object existence: {}", e);
             record_metrics("500");
+            let _ = hash_guard.release().await;
             let _ = guard.release().await;
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -234,6 +251,7 @@ pub async fn ft_put_file(
         {
             error!("Failed to store object in S3: {}", e);
             record_metrics("500");
+            let _ = hash_guard.release().await;
             let _ = guard.release().await;
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -251,6 +269,7 @@ pub async fn ft_put_file(
         {
             error!("Failed to store compressed size: {}", e);
             record_metrics("500");
+            let _ = hash_guard.release().await;
             let _ = guard.release().await;
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -269,6 +288,7 @@ pub async fn ft_put_file(
     {
         error!("Failed to store logical size: {}", e);
         record_metrics("500");
+        let _ = hash_guard.release().await;
         let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -308,12 +328,16 @@ pub async fn ft_put_file(
     {
         error!("Failed to increment ref count: {}", e);
         record_metrics("500");
+        let _ = hash_guard.release().await;
         let _ = guard.release().await;
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to increment ref count".to_string())
             .unwrap();
     }
+
+    // Release new hash lock - we're done with S3/refcount operations for new hash
+    let _ = hash_guard.release().await;
 
     // If overwriting with different content, decrement old blob reference
     if let Some(old_hash) = old_hash
@@ -324,6 +348,23 @@ pub async fn ft_put_file(
             "Overwriting existing link {}. Old hash: {}, new hash: {}",
             path, old_hash, digest
         );
+
+        // Acquire lock on old hash before decrement
+        let old_hash_lock_key = locks::hash_lock(&state.bucket_name, &old_hash);
+        let old_hash_lock = locks_storage.prepare_lock(old_hash_lock_key).await;
+        let old_hash_guard = match old_hash_lock.acquire_exclusive().await {
+            Ok(g) => g,
+            Err(e) => {
+                error!("Failed to acquire old hash lock: {}", e);
+                record_metrics("500");
+                let _ = guard.release().await;
+                return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body("Failed to acquire old hash lock".to_string())
+                    .unwrap();
+            }
+        };
+
         // Decrement old reference count atomically and get new count
         let old_ref_count_result = state
             .kvstorage
@@ -339,9 +380,12 @@ pub async fn ft_put_file(
             debug!("Deleting unused blob: {}", old_hash);
             let _ = state.s3storage.lock().await.delete_object(&old_hash).await;
         }
+
+        // Release old hash lock
+        let _ = old_hash_guard.release().await;
     }
 
-    // 8. Update file metadata (path -> hash mapping and timestamp)
+    // 9. Update file metadata (path -> hash mapping and timestamp)
     if let Err(e) = state
         .kvstorage
         .lock()

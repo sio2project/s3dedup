@@ -15,8 +15,7 @@ pub(crate) fn file_lock(bucket: &str, path: &str) -> String {
 /**
  * Get key for lock on hash
  */
-#[allow(dead_code)]
-fn hash_lock(bucket: &str, hash: &str) -> String {
+pub(crate) fn hash_lock(bucket: &str, hash: &str) -> String {
     format!("hash:{}:{}", bucket, hash)
 }
 

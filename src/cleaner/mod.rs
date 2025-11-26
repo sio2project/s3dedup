@@ -1,4 +1,5 @@
 use crate::kvstorage::KVStorage;
+use crate::locks::{self, LocksStorage};
 use crate::s3storage::S3Storage;
 use anyhow::Result;
 use serde::Deserialize;
@@ -46,6 +47,7 @@ pub struct Cleaner {
     bucket_name: String,
     kvstorage: Arc<Mutex<Box<KVStorage>>>,
     s3storage: Arc<Mutex<Box<S3Storage>>>,
+    locks: Arc<Box<LocksStorage>>,
     config: CleanerConfig,
 }
 
@@ -54,12 +56,14 @@ impl Cleaner {
         bucket_name: String,
         kvstorage: Arc<Mutex<Box<KVStorage>>>,
         s3storage: Arc<Mutex<Box<S3Storage>>>,
+        locks: Arc<Box<LocksStorage>>,
         config: CleanerConfig,
     ) -> Self {
         Self {
             bucket_name,
             kvstorage,
             s3storage,
+            locks,
             config,
         }
     }
@@ -308,6 +312,18 @@ impl Cleaner {
             }
 
             for key in keys {
+                // Acquire hash lock before checking refcount and deleting
+                // This prevents race with PUT operations that might be incrementing refcount
+                let hash_lock_key = locks::hash_lock(&self.bucket_name, &key);
+                let hash_lock = self.locks.prepare_lock(hash_lock_key).await;
+                let hash_guard = match hash_lock.acquire_exclusive().await {
+                    Ok(g) => g,
+                    Err(e) => {
+                        error!("Failed to acquire hash lock for {}: {}", key, e);
+                        continue;
+                    }
+                };
+
                 let refcount = self
                     .kvstorage
                     .lock()
@@ -321,15 +337,19 @@ impl Cleaner {
                     // Delete the S3 object
                     if let Err(e) = self.s3storage.lock().await.delete_object(&key).await {
                         error!("Failed to delete S3 object {}: {}", key, e);
+                        let _ = hash_guard.release().await;
                         continue;
                     }
 
                     deleted_count += 1;
 
                     if deleted_count >= self.config.max_deletes_per_run {
+                        let _ = hash_guard.release().await;
                         return Ok(deleted_count);
                     }
                 }
+
+                let _ = hash_guard.release().await;
             }
 
             continuation_token = next_token;
