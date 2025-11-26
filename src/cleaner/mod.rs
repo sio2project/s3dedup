@@ -337,19 +337,25 @@ impl Cleaner {
                     // Delete the S3 object
                     if let Err(e) = self.s3storage.lock().await.delete_object(&key).await {
                         error!("Failed to delete S3 object {}: {}", key, e);
-                        let _ = hash_guard.release().await;
+                        if let Err(e) = hash_guard.release().await {
+                            warn!("Failed to release hash lock: {}", e);
+                        }
                         continue;
                     }
 
                     deleted_count += 1;
 
                     if deleted_count >= self.config.max_deletes_per_run {
-                        let _ = hash_guard.release().await;
+                        if let Err(e) = hash_guard.release().await {
+                            warn!("Failed to release hash lock: {}", e);
+                        }
                         return Ok(deleted_count);
                     }
                 }
 
-                let _ = hash_guard.release().await;
+                if let Err(e) = hash_guard.release().await {
+                    warn!("Failed to release hash lock: {}", e);
+                }
             }
 
             continuation_token = next_token;

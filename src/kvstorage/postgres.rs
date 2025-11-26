@@ -172,11 +172,12 @@ impl KVStorageTrait for Postgres {
     async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
         let table = self.table_name("refcount");
         // PostgreSQL: atomic increment using INSERT...ON CONFLICT...DO UPDATE...RETURNING
+        // Must qualify refcount column with table name to avoid ambiguity
         let query = format!(
-            "INSERT INTO {} (bucket, hash, refcount) VALUES ($1, $2, 1)
-             ON CONFLICT (bucket, hash) DO UPDATE SET refcount = refcount + 1
+            "INSERT INTO {table} (bucket, hash, refcount) VALUES ($1, $2, 1)
+             ON CONFLICT (bucket, hash) DO UPDATE SET refcount = {table}.refcount + 1
              RETURNING refcount",
-            table
+            table = table
         );
         let (count,): (i32,) = sqlx::query_as(&query)
             .bind(bucket)

@@ -5,7 +5,7 @@ use axum::extract::{Path, State};
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 pub async fn ft_get_file(
     State(state): State<Arc<AppState>>,
@@ -55,7 +55,9 @@ pub async fn ft_get_file(
             .with_label_values(&["GET", "/ft/files"])
             .observe(start.elapsed().as_secs_f64());
 
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::empty())
@@ -80,7 +82,9 @@ pub async fn ft_get_file(
 
                     // Release the shared lock before migration to avoid deadlock
                     // (migration needs exclusive lock on the same key)
-                    let _ = guard.release().await;
+                    if let Err(e) = guard.release().await {
+                        warn!("Failed to release file lock: {}", e);
+                    }
 
                     // Migrate the file on-the-fly using migration logic
                     let result = crate::migration::migrate_single_file_from_metadata(
@@ -169,7 +173,9 @@ pub async fn ft_get_file(
             .with_label_values(&["GET", "/ft/files"])
             .observe(start.elapsed().as_secs_f64());
 
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::empty())
@@ -186,7 +192,9 @@ pub async fn ft_get_file(
             .with_label_values(&["GET", "/ft/files"])
             .observe(start.elapsed().as_secs_f64());
 
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
@@ -209,7 +217,9 @@ pub async fn ft_get_file(
             .with_label_values(&["GET", "/ft/files"])
             .observe(start.elapsed().as_secs_f64());
 
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::empty())
@@ -228,7 +238,9 @@ pub async fn ft_get_file(
             .with_label_values(&["GET", "/ft/files"])
             .observe(start.elapsed().as_secs_f64());
 
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::empty())
@@ -236,7 +248,9 @@ pub async fn ft_get_file(
     }
     let blob_data = blob_data.unwrap();
 
-    let _ = guard.release().await;
+    if let Err(e) = guard.release().await {
+        warn!("Failed to release file lock: {}", e);
+    }
 
     // 6. Record metrics
     metrics::HTTP_REQUESTS_TOTAL

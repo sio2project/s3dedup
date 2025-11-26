@@ -341,6 +341,7 @@ pub async fn migrate_single_file_from_metadata(
 
     // Always compress for storage
     let compressed_data = storage_helpers::compress_gzip(&uncompressed_data)?;
+    let compressed_size = compressed_data.len();
 
     // Acquire file lock
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
@@ -361,7 +362,9 @@ pub async fn migrate_single_file_from_metadata(
 
     if current_modified_after_lock >= file_metadata.last_modified {
         // File was migrated by another concurrent task, skip
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Ok(());
     }
 
@@ -399,6 +402,14 @@ pub async fn migrate_single_file_from_metadata(
         .set_logical_size(&app_state.bucket_name, &digest, logical_size)
         .await?;
 
+    // Store compressed size metadata
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .set_compressed_size(&app_state.bucket_name, &digest, compressed_size)
+        .await?;
+
     // Increment reference count
     app_state
         .kvstorage
@@ -408,7 +419,9 @@ pub async fn migrate_single_file_from_metadata(
         .await?;
 
     // Release new hash lock
-    let _ = hash_guard.release().await;
+    if let Err(e) = hash_guard.release().await {
+        warn!("Failed to release hash lock: {}", e);
+    }
 
     // Handle overwriting existing file
     if current_modified > 0 {
@@ -452,7 +465,9 @@ pub async fn migrate_single_file_from_metadata(
             }
 
             // Release old hash lock
-            let _ = old_hash_guard.release().await;
+            if let Err(e) = old_hash_guard.release().await {
+                warn!("Failed to release old hash lock: {}", e);
+            }
         }
     }
 
@@ -471,7 +486,9 @@ pub async fn migrate_single_file_from_metadata(
         .set_modified(&app_state.bucket_name, path, file_metadata.last_modified)
         .await?;
 
-    let _ = guard.release().await;
+    if let Err(e) = guard.release().await {
+        warn!("Failed to release file lock: {}", e);
+    }
     Ok(())
 }
 
@@ -510,6 +527,7 @@ async fn migrate_single_file(
 
     // Always compress for storage
     let compressed_data = storage_helpers::compress_gzip(&uncompressed_data)?;
+    let compressed_size = compressed_data.len();
 
     // Acquire file lock
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
@@ -530,7 +548,9 @@ async fn migrate_single_file(
 
     if current_modified_after_lock >= file_metadata.last_modified {
         // File was migrated by another concurrent task, skip
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Ok(false);
     }
 
@@ -568,6 +588,14 @@ async fn migrate_single_file(
         .set_logical_size(&app_state.bucket_name, &digest, logical_size)
         .await?;
 
+    // Store compressed size metadata
+    app_state
+        .kvstorage
+        .lock()
+        .await
+        .set_compressed_size(&app_state.bucket_name, &digest, compressed_size)
+        .await?;
+
     // Increment reference count
     app_state
         .kvstorage
@@ -577,7 +605,9 @@ async fn migrate_single_file(
         .await?;
 
     // Release new hash lock
-    let _ = hash_guard.release().await;
+    if let Err(e) = hash_guard.release().await {
+        warn!("Failed to release hash lock: {}", e);
+    }
 
     // Handle overwriting existing file
     if current_modified > 0 {
@@ -621,7 +651,9 @@ async fn migrate_single_file(
             }
 
             // Release old hash lock
-            let _ = old_hash_guard.release().await;
+            if let Err(e) = old_hash_guard.release().await {
+                warn!("Failed to release old hash lock: {}", e);
+            }
         }
     }
 
@@ -640,7 +672,9 @@ async fn migrate_single_file(
         .set_modified(&app_state.bucket_name, path, file_metadata.last_modified)
         .await?;
 
-    let _ = guard.release().await;
+    if let Err(e) = guard.release().await {
+        warn!("Failed to release file lock: {}", e);
+    }
     Ok(true)
 }
 
@@ -963,7 +997,9 @@ async fn migrate_single_file_from_v1_fs(
 
     if current_modified_after_lock >= file_info.last_modified {
         // File was migrated by another concurrent task, skip
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Ok(false);
     }
 
@@ -1018,7 +1054,9 @@ async fn migrate_single_file_from_v1_fs(
         .await?;
 
     // Release new hash lock
-    let _ = hash_guard.release().await;
+    if let Err(e) = hash_guard.release().await {
+        warn!("Failed to release hash lock: {}", e);
+    }
 
     // Handle overwriting existing file
     if current_modified > 0 {
@@ -1062,7 +1100,9 @@ async fn migrate_single_file_from_v1_fs(
             }
 
             // Release old hash lock
-            let _ = old_hash_guard.release().await;
+            if let Err(e) = old_hash_guard.release().await {
+                warn!("Failed to release old hash lock: {}", e);
+            }
         }
     }
 
@@ -1081,6 +1121,8 @@ async fn migrate_single_file_from_v1_fs(
         .set_modified(&app_state.bucket_name, path, file_info.last_modified)
         .await?;
 
-    let _ = guard.release().await;
+    if let Err(e) = guard.release().await {
+        warn!("Failed to release file lock: {}", e);
+    }
     Ok(true)
 }

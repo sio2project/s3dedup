@@ -5,7 +5,7 @@ use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub async fn ft_delete_file(
     State(state): State<Arc<AppState>>,
@@ -73,7 +73,9 @@ pub async fn ft_delete_file(
     if current_modified.is_err() {
         error!("Failed to get current modified");
         record_metrics("500");
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to get current modified".to_string())
@@ -85,7 +87,9 @@ pub async fn ft_delete_file(
     if current_modified == 0 {
         debug!("File {} not found", path);
         record_metrics("404");
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body("File not found".to_string())
@@ -99,7 +103,9 @@ pub async fn ft_delete_file(
             path, timestamp, current_modified
         );
         record_metrics("200");
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::OK)
             .body("".to_string())
@@ -116,7 +122,9 @@ pub async fn ft_delete_file(
     if hash.is_err() {
         error!("Failed to get ref file");
         record_metrics("500");
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to get ref file".to_string())
@@ -127,7 +135,9 @@ pub async fn ft_delete_file(
     if hash.is_empty() {
         error!("File {} has no hash reference", path);
         record_metrics("404");
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body("File has no hash reference".to_string())
@@ -142,7 +152,9 @@ pub async fn ft_delete_file(
         Err(e) => {
             error!("Failed to acquire hash lock: {}", e);
             record_metrics("500");
-            let _ = guard.release().await;
+            if let Err(e) = guard.release().await {
+                warn!("Failed to release file lock: {}", e);
+            }
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Failed to acquire hash lock".to_string())
@@ -155,15 +167,19 @@ pub async fn ft_delete_file(
         .kvstorage
         .lock()
         .await
-        .decrement_ref_count(&state.bucket_name, &hash)
+        .atomic_decrement_ref_count(&state.bucket_name, &hash)
         .await
     {
         Ok(count) => count,
         Err(e) => {
             error!("Failed to decrement ref count: {}", e);
             record_metrics("500");
-            let _ = hash_guard.release().await;
-            let _ = guard.release().await;
+            if let Err(e) = hash_guard.release().await {
+                warn!("Failed to release hash lock: {}", e);
+            }
+            if let Err(e) = guard.release().await {
+                warn!("Failed to release file lock: {}", e);
+            }
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body("Failed to decrement ref count".to_string())
@@ -190,7 +206,9 @@ pub async fn ft_delete_file(
     }
 
     // Release hash lock - done with refcount/S3 operations
-    let _ = hash_guard.release().await;
+    if let Err(e) = hash_guard.release().await {
+        warn!("Failed to release hash lock: {}", e);
+    }
 
     // 9. Delete file metadata (path -> hash mapping and timestamp)
     if let Err(e) = state
@@ -202,7 +220,9 @@ pub async fn ft_delete_file(
     {
         error!("Failed to delete ref file: {}", e);
         record_metrics("500");
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to delete ref file".to_string())
@@ -218,7 +238,9 @@ pub async fn ft_delete_file(
     {
         error!("Failed to delete modified time: {}", e);
         record_metrics("500");
-        let _ = guard.release().await;
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
         return Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body("Failed to delete modified time".to_string())
@@ -228,7 +250,9 @@ pub async fn ft_delete_file(
     debug!("Deleted file {}", path);
 
     // Release lock early since all critical metadata operations are complete
-    let _ = guard.release().await;
+    if let Err(e) = guard.release().await {
+        warn!("Failed to release file lock: {}", e);
+    }
 
     // 9. Dual-delete from filetracker if in live migration mode
     if let Some(filetracker_client) = &state.filetracker_client {
