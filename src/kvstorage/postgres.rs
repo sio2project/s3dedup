@@ -554,9 +554,7 @@ impl KVStorageTrait for Postgres {
     async fn get_version(&mut self) -> Result<Option<String>> {
         let table = self.table_name("version");
         let query = format!("SELECT version FROM {}", table);
-        let result: Option<(String,)> = sqlx::query_as(&query)
-            .fetch_optional(&self.pool)
-            .await?;
+        let result: Option<(String,)> = sqlx::query_as(&query).fetch_optional(&self.pool).await?;
         Ok(result.map(|r| r.0))
     }
 
