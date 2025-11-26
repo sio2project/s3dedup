@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::locks::{ExclusiveLockGuard, Lock, LockStorage, SharedLockGuard};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use rand::Rng;
 use serde::Deserialize;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::sync::Arc;
@@ -18,10 +19,15 @@ pub struct PostgresConfig {
     pub pool_size: u32,
 }
 
-/// PostgreSQL-based distributed locks using advisory locks
+/// PostgreSQL-based distributed locks using advisory locks.
+/// Uses separate connection pools for file locks and hash locks to prevent
+/// deadlock when a request needs both (file lock held, waiting for hash lock).
 #[derive(Clone)]
 pub struct PostgresLocks {
-    pool: Arc<PgPool>,
+    /// Pool for file locks (keys starting with "file:")
+    file_pool: Arc<PgPool>,
+    /// Pool for hash locks (keys starting with "hash:")
+    hash_pool: Arc<PgPool>,
 }
 
 impl PostgresLocks {
@@ -37,7 +43,10 @@ impl PostgresLocks {
 }
 
 impl PostgresLocks {
-    /// Create a new PostgreSQL locks instance with configuration
+    /// Create a new PostgreSQL locks instance with configuration.
+    /// Creates two separate connection pools to prevent deadlock:
+    /// - file_pool: for file locks (path-based)
+    /// - hash_pool: for hash locks (content-based)
     pub async fn new_with_config(config: &Config) -> Result<Box<Self>> {
         let pg_config = config.postgres.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
@@ -55,26 +64,56 @@ impl PostgresLocks {
             pg_config.user, pg_config.host, pg_config.port, pg_config.dbname
         );
 
-        let pool = PgPoolOptions::new()
+        // Create file locks pool
+        let file_pool = PgPoolOptions::new()
             .max_connections(pg_config.pool_size)
             .acquire_timeout(Duration::from_secs(30))
             .idle_timeout(Some(Duration::from_secs(600)))
             .max_lifetime(Some(Duration::from_secs(1800)))
             .connect(&db_url)
             .await
-            .context("Failed to connect to PostgreSQL for locks")?;
+            .context("Failed to connect to PostgreSQL for file locks pool")?;
 
-        // Validate connection works
+        // Validate file pool connection
         sqlx::query("SELECT 1")
-            .execute(&pool)
+            .execute(&file_pool)
             .await
-            .context("PostgreSQL locks connection validation failed")?;
+            .context("PostgreSQL file locks pool validation failed")?;
 
-        debug!("Successfully validated PostgreSQL locks connection");
+        debug!("Successfully validated PostgreSQL file locks pool");
+
+        // Create hash locks pool (separate pool to prevent deadlock)
+        let hash_pool = PgPoolOptions::new()
+            .max_connections(pg_config.pool_size)
+            .acquire_timeout(Duration::from_secs(30))
+            .idle_timeout(Some(Duration::from_secs(600)))
+            .max_lifetime(Some(Duration::from_secs(1800)))
+            .connect(&db_url)
+            .await
+            .context("Failed to connect to PostgreSQL for hash locks pool")?;
+
+        // Validate hash pool connection
+        sqlx::query("SELECT 1")
+            .execute(&hash_pool)
+            .await
+            .context("PostgreSQL hash locks pool validation failed")?;
+
+        debug!("Successfully validated PostgreSQL hash locks pool");
 
         Ok(Box::new(PostgresLocks {
-            pool: Arc::new(pool),
+            file_pool: Arc::new(file_pool),
+            hash_pool: Arc::new(hash_pool),
         }))
+    }
+
+    /// Select the appropriate pool based on lock key prefix
+    fn select_pool(&self, key: &str) -> Arc<PgPool> {
+        if key.starts_with("hash:") {
+            self.hash_pool.clone()
+        } else {
+            // Default to file pool for "file:" and any other keys
+            self.file_pool.clone()
+        }
     }
 }
 
@@ -86,8 +125,9 @@ impl LockStorage for PostgresLocks {
 
     async fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send> {
         let key_hash = Self::hash_key(&key);
+        let pool = self.select_pool(&key);
         Box::new(PostgresLock {
-            pool: self.pool.clone(),
+            pool,
             key,
             key_hash,
         })
@@ -100,62 +140,127 @@ struct PostgresLock {
     key_hash: i64,
 }
 
+/// Maximum number of retry attempts for lock acquisition
+const MAX_LOCK_RETRIES: u32 = 100;
+/// Initial backoff delay in milliseconds
+const INITIAL_BACKOFF_MS: u64 = 10;
+/// Maximum backoff delay in milliseconds
+const MAX_BACKOFF_MS: u64 = 1000;
+
 #[async_trait]
 impl Lock for PostgresLock {
     async fn acquire_shared<'a>(&'a self) -> Result<Box<dyn SharedLockGuard<'a> + Send + 'a>> {
-        // Get connection from pool
-        let mut conn = self
-            .pool
-            .acquire()
-            .await
-            .context("Failed to acquire connection for shared lock")?;
+        // Use non-blocking try_lock with retry to prevent connection pool exhaustion deadlock.
+        // Each lock holds a connection, so blocking waits would deadlock when requests need
+        // multiple locks (file + hash) but pool is exhausted.
+        let mut backoff_ms = INITIAL_BACKOFF_MS;
 
-        // Acquire shared advisory lock
-        // WARNING: Advisory locks are SESSION-SCOPED and persist when connections return to the pool!
-        // We MUST explicitly unlock using pg_advisory_unlock_shared before the connection returns.
-        sqlx::query("SELECT pg_advisory_lock_shared($1)")
-            .bind(self.key_hash)
-            .execute(&mut *conn)
-            .await
-            .context("Failed to acquire shared lock")?;
+        for attempt in 0..MAX_LOCK_RETRIES {
+            // Get connection from pool
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .context("Failed to acquire connection for shared lock")?;
 
-        debug!("Acquired shared lock for key: {}", self.key);
+            // Try to acquire shared advisory lock (non-blocking)
+            let result: (bool,) = sqlx::query_as("SELECT pg_try_advisory_lock_shared($1)")
+                .bind(self.key_hash)
+                .fetch_one(&mut *conn)
+                .await
+                .context("Failed to try shared lock")?;
 
-        // Return a guard that requires explicit async release
-        Ok(Box::new(PostgresSharedLockGuard {
-            key: self.key.clone(),
-            key_hash: self.key_hash,
-            conn: Some(conn),
-        }))
+            if result.0 {
+                // Lock acquired successfully
+                debug!(
+                    "Acquired shared lock for key: {} (attempt {})",
+                    self.key,
+                    attempt + 1
+                );
+                return Ok(Box::new(PostgresSharedLockGuard {
+                    key: self.key.clone(),
+                    key_hash: self.key_hash,
+                    conn: Some(conn),
+                }));
+            }
+
+            // Lock not available - drop connection and retry with backoff
+            drop(conn);
+
+            if attempt < MAX_LOCK_RETRIES - 1 {
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                // Exponential backoff with jitter
+                backoff_ms = std::cmp::min(backoff_ms * 2, MAX_BACKOFF_MS);
+                // Add some jitter (±25%)
+                let jitter =
+                    (backoff_ms as f64 * 0.25 * (rand::rng().random::<f64>() - 0.5)) as i64;
+                backoff_ms = (backoff_ms as i64 + jitter).max(1) as u64;
+            }
+        }
+
+        anyhow::bail!(
+            "Failed to acquire shared lock for key '{}' after {} attempts",
+            self.key,
+            MAX_LOCK_RETRIES
+        )
     }
 
     async fn acquire_exclusive<'a>(
         &'a self,
     ) -> Result<Box<dyn ExclusiveLockGuard<'a> + Send + 'a>> {
-        // Get connection from pool
-        let mut conn = self
-            .pool
-            .acquire()
-            .await
-            .context("Failed to acquire connection for exclusive lock")?;
+        // Use non-blocking try_lock with retry to prevent connection pool exhaustion deadlock.
+        // Each lock holds a connection, so blocking waits would deadlock when requests need
+        // multiple locks (file + hash) but pool is exhausted.
+        let mut backoff_ms = INITIAL_BACKOFF_MS;
 
-        // Acquire exclusive advisory lock
-        // WARNING: Advisory locks are SESSION-SCOPED and persist when connections return to the pool!
-        // We MUST explicitly unlock using pg_advisory_unlock before the connection returns.
-        sqlx::query("SELECT pg_advisory_lock($1)")
-            .bind(self.key_hash)
-            .execute(&mut *conn)
-            .await
-            .context("Failed to acquire exclusive lock")?;
+        for attempt in 0..MAX_LOCK_RETRIES {
+            // Get connection from pool
+            let mut conn = self
+                .pool
+                .acquire()
+                .await
+                .context("Failed to acquire connection for exclusive lock")?;
 
-        debug!("Acquired exclusive lock for key: {}", self.key);
+            // Try to acquire exclusive advisory lock (non-blocking)
+            let result: (bool,) = sqlx::query_as("SELECT pg_try_advisory_lock($1)")
+                .bind(self.key_hash)
+                .fetch_one(&mut *conn)
+                .await
+                .context("Failed to try exclusive lock")?;
 
-        // Return a guard that requires explicit async release
-        Ok(Box::new(PostgresExclusiveLockGuard {
-            key: self.key.clone(),
-            key_hash: self.key_hash,
-            conn: Some(conn),
-        }))
+            if result.0 {
+                // Lock acquired successfully
+                debug!(
+                    "Acquired exclusive lock for key: {} (attempt {})",
+                    self.key,
+                    attempt + 1
+                );
+                return Ok(Box::new(PostgresExclusiveLockGuard {
+                    key: self.key.clone(),
+                    key_hash: self.key_hash,
+                    conn: Some(conn),
+                }));
+            }
+
+            // Lock not available - drop connection and retry with backoff
+            drop(conn);
+
+            if attempt < MAX_LOCK_RETRIES - 1 {
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                // Exponential backoff with jitter
+                backoff_ms = std::cmp::min(backoff_ms * 2, MAX_BACKOFF_MS);
+                // Add some jitter (±25%)
+                let jitter =
+                    (backoff_ms as f64 * 0.25 * (rand::rng().random::<f64>() - 0.5)) as i64;
+                backoff_ms = (backoff_ms as i64 + jitter).max(1) as u64;
+            }
+        }
+
+        anyhow::bail!(
+            "Failed to acquire exclusive lock for key '{}' after {} attempts",
+            self.key,
+            MAX_LOCK_RETRIES
+        )
     }
 }
 
@@ -186,7 +291,21 @@ impl<'a> SharedLockGuard<'a> for PostgresSharedLockGuard {
 
 impl Drop for PostgresSharedLockGuard {
     fn drop(&mut self) {
-        // Drop is called after release() removes the connection, so this is OK
+        // Best-effort cleanup: if connection wasn't released explicitly, spawn a task to unlock
+        if let Some(mut conn) = self.conn.take() {
+            let key_hash = self.key_hash;
+            let key = self.key.clone();
+            tokio::spawn(async move {
+                let _ = sqlx::query("SELECT pg_advisory_unlock_shared($1)")
+                    .bind(key_hash)
+                    .execute(&mut *conn)
+                    .await;
+                tracing::warn!(
+                    "PostgreSQL shared lock guard dropped without explicit release for key: {}",
+                    key
+                );
+            });
+        }
     }
 }
 
@@ -217,7 +336,21 @@ impl<'a> ExclusiveLockGuard<'a> for PostgresExclusiveLockGuard {
 
 impl Drop for PostgresExclusiveLockGuard {
     fn drop(&mut self) {
-        // Drop is called after release() removes the connection, so this is OK
+        // Best-effort cleanup: if connection wasn't released explicitly, spawn a task to unlock
+        if let Some(mut conn) = self.conn.take() {
+            let key_hash = self.key_hash;
+            let key = self.key.clone();
+            tokio::spawn(async move {
+                let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+                    .bind(key_hash)
+                    .execute(&mut *conn)
+                    .await;
+                tracing::warn!(
+                    "PostgreSQL exclusive lock guard dropped without explicit release for key: {}",
+                    key
+                );
+            });
+        }
     }
 }
 

@@ -125,9 +125,19 @@ impl KVStorageTrait for Postgres {
         let version_table = self.table_name("version");
         sqlx::query(&format!(
             "CREATE TABLE IF NOT EXISTS {} (
+                id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
                 version VARCHAR(255) NOT NULL
             )",
             version_table
+        ))
+        .execute(&self.pool)
+        .await?;
+
+        // Create index on ref_file(bucket, hash) for efficient hash lookups by cleaner
+        sqlx::query(&format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_hash ON {}(bucket, hash)",
+            ref_file_table.replace('.', "_"),
+            ref_file_table
         ))
         .execute(&self.pool)
         .await?;
@@ -153,30 +163,15 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn set_ref_count(&mut self, bucket: &str, hash: &str, ref_cnt: i32) -> Result<()> {
-        let table = self.table_name("refcount");
-        let query = format!(
-            "INSERT INTO {} (bucket, hash, refcount) VALUES ($1, $2, $3)
-            ON CONFLICT (bucket, hash) DO UPDATE SET refcount = $3",
-            table
-        );
-        sqlx::query(&query)
-            .bind(bucket)
-            .bind(hash)
-            .bind(ref_cnt)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
         let table = self.table_name("refcount");
         // PostgreSQL: atomic increment using INSERT...ON CONFLICT...DO UPDATE...RETURNING
+        // Must qualify refcount column with table name to avoid ambiguity
         let query = format!(
-            "INSERT INTO {} (bucket, hash, refcount) VALUES ($1, $2, 1)
-             ON CONFLICT (bucket, hash) DO UPDATE SET refcount = refcount + 1
+            "INSERT INTO {table} (bucket, hash, refcount) VALUES ($1, $2, 1)
+             ON CONFLICT (bucket, hash) DO UPDATE SET refcount = {table}.refcount + 1
              RETURNING refcount",
-            table
+            table = table
         );
         let (count,): (i32,) = sqlx::query_as(&query)
             .bind(bucket)
@@ -438,6 +433,20 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
+    async fn hash_is_referenced(&mut self, bucket: &str, hash: &str) -> Result<bool> {
+        let table = self.table_name("ref_file");
+        let query = format!(
+            "SELECT 1 FROM {} WHERE bucket = $1 AND hash = $2 LIMIT 1",
+            table
+        );
+        let result: Option<(i32,)> = sqlx::query_as(&query)
+            .bind(bucket)
+            .bind(hash)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(result.is_some())
+    }
+
     async fn get_compressed_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
         let table = self.table_name("logical_size");
         let query = format!(
@@ -498,10 +507,15 @@ impl KVStorageTrait for Postgres {
     }
 
     async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64> {
-        let table = self.table_name("logical_size");
+        // Only count storage for blobs that are actually referenced (refcount > 0)
+        let refcount_table = self.table_name("refcount");
+        let logical_size_table = self.table_name("logical_size");
         let query = format!(
-            "SELECT COALESCE(SUM(compressed_size), 0)::BIGINT FROM {} WHERE bucket = $1",
-            table
+            "SELECT COALESCE(SUM(l.compressed_size), 0)::BIGINT
+             FROM {} l
+             INNER JOIN {} r ON l.bucket = r.bucket AND l.hash = r.hash
+             WHERE l.bucket = $1 AND r.refcount > 0",
+            logical_size_table, refcount_table
         );
         let (total,): (i64,) = sqlx::query_as(&query)
             .bind(bucket)
@@ -553,18 +567,20 @@ impl KVStorageTrait for Postgres {
 
     async fn get_version(&mut self) -> Result<Option<String>> {
         let table = self.table_name("version");
-        let query = format!("SELECT version FROM {}", table);
+        let query = format!("SELECT version FROM {} WHERE id = 1", table);
         let result: Option<(String,)> = sqlx::query_as(&query).fetch_optional(&self.pool).await?;
         Ok(result.map(|r| r.0))
     }
 
     async fn set_version(&mut self, version: &str) -> Result<()> {
         let table = self.table_name("version");
-        // Delete existing row (if any) and insert new one
-        sqlx::query(&format!("DELETE FROM {}", table))
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(&format!("INSERT INTO {} (version) VALUES ($1)", table))
+        // Use upsert to ensure only one row exists
+        let query = format!(
+            "INSERT INTO {} (id, version) VALUES (1, $1)
+             ON CONFLICT (id) DO UPDATE SET version = $1",
+            table
+        );
+        sqlx::query(&query)
             .bind(version)
             .execute(&self.pool)
             .await?;
