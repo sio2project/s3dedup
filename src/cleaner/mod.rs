@@ -181,6 +181,48 @@ impl Cleaner {
                         path, hash
                     );
 
+                    // Acquire file lock before deleting ref_file to prevent race with PUT
+                    let lock_key = locks::file_lock(&self.bucket_name, path);
+                    let lock = self.locks.prepare_lock(lock_key).await;
+                    let guard = match lock.acquire_exclusive().await {
+                        Ok(g) => g,
+                        Err(e) => {
+                            warn!("Failed to acquire file lock for cleaner {}: {}", path, e);
+                            continue; // Skip this file, try next
+                        }
+                    };
+
+                    // Re-check refcount after acquiring lock (double-check pattern)
+                    let refcount_after_lock = self
+                        .kvstorage
+                        .lock()
+                        .await
+                        .get_ref_count(&self.bucket_name, hash)
+                        .await;
+
+                    let refcount_after_lock = match refcount_after_lock {
+                        Ok(r) => r,
+                        Err(e) => {
+                            error!("Failed to re-check refcount for {}: {}", hash, e);
+                            if let Err(e) = guard.release().await {
+                                warn!("Failed to release file lock: {}", e);
+                            }
+                            continue;
+                        }
+                    };
+
+                    if refcount_after_lock != 0 {
+                        // Refcount changed while we were acquiring lock, skip
+                        debug!(
+                            "Refcount changed for {} (now {}), skipping",
+                            hash, refcount_after_lock
+                        );
+                        if let Err(e) = guard.release().await {
+                            warn!("Failed to release file lock: {}", e);
+                        }
+                        continue;
+                    }
+
                     // Delete ref_file and modified entries
                     if let Err(e) = self
                         .kvstorage
@@ -190,6 +232,9 @@ impl Cleaner {
                         .await
                     {
                         error!("Failed to delete ref_file {}: {}", path, e);
+                        if let Err(e) = guard.release().await {
+                            warn!("Failed to release file lock: {}", e);
+                        }
                         continue;
                     }
 
@@ -201,6 +246,10 @@ impl Cleaner {
                         .await
                     {
                         error!("Failed to delete modified entry for {}: {}", path, e);
+                    }
+
+                    if let Err(e) = guard.release().await {
+                        warn!("Failed to release file lock: {}", e);
                     }
 
                     deleted_count += 1;
