@@ -186,7 +186,21 @@ impl<'a> SharedLockGuard<'a> for PostgresSharedLockGuard {
 
 impl Drop for PostgresSharedLockGuard {
     fn drop(&mut self) {
-        // Drop is called after release() removes the connection, so this is OK
+        // Best-effort cleanup: if connection wasn't released explicitly, spawn a task to unlock
+        if let Some(mut conn) = self.conn.take() {
+            let key_hash = self.key_hash;
+            let key = self.key.clone();
+            tokio::spawn(async move {
+                let _ = sqlx::query("SELECT pg_advisory_unlock_shared($1)")
+                    .bind(key_hash)
+                    .execute(&mut *conn)
+                    .await;
+                tracing::warn!(
+                    "PostgreSQL shared lock guard dropped without explicit release for key: {}",
+                    key
+                );
+            });
+        }
     }
 }
 
@@ -217,7 +231,21 @@ impl<'a> ExclusiveLockGuard<'a> for PostgresExclusiveLockGuard {
 
 impl Drop for PostgresExclusiveLockGuard {
     fn drop(&mut self) {
-        // Drop is called after release() removes the connection, so this is OK
+        // Best-effort cleanup: if connection wasn't released explicitly, spawn a task to unlock
+        if let Some(mut conn) = self.conn.take() {
+            let key_hash = self.key_hash;
+            let key = self.key.clone();
+            tokio::spawn(async move {
+                let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+                    .bind(key_hash)
+                    .execute(&mut *conn)
+                    .await;
+                tracing::warn!(
+                    "PostgreSQL exclusive lock guard dropped without explicit release for key: {}",
+                    key
+                );
+            });
+        }
     }
 }
 

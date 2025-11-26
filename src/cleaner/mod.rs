@@ -307,12 +307,19 @@ impl Cleaner {
                     }
                 };
 
-                let refcount = self
+                let refcount = match self
                     .kvstorage
                     .lock()
                     .await
                     .get_ref_count(&self.bucket_name, &key)
-                    .await?;
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = hash_guard.release().await;
+                        return Err(e);
+                    }
+                };
 
                 if refcount == 0 {
                     debug!("Found unused S3 object: key={} (refcount=0)", key);

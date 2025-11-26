@@ -353,12 +353,19 @@ pub async fn migrate_single_file_from_metadata(
         .context("Failed to acquire exclusive lock for migration")?;
 
     // Recheck if file was already migrated after acquiring lock (race condition protection)
-    let current_modified_after_lock = app_state
+    let current_modified_after_lock = match app_state
         .kvstorage
         .lock()
         .await
         .get_modified(&app_state.bucket_name, path)
-        .await?;
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = guard.release().await;
+            return Err(e);
+        }
+    };
 
     if current_modified_after_lock >= file_metadata.last_modified {
         // File was migrated by another concurrent task, skip
@@ -371,52 +378,83 @@ pub async fn migrate_single_file_from_metadata(
     // Acquire hash lock for S3/refcount operations
     let hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &digest);
     let hash_lock = locks.prepare_lock(hash_lock_key).await;
-    let hash_guard = hash_lock
-        .acquire_exclusive()
-        .await
-        .context("Failed to acquire hash lock for migration")?;
+    let hash_guard = match hash_lock.acquire_exclusive().await {
+        Ok(g) => g,
+        Err(e) => {
+            let _ = guard.release().await;
+            return Err(e.context("Failed to acquire hash lock for migration"));
+        }
+    };
 
     // Check if blob already exists in S3
-    let blob_exists = app_state
+    let blob_exists = match app_state
         .s3storage
         .lock()
         .await
         .object_exists(&digest)
-        .await?;
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = hash_guard.release().await;
+            let _ = guard.release().await;
+            return Err(e);
+        }
+    };
 
     // Store blob if it doesn't exist
     if !blob_exists {
-        app_state
+        if let Err(e) = app_state
             .s3storage
             .lock()
             .await
             .put_object(&digest, compressed_data)
-            .await?;
+            .await
+        {
+            let _ = hash_guard.release().await;
+            let _ = guard.release().await;
+            return Err(e);
+        }
     }
 
     // Store logical size metadata
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_logical_size(&app_state.bucket_name, &digest, logical_size)
-        .await?;
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     // Store compressed size metadata
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_compressed_size(&app_state.bucket_name, &digest, compressed_size)
-        .await?;
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     // Increment reference count atomically
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .atomic_increment_ref_count(&app_state.bucket_name, &digest)
-        .await?;
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     // Release new hash lock
     if let Err(e) = hash_guard.release().await {
@@ -425,29 +463,47 @@ pub async fn migrate_single_file_from_metadata(
 
     // Handle overwriting existing file
     if current_modified > 0 {
-        let old_hash = app_state
+        let old_hash = match app_state
             .kvstorage
             .lock()
             .await
             .get_ref_file(&app_state.bucket_name, path)
-            .await?;
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = guard.release().await;
+                return Err(e);
+            }
+        };
 
         if !old_hash.is_empty() && old_hash != digest {
             // Acquire lock on old hash before decrement
             let old_hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &old_hash);
             let old_hash_lock = locks.prepare_lock(old_hash_lock_key).await;
-            let old_hash_guard = old_hash_lock
-                .acquire_exclusive()
-                .await
-                .context("Failed to acquire old hash lock for migration")?;
+            let old_hash_guard = match old_hash_lock.acquire_exclusive().await {
+                Ok(g) => g,
+                Err(e) => {
+                    let _ = guard.release().await;
+                    return Err(e.context("Failed to acquire old hash lock for migration"));
+                }
+            };
 
             // Decrement old reference count atomically and get new count
-            let old_ref_count = app_state
+            let old_ref_count = match app_state
                 .kvstorage
                 .lock()
                 .await
                 .atomic_decrement_ref_count(&app_state.bucket_name, &old_hash)
-                .await?;
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = old_hash_guard.release().await;
+                    let _ = guard.release().await;
+                    return Err(e);
+                }
+            };
 
             // Delete blob if no longer referenced
             if old_ref_count <= 0
@@ -472,19 +528,27 @@ pub async fn migrate_single_file_from_metadata(
     }
 
     // Update file metadata
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_ref_file(&app_state.bucket_name, path, &digest)
-        .await?;
+        .await
+    {
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_modified(&app_state.bucket_name, path, file_metadata.last_modified)
-        .await?;
+        .await
+    {
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     if let Err(e) = guard.release().await {
         warn!("Failed to release file lock: {}", e);
@@ -539,12 +603,19 @@ async fn migrate_single_file(
         .context("Failed to acquire exclusive lock for migration")?;
 
     // Recheck if file was already migrated after acquiring lock (race condition protection)
-    let current_modified_after_lock = app_state
+    let current_modified_after_lock = match app_state
         .kvstorage
         .lock()
         .await
         .get_modified(&app_state.bucket_name, path)
-        .await?;
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = guard.release().await;
+            return Err(e);
+        }
+    };
 
     if current_modified_after_lock >= file_metadata.last_modified {
         // File was migrated by another concurrent task, skip
@@ -557,52 +628,83 @@ async fn migrate_single_file(
     // Acquire hash lock for S3/refcount operations
     let hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &digest);
     let hash_lock = locks_storage.prepare_lock(hash_lock_key).await;
-    let hash_guard = hash_lock
-        .acquire_exclusive()
-        .await
-        .context("Failed to acquire hash lock for migration")?;
+    let hash_guard = match hash_lock.acquire_exclusive().await {
+        Ok(g) => g,
+        Err(e) => {
+            let _ = guard.release().await;
+            return Err(e.context("Failed to acquire hash lock for migration"));
+        }
+    };
 
     // Check if blob already exists in S3
-    let blob_exists = app_state
+    let blob_exists = match app_state
         .s3storage
         .lock()
         .await
         .object_exists(&digest)
-        .await?;
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = hash_guard.release().await;
+            let _ = guard.release().await;
+            return Err(e);
+        }
+    };
 
     // Store blob if it doesn't exist
     if !blob_exists {
-        app_state
+        if let Err(e) = app_state
             .s3storage
             .lock()
             .await
             .put_object(&digest, compressed_data)
-            .await?;
+            .await
+        {
+            let _ = hash_guard.release().await;
+            let _ = guard.release().await;
+            return Err(e);
+        }
     }
 
     // Store logical size metadata
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_logical_size(&app_state.bucket_name, &digest, logical_size)
-        .await?;
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     // Store compressed size metadata
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_compressed_size(&app_state.bucket_name, &digest, compressed_size)
-        .await?;
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     // Increment reference count atomically
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .atomic_increment_ref_count(&app_state.bucket_name, &digest)
-        .await?;
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     // Release new hash lock
     if let Err(e) = hash_guard.release().await {
@@ -611,29 +713,47 @@ async fn migrate_single_file(
 
     // Handle overwriting existing file
     if current_modified > 0 {
-        let old_hash = app_state
+        let old_hash = match app_state
             .kvstorage
             .lock()
             .await
             .get_ref_file(&app_state.bucket_name, path)
-            .await?;
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = guard.release().await;
+                return Err(e);
+            }
+        };
 
         if !old_hash.is_empty() && old_hash != digest {
             // Acquire lock on old hash before decrement
             let old_hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &old_hash);
             let old_hash_lock = locks_storage.prepare_lock(old_hash_lock_key).await;
-            let old_hash_guard = old_hash_lock
-                .acquire_exclusive()
-                .await
-                .context("Failed to acquire old hash lock for migration")?;
+            let old_hash_guard = match old_hash_lock.acquire_exclusive().await {
+                Ok(g) => g,
+                Err(e) => {
+                    let _ = guard.release().await;
+                    return Err(e.context("Failed to acquire old hash lock for migration"));
+                }
+            };
 
             // Decrement old reference count atomically and get new count
-            let old_ref_count = app_state
+            let old_ref_count = match app_state
                 .kvstorage
                 .lock()
                 .await
                 .atomic_decrement_ref_count(&app_state.bucket_name, &old_hash)
-                .await?;
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = old_hash_guard.release().await;
+                    let _ = guard.release().await;
+                    return Err(e);
+                }
+            };
 
             // Delete blob if no longer referenced
             if old_ref_count <= 0
@@ -658,19 +778,27 @@ async fn migrate_single_file(
     }
 
     // Update file metadata
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_ref_file(&app_state.bucket_name, path, &digest)
-        .await?;
+        .await
+    {
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_modified(&app_state.bucket_name, path, file_metadata.last_modified)
-        .await?;
+        .await
+    {
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     if let Err(e) = guard.release().await {
         warn!("Failed to release file lock: {}", e);
@@ -988,12 +1116,19 @@ async fn migrate_single_file_from_v1_fs(
         .context("Failed to acquire exclusive lock for migration")?;
 
     // Recheck if file was already migrated after acquiring lock (race condition protection)
-    let current_modified_after_lock = app_state
+    let current_modified_after_lock = match app_state
         .kvstorage
         .lock()
         .await
         .get_modified(&app_state.bucket_name, path)
-        .await?;
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = guard.release().await;
+            return Err(e);
+        }
+    };
 
     if current_modified_after_lock >= file_info.last_modified {
         // File was migrated by another concurrent task, skip
@@ -1006,52 +1141,83 @@ async fn migrate_single_file_from_v1_fs(
     // Acquire hash lock for S3/refcount operations
     let hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &digest);
     let hash_lock = locks_storage.prepare_lock(hash_lock_key).await;
-    let hash_guard = hash_lock
-        .acquire_exclusive()
-        .await
-        .context("Failed to acquire hash lock for migration")?;
+    let hash_guard = match hash_lock.acquire_exclusive().await {
+        Ok(g) => g,
+        Err(e) => {
+            let _ = guard.release().await;
+            return Err(e.context("Failed to acquire hash lock for migration"));
+        }
+    };
 
     // Check if blob already exists in S3
-    let blob_exists = app_state
+    let blob_exists = match app_state
         .s3storage
         .lock()
         .await
         .object_exists(&digest)
-        .await?;
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = hash_guard.release().await;
+            let _ = guard.release().await;
+            return Err(e);
+        }
+    };
 
     // Store blob if it doesn't exist
     if !blob_exists {
-        app_state
+        if let Err(e) = app_state
             .s3storage
             .lock()
             .await
             .put_object(&digest, compressed_data.clone())
-            .await?;
+            .await
+        {
+            let _ = hash_guard.release().await;
+            let _ = guard.release().await;
+            return Err(e);
+        }
     }
 
     // Store logical size metadata
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_logical_size(&app_state.bucket_name, &digest, logical_size)
-        .await?;
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     // Store compressed size metadata
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_compressed_size(&app_state.bucket_name, &digest, compressed_data.len())
-        .await?;
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     // Increment reference count atomically
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .atomic_increment_ref_count(&app_state.bucket_name, &digest)
-        .await?;
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     // Release new hash lock
     if let Err(e) = hash_guard.release().await {
@@ -1060,29 +1226,47 @@ async fn migrate_single_file_from_v1_fs(
 
     // Handle overwriting existing file
     if current_modified > 0 {
-        let old_hash = app_state
+        let old_hash = match app_state
             .kvstorage
             .lock()
             .await
             .get_ref_file(&app_state.bucket_name, path)
-            .await?;
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = guard.release().await;
+                return Err(e);
+            }
+        };
 
         if !old_hash.is_empty() && old_hash != digest {
             // Acquire lock on old hash before decrement
             let old_hash_lock_key = crate::locks::hash_lock(&app_state.bucket_name, &old_hash);
             let old_hash_lock = locks_storage.prepare_lock(old_hash_lock_key).await;
-            let old_hash_guard = old_hash_lock
-                .acquire_exclusive()
-                .await
-                .context("Failed to acquire old hash lock for migration")?;
+            let old_hash_guard = match old_hash_lock.acquire_exclusive().await {
+                Ok(g) => g,
+                Err(e) => {
+                    let _ = guard.release().await;
+                    return Err(e.context("Failed to acquire old hash lock for migration"));
+                }
+            };
 
             // Decrement old reference count atomically and get new count
-            let old_ref_count = app_state
+            let old_ref_count = match app_state
                 .kvstorage
                 .lock()
                 .await
                 .atomic_decrement_ref_count(&app_state.bucket_name, &old_hash)
-                .await?;
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = old_hash_guard.release().await;
+                    let _ = guard.release().await;
+                    return Err(e);
+                }
+            };
 
             // Delete blob if no longer referenced
             if old_ref_count <= 0
@@ -1107,19 +1291,27 @@ async fn migrate_single_file_from_v1_fs(
     }
 
     // Update file metadata
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_ref_file(&app_state.bucket_name, path, &digest)
-        .await?;
+        .await
+    {
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
-    app_state
+    if let Err(e) = app_state
         .kvstorage
         .lock()
         .await
         .set_modified(&app_state.bucket_name, path, file_info.last_modified)
-        .await?;
+        .await
+    {
+        let _ = guard.release().await;
+        return Err(e);
+    }
 
     if let Err(e) = guard.release().await {
         warn!("Failed to release file lock: {}", e);
