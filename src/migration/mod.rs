@@ -403,18 +403,17 @@ pub async fn migrate_single_file_from_metadata(
     };
 
     // Store blob if it doesn't exist
-    if !blob_exists {
-        if let Err(e) = app_state
+    if !blob_exists
+        && let Err(e) = app_state
             .s3storage
             .lock()
             .await
             .put_object(&digest, compressed_data)
             .await
-        {
-            let _ = hash_guard.release().await;
-            let _ = guard.release().await;
-            return Err(e);
-        }
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
     }
 
     // Store logical size metadata
@@ -653,18 +652,17 @@ async fn migrate_single_file(
     };
 
     // Store blob if it doesn't exist
-    if !blob_exists {
-        if let Err(e) = app_state
+    if !blob_exists
+        && let Err(e) = app_state
             .s3storage
             .lock()
             .await
             .put_object(&digest, compressed_data)
             .await
-        {
-            let _ = hash_guard.release().await;
-            let _ = guard.release().await;
-            return Err(e);
-        }
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
     }
 
     // Store logical size metadata
@@ -1166,18 +1164,17 @@ async fn migrate_single_file_from_v1_fs(
     };
 
     // Store blob if it doesn't exist
-    if !blob_exists {
-        if let Err(e) = app_state
+    if !blob_exists
+        && let Err(e) = app_state
             .s3storage
             .lock()
             .await
             .put_object(&digest, compressed_data.clone())
             .await
-        {
-            let _ = hash_guard.release().await;
-            let _ = guard.release().await;
-            return Err(e);
-        }
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
     }
 
     // Store logical size metadata
