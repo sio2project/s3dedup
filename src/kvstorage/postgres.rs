@@ -125,6 +125,7 @@ impl KVStorageTrait for Postgres {
         let version_table = self.table_name("version");
         sqlx::query(&format!(
             "CREATE TABLE IF NOT EXISTS {} (
+                id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
                 version VARCHAR(255) NOT NULL
             )",
             version_table
@@ -561,18 +562,20 @@ impl KVStorageTrait for Postgres {
 
     async fn get_version(&mut self) -> Result<Option<String>> {
         let table = self.table_name("version");
-        let query = format!("SELECT version FROM {}", table);
+        let query = format!("SELECT version FROM {} WHERE id = 1", table);
         let result: Option<(String,)> = sqlx::query_as(&query).fetch_optional(&self.pool).await?;
         Ok(result.map(|r| r.0))
     }
 
     async fn set_version(&mut self, version: &str) -> Result<()> {
         let table = self.table_name("version");
-        // Delete existing row (if any) and insert new one
-        sqlx::query(&format!("DELETE FROM {}", table))
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(&format!("INSERT INTO {} (version) VALUES ($1)", table))
+        // Use upsert to ensure only one row exists
+        let query = format!(
+            "INSERT INTO {} (id, version) VALUES (1, $1)
+             ON CONFLICT (id) DO UPDATE SET version = $1",
+            table
+        );
+        sqlx::query(&query)
             .bind(version)
             .execute(&self.pool)
             .await?;
