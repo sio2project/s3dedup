@@ -439,6 +439,20 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
+    async fn hash_is_referenced(&mut self, bucket: &str, hash: &str) -> Result<bool> {
+        let table = self.table_name("ref_file");
+        let query = format!(
+            "SELECT 1 FROM {} WHERE bucket = $1 AND hash = $2 LIMIT 1",
+            table
+        );
+        let result: Option<(i32,)> = sqlx::query_as(&query)
+            .bind(bucket)
+            .bind(hash)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(result.is_some())
+    }
+
     async fn get_compressed_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
         let table = self.table_name("logical_size");
         let query = format!(

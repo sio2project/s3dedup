@@ -362,6 +362,16 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
+    async fn hash_is_referenced(&mut self, bucket: &str, hash: &str) -> Result<bool> {
+        let result: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM ref_file WHERE bucket = ?1 AND hash = ?2 LIMIT 1")
+                .bind(bucket)
+                .bind(hash)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(result.is_some())
+    }
+
     async fn get_compressed_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
         let result: Result<(Option<i64>,), sqlx::Error> = sqlx::query_as(
             "SELECT compressed_size FROM logical_size WHERE bucket = ?1 AND hash = ?2",

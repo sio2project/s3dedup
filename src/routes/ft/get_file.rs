@@ -230,7 +230,12 @@ pub async fn ft_get_file(
     // 5. Fetch the blob from S3
     let blob_data = state.s3storage.lock().await.get_object(&hash).await;
     if blob_data.is_err() {
-        error!("Failed to get object from S3: {}", blob_data.err().unwrap());
+        error!(
+            "Failed to get object from S3 (bucket={}, key={}): {}",
+            state.bucket_name,
+            hash,
+            blob_data.err().unwrap()
+        );
         metrics::HTTP_REQUESTS_TOTAL
             .with_label_values(&["GET", "/ft/files", "500"])
             .inc();

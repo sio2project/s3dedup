@@ -115,6 +115,10 @@ pub(crate) trait KVStorageTrait {
     /// Delete a logical_size entry
     async fn delete_logical_size(&mut self, bucket: &str, hash: &str) -> Result<()>;
 
+    /// Check if a hash is referenced by any ref_file entry
+    /// Used by cleaner to check if a refcount entry is orphaned
+    async fn hash_is_referenced(&mut self, bucket: &str, hash: &str) -> Result<bool>;
+
     // Aggregate statistics methods for metrics
     /// Get total number of files (count of file_modified entries)
     async fn get_total_files(&mut self, bucket: &str) -> Result<i64>;
@@ -483,6 +487,14 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.delete_logical_size(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.delete_logical_size(bucket, hash).await,
+        }
+    }
+
+    /// Check if a hash is referenced by any ref_file entry
+    pub async fn hash_is_referenced(&mut self, bucket: &str, hash: &str) -> Result<bool> {
+        match self {
+            KVStorage::Postgres(storage) => storage.hash_is_referenced(bucket, hash).await,
+            KVStorage::SQLite(storage) => storage.hash_is_referenced(bucket, hash).await,
         }
     }
 

@@ -3,7 +3,6 @@ use crate::locks::{self, LocksStorage};
 use crate::s3storage::S3Storage;
 use anyhow::Result;
 use serde::Deserialize;
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
@@ -219,36 +218,12 @@ impl Cleaner {
     }
 
     /// Clean refcounts that have no corresponding ref_files
+    /// Uses reverse lookup (database query per hash) instead of loading all hashes into memory
     async fn clean_unreferenced_refcounts(&self) -> Result<usize> {
         let mut deleted_count = 0;
         let mut offset = 0;
 
-        // Build a set of all hashes referenced by ref_files
-        let mut referenced_hashes = HashSet::new();
-        let mut ref_offset = 0;
-
-        loop {
-            let ref_files = self
-                .kvstorage
-                .lock()
-                .await
-                .list_ref_files_batch(&self.bucket_name, self.config.batch_size, ref_offset)
-                .await?;
-
-            if ref_files.is_empty() {
-                break;
-            }
-
-            for (_path, hash) in ref_files {
-                referenced_hashes.insert(hash);
-            }
-
-            ref_offset += self.config.batch_size;
-        }
-
-        debug!("Found {} referenced hashes", referenced_hashes.len());
-
-        // Now check refcounts against this set
+        // Process refcounts in batches, checking each hash against ref_files table
         loop {
             let refcounts = self
                 .kvstorage
@@ -262,7 +237,15 @@ impl Cleaner {
             }
 
             for (hash, count) in refcounts {
-                if !referenced_hashes.contains(&hash) {
+                // Check if hash is referenced by any ref_file (database lookup)
+                let is_referenced = self
+                    .kvstorage
+                    .lock()
+                    .await
+                    .hash_is_referenced(&self.bucket_name, &hash)
+                    .await?;
+
+                if !is_referenced {
                     debug!(
                         "Found unreferenced refcount: hash={}, count={} (no ref_files point to it)",
                         hash, count
@@ -336,7 +319,10 @@ impl Cleaner {
 
                     // Delete the S3 object
                     if let Err(e) = self.s3storage.lock().await.delete_object(&key).await {
-                        error!("Failed to delete S3 object {}: {}", key, e);
+                        error!(
+                            "Failed to delete S3 object (bucket={}, key={}): {}",
+                            self.bucket_name, key, e
+                        );
                         if let Err(e) = hash_guard.release().await {
                             warn!("Failed to release hash lock: {}", e);
                         }

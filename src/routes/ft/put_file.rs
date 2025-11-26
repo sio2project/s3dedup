@@ -226,7 +226,10 @@ pub async fn ft_put_file(
     let blob_exists = match state.s3storage.lock().await.object_exists(s3_key).await {
         Ok(exists) => exists,
         Err(e) => {
-            error!("Failed to check object existence: {}", e);
+            error!(
+                "Failed to check object existence (bucket={}, key={}): {}",
+                state.bucket_name, s3_key, e
+            );
             record_metrics("500");
             if let Err(e) = hash_guard.release().await {
                 warn!("Failed to release hash lock: {}", e);
@@ -263,7 +266,10 @@ pub async fn ft_put_file(
             .put_object(s3_key, final_data.clone())
             .await
         {
-            error!("Failed to store object in S3: {}", e);
+            error!(
+                "Failed to store object in S3 (bucket={}, key={}): {}",
+                state.bucket_name, s3_key, e
+            );
             record_metrics("500");
             if let Err(e) = hash_guard.release().await {
                 warn!("Failed to release hash lock: {}", e);

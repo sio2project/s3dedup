@@ -192,7 +192,10 @@ pub async fn ft_delete_file(
         debug!("Deleting blob with hash: {}", hash);
         // Delete blob from S3
         if let Err(e) = state.s3storage.lock().await.delete_object(&hash).await {
-            error!("Failed to delete object from S3: {}", e);
+            error!(
+                "Failed to delete object from S3 (bucket={}, key={}): {}",
+                state.bucket_name, hash, e
+            );
             // Continue anyway - metadata cleanup is more important
         }
 
