@@ -16,6 +16,7 @@ pub struct SQLiteConfig {
 #[derive(Clone)]
 pub struct SQLite {
     pool: SqlitePool,
+    bucket: String,
 }
 
 impl KVStorageTrait for SQLite {
@@ -54,7 +55,10 @@ impl KVStorageTrait for SQLite {
             .execute(&pool)
             .await?;
 
-        Ok(Box::new(SQLite { pool }))
+        Ok(Box::new(SQLite {
+            pool,
+            bucket: config.bucket.name.clone(),
+        }))
     }
 
     async fn setup(&mut self) -> Result<()> {
@@ -447,18 +451,18 @@ impl KVStorageTrait for SQLite {
         (active_connections, idle_connections)
     }
 
-    async fn get_version(&mut self, bucket: &str) -> Result<Option<String>> {
+    async fn get_version(&mut self) -> Result<Option<String>> {
         let result: Option<(String,)> =
             sqlx::query_as("SELECT version FROM version WHERE bucket = ?1")
-                .bind(bucket)
+                .bind(&self.bucket)
                 .fetch_optional(&self.pool)
                 .await?;
         Ok(result.map(|r| r.0))
     }
 
-    async fn set_version(&mut self, bucket: &str, version: &str) -> Result<()> {
+    async fn set_version(&mut self, version: &str) -> Result<()> {
         sqlx::query("INSERT OR REPLACE INTO version (bucket, version) VALUES (?1, ?2)")
-            .bind(bucket)
+            .bind(&self.bucket)
             .bind(version)
             .execute(&self.pool)
             .await?;

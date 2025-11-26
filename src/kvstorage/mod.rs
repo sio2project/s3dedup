@@ -129,11 +129,11 @@ pub(crate) trait KVStorageTrait {
     async fn get_total_logical_bytes(&mut self, bucket: &str) -> Result<i64>;
 
     // Version tracking
-    /// Get the stored instance version for a bucket
-    async fn get_version(&mut self, bucket: &str) -> Result<Option<String>>;
+    /// Get the stored instance version
+    async fn get_version(&mut self) -> Result<Option<String>>;
 
-    /// Store the instance version for a bucket
-    async fn set_version(&mut self, bucket: &str, version: &str) -> Result<()>;
+    /// Store the instance version
+    async fn set_version(&mut self, version: &str) -> Result<()>;
 
     /// Get deduplicated bytes saved (sum of (refcount - 1) * logical_size for all blobs)
     async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64>;
@@ -528,17 +528,17 @@ impl KVStorage {
         }
     }
 
-    pub async fn get_version(&mut self, bucket: &str) -> Result<Option<String>> {
+    pub async fn get_version(&mut self) -> Result<Option<String>> {
         match self {
-            KVStorage::Postgres(storage) => storage.get_version(bucket).await,
-            KVStorage::SQLite(storage) => storage.get_version(bucket).await,
+            KVStorage::Postgres(storage) => storage.get_version().await,
+            KVStorage::SQLite(storage) => storage.get_version().await,
         }
     }
 
-    pub async fn set_version(&mut self, bucket: &str, version: &str) -> Result<()> {
+    pub async fn set_version(&mut self, version: &str) -> Result<()> {
         match self {
-            KVStorage::Postgres(storage) => storage.set_version(bucket, version).await,
-            KVStorage::SQLite(storage) => storage.set_version(bucket, version).await,
+            KVStorage::Postgres(storage) => storage.set_version(version).await,
+            KVStorage::SQLite(storage) => storage.set_version(version).await,
         }
     }
 }

@@ -186,7 +186,7 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) -> anyhow:
         .kvstorage
         .lock()
         .await
-        .set_version(&config.bucket.name, env!("CARGO_PKG_VERSION"))
+        .set_version(env!("CARGO_PKG_VERSION"))
         .await
         .context("Failed to store instance version")?;
     metrics::INSTANCE_VERSION

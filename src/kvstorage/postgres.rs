@@ -122,12 +122,13 @@ impl KVStorageTrait for Postgres {
         .execute(&self.pool)
         .await?;
 
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS version (
-                bucket VARCHAR(255) NOT NULL PRIMARY KEY,
+        let version_table = self.table_name("version");
+        sqlx::query(&format!(
+            "CREATE TABLE IF NOT EXISTS {} (
                 version VARCHAR(255) NOT NULL
             )",
-        )
+            version_table
+        ))
         .execute(&self.pool)
         .await?;
 
@@ -550,24 +551,25 @@ impl KVStorageTrait for Postgres {
         (active_connections, idle_connections)
     }
 
-    async fn get_version(&mut self, bucket: &str) -> Result<Option<String>> {
-        let result: Option<(String,)> =
-            sqlx::query_as("SELECT version FROM version WHERE bucket = $1")
-                .bind(bucket)
-                .fetch_optional(&self.pool)
-                .await?;
+    async fn get_version(&mut self) -> Result<Option<String>> {
+        let table = self.table_name("version");
+        let query = format!("SELECT version FROM {}", table);
+        let result: Option<(String,)> = sqlx::query_as(&query)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(result.map(|r| r.0))
     }
 
-    async fn set_version(&mut self, bucket: &str, version: &str) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO version (bucket, version) VALUES ($1, $2) \
-             ON CONFLICT (bucket) DO UPDATE SET version = EXCLUDED.version",
-        )
-        .bind(bucket)
-        .bind(version)
-        .execute(&self.pool)
-        .await?;
+    async fn set_version(&mut self, version: &str) -> Result<()> {
+        let table = self.table_name("version");
+        // Delete existing row (if any) and insert new one
+        sqlx::query(&format!("DELETE FROM {}", table))
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(&format!("INSERT INTO {} (version) VALUES ($1)", table))
+            .bind(version)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 }
