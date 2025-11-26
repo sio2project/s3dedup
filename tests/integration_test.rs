@@ -106,7 +106,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     let app_state = Arc::new(AppState {
         bucket_name: config.bucket.name.clone(),
         kvstorage: Arc::new(Mutex::new(kvstorage)),
-        locks: Arc::new(locks),
+        locks: Arc::new(*locks),
         s3storage: Arc::new(Mutex::new(s3storage)),
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),

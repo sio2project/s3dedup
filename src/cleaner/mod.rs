@@ -47,7 +47,7 @@ pub struct Cleaner {
     bucket_name: String,
     kvstorage: Arc<Mutex<Box<KVStorage>>>,
     s3storage: Arc<Mutex<Box<S3Storage>>>,
-    locks: Arc<Box<LocksStorage>>,
+    locks: Arc<LocksStorage>,
     config: CleanerConfig,
 }
 
@@ -56,7 +56,7 @@ impl Cleaner {
         bucket_name: String,
         kvstorage: Arc<Mutex<Box<KVStorage>>>,
         s3storage: Arc<Mutex<Box<S3Storage>>>,
-        locks: Arc<Box<LocksStorage>>,
+        locks: Arc<LocksStorage>,
         config: CleanerConfig,
     ) -> Self {
         Self {

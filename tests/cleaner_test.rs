@@ -51,7 +51,7 @@ async fn setup_test_env(
 ) -> (
     Arc<Mutex<Box<KVStorage>>>,
     Arc<Mutex<Box<S3Storage>>>,
-    Arc<Box<LocksStorage>>,
+    Arc<LocksStorage>,
     String,
 ) {
     let config = create_test_config(bucket_name);
@@ -64,7 +64,7 @@ async fn setup_test_env(
 
     let kvstorage = Arc::new(Mutex::new(kvstorage));
     let s3storage = Arc::new(Mutex::new(s3storage));
-    let locks = Arc::new(locks);
+    let locks = Arc::new(*locks);
 
     // Setup KV storage
     kvstorage.lock().await.setup().await.unwrap();

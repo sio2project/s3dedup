@@ -224,7 +224,7 @@ async fn create_test_app_state() -> Arc<AppState> {
     let app_state = Arc::new(AppState {
         bucket_name: config.bucket.name.clone(),
         kvstorage: Arc::new(tokio::sync::Mutex::new(kvstorage)),
-        locks: Arc::new(locks),
+        locks: Arc::new(*locks),
         s3storage: Arc::new(tokio::sync::Mutex::new(s3storage)),
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
