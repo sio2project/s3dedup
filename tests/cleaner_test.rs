@@ -1,6 +1,7 @@
 use s3dedup::cleaner::{Cleaner, CleanerConfig};
 use s3dedup::config::Config;
 use s3dedup::kvstorage::KVStorage;
+use s3dedup::locks::LocksStorage;
 use s3dedup::s3storage::S3Storage;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -50,20 +51,25 @@ async fn setup_test_env(
 ) -> (
     Arc<Mutex<Box<KVStorage>>>,
     Arc<Mutex<Box<S3Storage>>>,
+    Arc<LocksStorage>,
     String,
 ) {
     let config = create_test_config(bucket_name);
 
     let kvstorage = KVStorage::new(&config).await.unwrap();
     let s3storage = S3Storage::new(&config.bucket).await.unwrap();
+    let locks = LocksStorage::new_with_config(config.locks_type, &config)
+        .await
+        .unwrap();
 
     let kvstorage = Arc::new(Mutex::new(kvstorage));
     let s3storage = Arc::new(Mutex::new(s3storage));
+    let locks = Arc::new(*locks);
 
     // Setup KV storage
     kvstorage.lock().await.setup().await.unwrap();
 
-    (kvstorage, s3storage, bucket_name.to_string())
+    (kvstorage, s3storage, locks, bucket_name.to_string())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -108,7 +114,8 @@ async fn test_clean_orphaned_ref_files() {
         return;
     }
 
-    let (kvstorage, s3storage, bucket_name) = setup_test_env("test_clean_orphaned_ref_files").await;
+    let (kvstorage, s3storage, locks, bucket_name) =
+        setup_test_env("test_clean_orphaned_ref_files").await;
 
     // Create ref_file entries without corresponding refcounts
     kvstorage
@@ -154,7 +161,13 @@ async fn test_clean_orphaned_ref_files() {
         max_deletes_per_run: 100,
     };
 
-    let cleaner = Cleaner::new(bucket_name.clone(), kvstorage.clone(), s3storage, config);
+    let cleaner = Cleaner::new(
+        bucket_name.clone(),
+        kvstorage.clone(),
+        s3storage,
+        locks,
+        config,
+    );
     let result = cleaner.run_cleanup().await;
     assert!(result.is_ok());
 
@@ -183,7 +196,7 @@ async fn test_clean_unreferenced_refcounts() {
         return;
     }
 
-    let (kvstorage, s3storage, bucket_name) =
+    let (kvstorage, s3storage, locks, bucket_name) =
         setup_test_env("test_clean_unreferenced_refcounts").await;
 
     // Create refcount entries without corresponding ref_files
@@ -231,7 +244,13 @@ async fn test_clean_unreferenced_refcounts() {
         max_deletes_per_run: 100,
     };
 
-    let cleaner = Cleaner::new(bucket_name.clone(), kvstorage.clone(), s3storage, config);
+    let cleaner = Cleaner::new(
+        bucket_name.clone(),
+        kvstorage.clone(),
+        s3storage,
+        locks,
+        config,
+    );
     let result = cleaner.run_cleanup().await;
     assert!(result.is_ok());
 
@@ -269,7 +288,8 @@ async fn test_clean_unused_s3_objects() {
         return;
     }
 
-    let (kvstorage, s3storage, bucket_name) = setup_test_env("test_clean_unused_s3_objects").await;
+    let (kvstorage, s3storage, locks, bucket_name) =
+        setup_test_env("test_clean_unused_s3_objects").await;
 
     // Upload objects to S3
     s3storage
@@ -315,6 +335,7 @@ async fn test_clean_unused_s3_objects() {
         bucket_name.clone(),
         kvstorage.clone(),
         s3storage.clone(),
+        locks,
         config,
     );
     let result = cleaner.run_cleanup().await;
@@ -339,7 +360,7 @@ async fn test_clean_orphaned_logical_sizes() {
         return;
     }
 
-    let (kvstorage, s3storage, bucket_name) =
+    let (kvstorage, s3storage, locks, bucket_name) =
         setup_test_env("test_clean_orphaned_logical_sizes").await;
 
     // Create logical_size entries without corresponding refcounts
@@ -387,7 +408,13 @@ async fn test_clean_orphaned_logical_sizes() {
         max_deletes_per_run: 100,
     };
 
-    let cleaner = Cleaner::new(bucket_name.clone(), kvstorage.clone(), s3storage, config);
+    let cleaner = Cleaner::new(
+        bucket_name.clone(),
+        kvstorage.clone(),
+        s3storage,
+        locks,
+        config,
+    );
     let result = cleaner.run_cleanup().await;
     assert!(result.is_ok());
 
@@ -425,7 +452,7 @@ async fn test_max_deletes_per_run_limit() {
         return;
     }
 
-    let (kvstorage, s3storage, bucket_name) =
+    let (kvstorage, s3storage, locks, bucket_name) =
         setup_test_env("test_max_deletes_per_run_limit").await;
 
     // Create many orphaned ref_files (more than max_deletes_per_run)
@@ -456,7 +483,13 @@ async fn test_max_deletes_per_run_limit() {
         max_deletes_per_run: 5, // Only allow 5 deletes
     };
 
-    let cleaner = Cleaner::new(bucket_name.clone(), kvstorage.clone(), s3storage, config);
+    let cleaner = Cleaner::new(
+        bucket_name.clone(),
+        kvstorage.clone(),
+        s3storage,
+        locks,
+        config,
+    );
     let result = cleaner.run_cleanup().await;
     assert!(result.is_ok());
 
@@ -485,7 +518,8 @@ async fn test_batched_processing() {
         return;
     }
 
-    let (kvstorage, s3storage, bucket_name) = setup_test_env("test_batched_processing").await;
+    let (kvstorage, s3storage, locks, bucket_name) =
+        setup_test_env("test_batched_processing").await;
 
     // Create more entries than batch_size
     for i in 0..25 {
@@ -515,7 +549,13 @@ async fn test_batched_processing() {
         max_deletes_per_run: 100,
     };
 
-    let cleaner = Cleaner::new(bucket_name.clone(), kvstorage.clone(), s3storage, config);
+    let cleaner = Cleaner::new(
+        bucket_name.clone(),
+        kvstorage.clone(),
+        s3storage,
+        locks,
+        config,
+    );
     let result = cleaner.run_cleanup().await;
     assert!(result.is_ok());
 
@@ -538,7 +578,8 @@ async fn test_full_cleanup_cycle() {
         return;
     }
 
-    let (kvstorage, s3storage, bucket_name) = setup_test_env("test_full_cleanup_cycle").await;
+    let (kvstorage, s3storage, locks, bucket_name) =
+        setup_test_env("test_full_cleanup_cycle").await;
 
     // Scenario: Simulate a crash during PUT operation
     // 1. S3 object uploaded
@@ -612,6 +653,7 @@ async fn test_full_cleanup_cycle() {
         bucket_name.clone(),
         kvstorage.clone(),
         s3storage.clone(),
+        locks,
         config,
     );
     let result = cleaner.run_cleanup().await;

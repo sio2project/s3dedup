@@ -31,7 +31,7 @@ pub struct HealthChecks {
 pub struct AppState {
     pub bucket_name: String,
     pub kvstorage: Arc<Mutex<Box<kvstorage::KVStorage>>>,
-    pub locks: Box<locks::LocksStorage>,
+    pub locks: Arc<locks::LocksStorage>,
     pub s3storage: Arc<Mutex<Box<s3storage::S3Storage>>>,
     pub filetracker_client: Option<Arc<filetracker_client::FiletrackerClient>>,
     pub metrics: Arc<metrics::Metrics>,
@@ -46,7 +46,7 @@ impl AppState {
         Ok(Arc::new(Self {
             bucket_name: config.bucket.name.clone(),
             kvstorage: Arc::new(Mutex::new(kvstorage)),
-            locks,
+            locks: Arc::new(*locks),
             s3storage: Arc::new(Mutex::new(s3storage)),
             filetracker_client: None,
             metrics,
@@ -69,7 +69,7 @@ impl AppState {
         Ok(Arc::new(Self {
             bucket_name: config.bucket.name.clone(),
             kvstorage: Arc::new(Mutex::new(kvstorage)),
-            locks,
+            locks: Arc::new(*locks),
             s3storage: Arc::new(Mutex::new(s3storage)),
             filetracker_client: Some(Arc::new(filetracker_client)),
             metrics,

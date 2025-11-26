@@ -134,7 +134,23 @@ pub async fn ft_delete_file(
             .unwrap();
     }
 
-    // 6. Decrement reference count atomically and get new count
+    // 6. Acquire hash lock before refcount operations
+    let hash_lock_key = locks::hash_lock(&state.bucket_name, &hash);
+    let hash_lock = locks_storage.prepare_lock(hash_lock_key).await;
+    let hash_guard = match hash_lock.acquire_exclusive().await {
+        Ok(g) => g,
+        Err(e) => {
+            error!("Failed to acquire hash lock: {}", e);
+            record_metrics("500");
+            let _ = guard.release().await;
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body("Failed to acquire hash lock".to_string())
+                .unwrap();
+        }
+    };
+
+    // 7. Decrement reference count atomically and get new count
     let ref_count = match state
         .kvstorage
         .lock()
@@ -146,6 +162,7 @@ pub async fn ft_delete_file(
         Err(e) => {
             error!("Failed to decrement ref count: {}", e);
             record_metrics("500");
+            let _ = hash_guard.release().await;
             let _ = guard.release().await;
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -154,7 +171,7 @@ pub async fn ft_delete_file(
         }
     };
 
-    // 7. Check if we should delete the blob (ref count is now 0)
+    // 8. Check if we should delete the blob (ref count is now 0)
     if ref_count <= 0 {
         debug!("Deleting blob with hash: {}", hash);
         // Delete blob from S3
@@ -172,7 +189,10 @@ pub async fn ft_delete_file(
             .await;
     }
 
-    // 8. Delete file metadata (path -> hash mapping and timestamp)
+    // Release hash lock - done with refcount/S3 operations
+    let _ = hash_guard.release().await;
+
+    // 9. Delete file metadata (path -> hash mapping and timestamp)
     if let Err(e) = state
         .kvstorage
         .lock()

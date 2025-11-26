@@ -89,7 +89,7 @@ mod postgres_locks_tests {
             }
         };
 
-        let locks = Arc::new(locks);
+        let locks = Arc::new(*locks);
         let lock_key = "test:exclusive:key".to_string();
 
         // First exclusive lock should acquire successfully
@@ -153,7 +153,7 @@ mod postgres_locks_tests {
             }
         };
 
-        let locks = Arc::new(locks);
+        let locks = Arc::new(*locks);
         let lock_key = "test:shared:key".to_string();
 
         // Multiple shared locks on the same key should be able to coexist
@@ -191,7 +191,7 @@ mod postgres_locks_tests {
             }
         };
 
-        let locks = Arc::new(locks);
+        let locks = Arc::new(*locks);
         let lock_key = "test:exclusive-shared:key".to_string();
 
         // Acquire an exclusive lock
@@ -296,7 +296,7 @@ mod postgres_locks_tests {
             }
         };
 
-        let locks = Arc::new(locks);
+        let locks = Arc::new(*locks);
         let lock_key = "test:release:key".to_string();
 
         // Acquire and release lock in a scope
