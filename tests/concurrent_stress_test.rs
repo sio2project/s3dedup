@@ -921,16 +921,13 @@ async fn test_cleaner_vs_put_race() {
 
         // Simulate cleaner behavior: check refcount, then delete if 0
         // Note: In real cleaner, this is protected by hash lock
-        let refcount = cleaner_app_state
+        cleaner_app_state
             .kvstorage
             .lock()
             .await
             .get_ref_count(&cleaner_app_state.bucket_name, &cleaner_sha256)
             .await
-            .unwrap();
-
-        // Don't actually delete - just verify the check
-        refcount
+            .unwrap()
     });
 
     // PUT tasks
