@@ -79,6 +79,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
             access_key: "minioadmin".to_string(),
             secret_key: "minioadmin".to_string(),
             force_path_style: true,
+            key_sharding: Default::default(),
         }),
         cleaner: s3dedup::cleaner::CleanerConfig::default(),
         filetracker_url: None,

@@ -7,6 +7,7 @@ pub use crate::kvstorage::KVStorageType;
 pub use crate::kvstorage::postgres::PostgresConfig;
 pub use crate::kvstorage::sqlite::SQLiteConfig;
 pub use crate::locks::LocksType;
+pub use crate::s3storage::KeyShardingConfig;
 pub use crate::s3storage::S3StorageType;
 pub use crate::s3storage::minio::MinIOConfig;
 
@@ -203,6 +204,16 @@ impl BucketConfig {
             if let Ok(val) = std::env::var("S3_SECRET_KEY") {
                 minio.secret_key = val;
             }
+            if let Ok(val) = std::env::var("S3_KEY_SHARDING_ENABLED")
+                && let Ok(enabled) = val.parse()
+            {
+                minio.key_sharding.enabled = enabled;
+            }
+            if let Ok(val) = std::env::var("S3_KEY_SHARDING_DEPTH")
+                && let Ok(depth) = val.parse()
+            {
+                minio.key_sharding.depth = depth;
+            }
         }
 
         // Filetracker URL for live migration
@@ -229,6 +240,16 @@ impl BucketConfig {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(true),
+                key_sharding: KeyShardingConfig {
+                    enabled: std::env::var("S3_KEY_SHARDING_ENABLED")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(true),
+                    depth: std::env::var("S3_KEY_SHARDING_DEPTH")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(2),
+                },
             })
         } else {
             None
