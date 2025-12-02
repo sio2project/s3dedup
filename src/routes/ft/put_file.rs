@@ -41,8 +41,21 @@ pub async fn ft_put_file(
     };
 
     // 1. Parse and validate timestamp (required for PUT)
+    let raw_timestamp = headers
+        .get("last-modified")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| query.last_modified.clone());
     let timestamp = match utils::extract_timestamp(&headers, query.last_modified.as_ref(), true) {
-        Ok(ts) => ts,
+        Ok(ts) => {
+            debug!(
+                "PUT {} timestamp: raw='{}' -> parsed={}",
+                path,
+                raw_timestamp.as_deref().unwrap_or("none"),
+                ts
+            );
+            ts
+        }
         Err(e) => {
             error!("Failed to extract timestamp: {}", e);
             record_metrics("400");
@@ -475,16 +488,26 @@ pub async fn ft_put_file(
     if let Some(filetracker_client) = &state.filetracker_client {
         debug!("Live migration mode: also writing to filetracker");
 
-        // Reconstruct the data that needs to be sent to filetracker
-        // We need to use the final_data (compressed) that was stored
+        // V1 filetracker doesn't understand compression - it stores files uncompressed.
+        // We need to decompress before sending, otherwise V1 stores gzip bytes
+        // and later returns them without Content-Encoding header, causing corruption.
+        let uncompressed_for_v1 = match storage_helpers::decompress_gzip(&final_data) {
+            Ok(data) => data,
+            Err(e) => {
+                warn!("Failed to decompress for V1 filetracker dual-write: {}", e);
+                // Skip dual-write if decompression fails
+                final_data.clone()
+            }
+        };
+
         let result = filetracker_client
             .put_file(
                 path,
-                final_data.clone(),
+                uncompressed_for_v1,
                 timestamp,
                 logical_size,
                 &digest,
-                true, // Always compressed in storage
+                false, // V1 filetracker stores uncompressed
             )
             .await;
 
@@ -500,10 +523,15 @@ pub async fn ft_put_file(
     }
 
     record_metrics("200");
+    let last_modified_header = utils::format_rfc2822_timestamp(timestamp);
+    debug!(
+        "PUT {} complete, returning Last-Modified: {} (unix: {})",
+        path, last_modified_header, timestamp
+    );
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "text/plain")
-        .header("Last-Modified", utils::format_rfc2822_timestamp(timestamp))
+        .header("Last-Modified", last_modified_header)
         .body("".to_string())
         .unwrap()
 }

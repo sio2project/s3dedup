@@ -6,6 +6,36 @@ use tracing::{debug, info};
 
 pub mod minio;
 
+/// Configuration for S3 key sharding
+/// When enabled, transforms keys like "abcdef..." to "ab/cd/abcdef..."
+/// to distribute objects across directories and avoid ext4 performance issues
+#[derive(Debug, Deserialize, Clone)]
+pub struct KeyShardingConfig {
+    /// Whether key sharding is enabled
+    #[serde(default = "default_sharding_enabled")]
+    pub enabled: bool,
+    /// Number of prefix levels (2 = ab/cd/, 3 = ab/cd/ef/)
+    #[serde(default = "default_sharding_depth")]
+    pub depth: usize,
+}
+
+fn default_sharding_enabled() -> bool {
+    true
+}
+
+fn default_sharding_depth() -> usize {
+    2
+}
+
+impl Default for KeyShardingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_sharding_enabled(),
+            depth: default_sharding_depth(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub enum S3StorageType {
     #[serde(rename = "minio")]

@@ -266,15 +266,17 @@ pub async fn ft_get_file(
         .observe(start.elapsed().as_secs_f64());
 
     // 7. Return file with appropriate headers (matching original filetracker)
+    let last_modified_header = utils::format_rfc2822_timestamp(modified_time);
+    debug!(
+        "GET {} returning Last-Modified: {} (unix: {})",
+        path, last_modified_header, modified_time
+    );
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/octet-stream")
         .header("Content-Length", blob_data.len().to_string())
         .header("Content-Encoding", "gzip")
-        .header(
-            "Last-Modified",
-            utils::format_rfc2822_timestamp(modified_time),
-        )
+        .header("Last-Modified", last_modified_header)
         .header("Logical-Size", logical_size.to_string())
         .body(Body::from(blob_data))
         .unwrap()
