@@ -53,8 +53,19 @@ impl FiletrackerClient {
         let response = self.client.get(&url).send().await?;
 
         if !response.status().is_success() {
-            error!("Failed to list files: HTTP {}", response.status());
-            bail!("HTTP {}", response.status())
+            let status = response.status();
+            let x_exception = response
+                .headers()
+                .get("X-Exception")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+            let body = response.text().await.unwrap_or_default();
+            error!(
+                "Failed to list files: HTTP {} - X-Exception: {} - Body: {}",
+                status, x_exception, body
+            );
+            bail!("HTTP {} - {}", status, x_exception)
         }
 
         let body = response.text().await?;
@@ -80,8 +91,19 @@ impl FiletrackerClient {
         }
 
         if !response.status().is_success() {
-            error!("Failed to get file: HTTP {}", response.status());
-            bail!("HTTP {}", response.status())
+            let status = response.status();
+            let x_exception = response
+                .headers()
+                .get("X-Exception")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+            let body = response.text().await.unwrap_or_default();
+            error!(
+                "Failed to get file: HTTP {} - X-Exception: {} - Body: {}",
+                status, x_exception, body
+            );
+            bail!("HTTP {} - {}", status, x_exception)
         }
 
         // Extract headers
@@ -150,6 +172,10 @@ impl FiletrackerClient {
 
         let mut request = self.client.put(&url).body(data);
 
+        // V1 filetracker reads timestamp from Last-Modified header, not query param
+        // We send both for compatibility with V1 and V2
+        request = request.header("Last-Modified", &timestamp_rfc2822);
+
         if is_compressed {
             request = request.header("Content-Encoding", "gzip");
         }
@@ -161,8 +187,19 @@ impl FiletrackerClient {
         let response = request.send().await?;
 
         if !response.status().is_success() {
-            error!("Failed to put file: HTTP {}", response.status());
-            bail!("HTTP {}", response.status())
+            let status = response.status();
+            let x_exception = response
+                .headers()
+                .get("X-Exception")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+            let body = response.text().await.unwrap_or_default();
+            error!(
+                "Failed to put file: HTTP {} - X-Exception: {} - Body: {}",
+                status, x_exception, body
+            );
+            bail!("HTTP {} - {}", status, x_exception)
         }
 
         debug!("Put file to filetracker successfully");
@@ -192,8 +229,19 @@ impl FiletrackerClient {
         }
 
         if !response.status().is_success() {
-            error!("Failed to delete file: HTTP {}", response.status());
-            bail!("HTTP {}", response.status())
+            let status = response.status();
+            let x_exception = response
+                .headers()
+                .get("X-Exception")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+            let body = response.text().await.unwrap_or_default();
+            error!(
+                "Failed to delete file: HTTP {} - X-Exception: {} - Body: {}",
+                status, x_exception, body
+            );
+            bail!("HTTP {} - {}", status, x_exception)
         }
 
         debug!("Deleted file from filetracker successfully");
