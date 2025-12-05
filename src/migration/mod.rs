@@ -1,5 +1,6 @@
 use crate::AppState;
 use crate::filetracker_client::{FileMetadata, FiletrackerClient};
+use crate::metrics::MIGRATION_FILES_MIGRATED;
 use crate::routes::ft::storage_helpers;
 use anyhow::{Context, Result};
 use futures_util::future::join_all;
@@ -801,6 +802,12 @@ async fn migrate_single_file(
     if let Err(e) = guard.release().await {
         warn!("Failed to release file lock: {}", e);
     }
+
+    // Increment migration metric
+    MIGRATION_FILES_MIGRATED
+        .with_label_values(&[&app_state.bucket_name])
+        .inc();
+
     Ok(true)
 }
 
@@ -1313,5 +1320,11 @@ async fn migrate_single_file_from_v1_fs(
     if let Err(e) = guard.release().await {
         warn!("Failed to release file lock: {}", e);
     }
+
+    // Increment migration metric
+    MIGRATION_FILES_MIGRATED
+        .with_label_values(&[&app_state.bucket_name])
+        .inc();
+
     Ok(true)
 }

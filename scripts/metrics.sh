@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Get metrics URL from first argument or use default
-METRICS_URL="${1:-localhost:9999/metrics}"
+METRICS_URL="${1:-localhost:8080/metrics}"
 
 while true; do
     clear

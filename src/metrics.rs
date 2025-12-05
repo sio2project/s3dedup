@@ -86,16 +86,11 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref DEDUP_HIT_RATE: Gauge = register_gauge!(
-        "s3dedup_dedup_hit_rate",
-        "Deduplication hit rate (hits / (hits + misses))"
-    )
-    .unwrap();
-
     // Cleaner metrics
-    pub static ref CLEANER_LAST_RUN_TIMESTAMP: IntGauge = register_int_gauge!(
+    pub static ref CLEANER_LAST_RUN_TIMESTAMP: IntGaugeVec = register_int_gauge_vec!(
         "s3dedup_cleaner_last_run_timestamp_seconds",
-        "Timestamp of last successful cleaner run"
+        "Timestamp of last successful cleaner run",
+        &["bucket"]
     )
     .unwrap();
 
@@ -171,20 +166,6 @@ lazy_static! {
     pub static ref DB_CONNECTIONS_IDLE: IntGauge = register_int_gauge!(
         "s3dedup_db_connections_idle",
         "Number of idle connections in the pool"
-    )
-    .unwrap();
-
-    pub static ref DB_CONNECTION_ACQUIRE_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
-        "s3dedup_db_connection_acquire_duration_seconds",
-        "Time to acquire a database connection",
-        &["storage_type"]
-    )
-    .unwrap();
-
-    pub static ref DB_CONNECTION_ACQUIRE_ERRORS_TOTAL: IntCounterVec = register_int_counter_vec!(
-        "s3dedup_db_connection_acquire_errors_total",
-        "Total failed database connection acquisitions",
-        &["storage_type", "reason"]
     )
     .unwrap();
 

@@ -1,9 +1,14 @@
 use crate::kvstorage::KVStorage;
 use crate::locks::{self, LocksStorage};
+use crate::metrics::{
+    CLEANER_DELETED_BLOBS_TOTAL, CLEANER_ERRORS_TOTAL, CLEANER_FREED_BYTES_TOTAL,
+    CLEANER_LAST_RUN_TIMESTAMP, CLEANER_TOTAL_RUNS,
+};
 use crate::s3storage::S3Storage;
 use anyhow::Result;
 use serde::Deserialize;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
@@ -89,6 +94,9 @@ impl Cleaner {
                 info!("Running cleanup cycle for bucket: {}", self.bucket_name);
 
                 if let Err(e) = self.run_cleanup().await {
+                    CLEANER_ERRORS_TOTAL
+                        .with_label_values(&[&self.bucket_name])
+                        .inc();
                     error!(
                         "Cleanup cycle failed for bucket {}: {}",
                         self.bucket_name, e
@@ -100,7 +108,21 @@ impl Cleaner {
 
     /// Run a full cleanup cycle
     pub async fn run_cleanup(&self) -> Result<()> {
+        // Increment run counter and update timestamp at start
+        // This ensures both metrics are consistent even if the run fails
+        CLEANER_TOTAL_RUNS
+            .with_label_values(&[&self.bucket_name])
+            .inc();
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        CLEANER_LAST_RUN_TIMESTAMP
+            .with_label_values(&[&self.bucket_name])
+            .set(timestamp);
+
         let mut total_deletes = 0;
+        let mut total_bytes_freed: u64 = 0;
 
         // Case 1: Clean ref_files pointing to non-existent hashes
         info!("Phase 1: Cleaning ref_files with missing hashes");
@@ -111,6 +133,7 @@ impl Cleaner {
                 "Reached max deletes limit ({}) in phase 1, stopping cleanup cycle",
                 self.config.max_deletes_per_run
             );
+            self.update_cleanup_metrics(total_deletes, total_bytes_freed);
             return Ok(());
         }
 
@@ -123,18 +146,22 @@ impl Cleaner {
                 "Reached max deletes limit ({}) in phase 2, stopping cleanup cycle",
                 self.config.max_deletes_per_run
             );
+            self.update_cleanup_metrics(total_deletes, total_bytes_freed);
             return Ok(());
         }
 
         // Case 3: Clean S3 objects with no refcount or refcount = 0
         info!("Phase 3: Cleaning S3 objects with no refcount or refcount = 0");
-        total_deletes += self.clean_unused_s3_objects().await?;
+        let (s3_deletes, s3_bytes_freed) = self.clean_unused_s3_objects().await?;
+        total_deletes += s3_deletes;
+        total_bytes_freed += s3_bytes_freed;
 
         if total_deletes >= self.config.max_deletes_per_run {
             warn!(
                 "Reached max deletes limit ({}) in phase 3, stopping cleanup cycle",
                 self.config.max_deletes_per_run
             );
+            self.update_cleanup_metrics(total_deletes, total_bytes_freed);
             return Ok(());
         }
 
@@ -143,11 +170,34 @@ impl Cleaner {
         total_deletes += self.clean_orphaned_logical_sizes().await?;
 
         info!(
-            "Cleanup cycle complete for bucket: {} (total items deleted: {})",
-            self.bucket_name, total_deletes
+            "Cleanup cycle complete for bucket: {} (total items deleted: {}, bytes freed: {})",
+            self.bucket_name, total_deletes, total_bytes_freed
         );
 
+        self.update_cleanup_metrics(total_deletes, total_bytes_freed);
         Ok(())
+    }
+
+    /// Update cleanup metrics after a run
+    fn update_cleanup_metrics(&self, total_deletes: usize, total_bytes_freed: u64) {
+        // Update timestamp (use unwrap_or to handle edge case of system time before UNIX_EPOCH)
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        CLEANER_LAST_RUN_TIMESTAMP
+            .with_label_values(&[&self.bucket_name])
+            .set(timestamp);
+
+        // Update deleted blobs counter
+        CLEANER_DELETED_BLOBS_TOTAL
+            .with_label_values(&[&self.bucket_name])
+            .inc_by(total_deletes as u64);
+
+        // Update freed bytes counter
+        CLEANER_FREED_BYTES_TOTAL
+            .with_label_values(&[&self.bucket_name])
+            .inc_by(total_bytes_freed);
     }
 
     /// Clean ref_files that point to non-existent hashes in refcount table
@@ -327,8 +377,10 @@ impl Cleaner {
     }
 
     /// Clean S3 objects that have no refcount or refcount = 0
-    async fn clean_unused_s3_objects(&self) -> Result<usize> {
+    /// Returns (deleted_count, bytes_freed)
+    async fn clean_unused_s3_objects(&self) -> Result<(usize, u64)> {
         let mut deleted_count = 0;
+        let mut bytes_freed: u64 = 0;
         let mut continuation_token: Option<String> = None;
 
         loop {
@@ -373,6 +425,15 @@ impl Cleaner {
                 if refcount == 0 {
                     debug!("Found unused S3 object: key={} (refcount=0)", key);
 
+                    // Get compressed size before deleting (for metrics)
+                    let compressed_size = self
+                        .kvstorage
+                        .lock()
+                        .await
+                        .get_compressed_size(&self.bucket_name, &key)
+                        .await
+                        .unwrap_or(0);
+
                     // Delete the S3 object
                     if let Err(e) = self.s3storage.lock().await.delete_object(&key).await {
                         error!(
@@ -386,12 +447,13 @@ impl Cleaner {
                     }
 
                     deleted_count += 1;
+                    bytes_freed += compressed_size as u64;
 
                     if deleted_count >= self.config.max_deletes_per_run {
                         if let Err(e) = hash_guard.release().await {
                             warn!("Failed to release hash lock: {}", e);
                         }
-                        return Ok(deleted_count);
+                        return Ok((deleted_count, bytes_freed));
                     }
                 }
 
@@ -406,7 +468,7 @@ impl Cleaner {
             }
         }
 
-        Ok(deleted_count)
+        Ok((deleted_count, bytes_freed))
     }
 
     /// Clean logical_size entries that have no corresponding refcount
