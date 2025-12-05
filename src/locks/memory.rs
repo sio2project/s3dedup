@@ -1,5 +1,7 @@
 use crate::locks::{ExclusiveLockGuard, Lock, LockStorage, SharedLockGuard};
+use crate::metrics::LOCK_QUEUE_SIZE;
 use async_trait::async_trait;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{RwLock as TokioRwLock, RwLockReadGuard, RwLockWriteGuard};
 use tokio::task::spawn_blocking;
@@ -10,6 +12,8 @@ type LockMap = Arc<parking_lot::RwLock<HashMap<String, Arc<TokioRwLock<()>>>>>;
 #[derive(Clone)]
 pub(crate) struct MemoryLocks {
     locks: LockMap,
+    /// Counter tracking active LockedKey instances (locks in use)
+    active_locks: Arc<AtomicI64>,
 }
 
 struct LockedKey<'a> {
@@ -57,6 +61,9 @@ impl<'a> Lock for LockedKey<'a> {
 
 impl<'a> Drop for LockedKey<'a> {
     fn drop(&mut self) {
+        self.parent.active_locks.fetch_sub(1, Ordering::Relaxed);
+        LOCK_QUEUE_SIZE.set(self.parent.active_locks.load(Ordering::Relaxed));
+
         // Lock the map to prevent concurrent modifications while we check the refcount
         // parking_lot allows sync access, held very briefly (just a refcount check + hash remove)
         let mut locks = self.parent.locks.write();
@@ -90,10 +97,14 @@ impl LockStorage for MemoryLocks {
     fn new() -> Box<Self> {
         Box::new(Self {
             locks: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            active_locks: Arc::new(AtomicI64::new(0)),
         })
     }
 
     async fn prepare_lock<'a>(&'a self, key: String) -> Box<dyn Lock + 'a + Send> {
+        self.active_locks.fetch_add(1, Ordering::Relaxed);
+        LOCK_QUEUE_SIZE.set(self.active_locks.load(Ordering::Relaxed));
+
         let lock = self.get_or_create_lock(key.clone()).await;
         Box::new(LockedKey {
             lock,

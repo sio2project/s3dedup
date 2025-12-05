@@ -150,7 +150,7 @@ fn start_background_tasks(app_state: Arc<AppState>, bucket_config: &config::Buck
     // Start metrics updater task
     let metrics_state = app_state.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
         loop {
             interval.tick().await;
             if let Err(e) = metrics_state.update_storage_metrics().await {
