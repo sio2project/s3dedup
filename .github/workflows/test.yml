@@ -7,6 +7,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  S3_ACCESS_KEY: GK0123456789abcdef01234567
+  S3_SECRET_KEY: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+  S3_ENDPOINT: http://localhost:3900
 
 jobs:
   test:
@@ -41,16 +44,87 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Start MinIO
+    - name: Start Garage
       run: |
+        mkdir -p /tmp/garage/meta /tmp/garage/data
+        cat > /tmp/garage/garage.toml << 'EOF'
+        metadata_dir = "/tmp/garage/meta"
+        data_dir = "/tmp/garage/data"
+        db_engine = "sqlite"
+        replication_factor = 1
+        rpc_bind_addr = "[::]:3901"
+        rpc_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+        [s3_api]
+        s3_region = "garage"
+        api_bind_addr = "[::]:3900"
+        root_domain = ".s3.garage.localhost"
+
+        [admin]
+        api_bind_addr = "[::]:3902"
+        admin_token = "s3dedup-test-admin-token"
+        EOF
+
         docker run -d \
-          --name minio \
-          -p 9000:9000 \
-          -e MINIO_ROOT_USER=minioadmin \
-          -e MINIO_ROOT_PASSWORD=minioadmin \
-          minio/minio server /data
-        # Wait for MinIO to be ready
-        sleep 10
+          --name garage \
+          --network host \
+          -v /tmp/garage/garage.toml:/etc/garage.toml:ro \
+          -v /tmp/garage/meta:/tmp/garage/meta \
+          -v /tmp/garage/data:/tmp/garage/data \
+          dxflrs/garage:v2.2.0
+
+        echo "Waiting for Garage admin API..."
+        for i in {1..30}; do
+          if curl -sf -o /dev/null -H "Authorization: Bearer s3dedup-test-admin-token" http://localhost:3902/v2/GetClusterStatus 2>/dev/null; then
+            echo "Garage is ready!"
+            break
+          fi
+          if [ "$i" = "30" ]; then
+            echo "ERROR: Timeout waiting for Garage"
+            docker logs garage
+            exit 1
+          fi
+          sleep 1
+        done
+
+    - name: Initialize Garage
+      run: |
+        ADMIN_TOKEN="s3dedup-test-admin-token"
+        ADMIN="http://localhost:3902"
+        AUTH="Authorization: Bearer $ADMIN_TOKEN"
+
+        # Get node ID
+        NODE_ID=$(curl -sf -H "$AUTH" "$ADMIN/v2/GetClusterStatus" | jq -r '.nodes[0].id')
+        echo "Node ID: $NODE_ID"
+
+        # Configure and apply layout
+        curl -sf -X POST \
+          -H "$AUTH" \
+          -H "Content-Type: application/json" \
+          -d "{\"roles\":[{\"id\":\"$NODE_ID\",\"zone\":\"dc1\",\"capacity\":1073741824,\"tags\":[]}]}" \
+          "$ADMIN/v2/UpdateClusterLayout"
+
+        curl -sf -X POST \
+          -H "$AUTH" \
+          -H "Content-Type: application/json" \
+          -d '{"version":1}' \
+          "$ADMIN/v2/ApplyClusterLayout"
+
+        sleep 2
+
+        # Import fixed API key
+        curl -sf -X POST \
+          -H "$AUTH" \
+          -H "Content-Type: application/json" \
+          -d "{\"accessKeyId\":\"$S3_ACCESS_KEY\",\"secretAccessKey\":\"$S3_SECRET_KEY\",\"name\":\"s3dedup-key\"}" \
+          "$ADMIN/v2/ImportKey"
+
+        # Grant createBucket permission
+        curl -sf -X POST \
+          -H "$AUTH" \
+          -H "Content-Type: application/json" \
+          -d '{"allow":{"createBucket":true}}' \
+          "$ADMIN/v2/UpdateKey?id=$S3_ACCESS_KEY"
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -78,14 +152,6 @@ jobs:
     - name: Create db directory
       run: mkdir -p db
 
-    - name: Set up MinIO bucket
-      run: |
-        # Install mc (MinIO client)
-        wget -q https://dl.min.io/client/mc/release/linux-amd64/mc
-        chmod +x mc
-        ./mc alias set local http://localhost:9000 minioadmin minioadmin
-        ./mc mb local/bucket1 || true
-
     - name: Run tests (SQLite)
       if: matrix.kvstorage == 'sqlite'
       run: cargo test --verbose
@@ -94,86 +160,14 @@ jobs:
 
     - name: Run tests (Postgres + Memory Locks)
       if: matrix.kvstorage == 'postgres' && matrix.locks == 'memory'
-      run: |
-        # Create a test config for Postgres with memory locks
-        cat > config.test.json << EOF
-        {
-          "logging": {
-            "level": "debug",
-            "json": false
-          },
-          "buckets": [
-            {
-              "name": "bucket1",
-              "address": "0.0.0.0",
-              "port": 3000,
-              "kvstorage_type": "postgres",
-              "postgres": {
-                "host": "localhost",
-                "port": 5432,
-                "user": "postgres",
-                "password": "postgres",
-                "dbname": "s3dedup_test",
-                "pool_size": 10
-              },
-              "locks_type": "memory",
-              "s3storage_type": "minio",
-              "minio": {
-                "endpoint": "http://localhost:9000",
-                "access_key": "minioadmin",
-                "secret_key": "minioadmin",
-                "force_path_style": true
-              }
-            }
-          ]
-        }
-        EOF
-
-        # Run tests
-        cargo test --verbose
+      run: cargo test --verbose
       env:
         RUST_LOG: debug
         DATABASE_URL: postgres://postgres:postgres@localhost:5432/s3dedup_test
 
     - name: Run tests (Postgres + Postgres Locks)
       if: matrix.kvstorage == 'postgres' && matrix.locks == 'postgres'
-      run: |
-        # Create a test config for Postgres with PostgreSQL locks
-        cat > config.test.json << EOF
-        {
-          "logging": {
-            "level": "debug",
-            "json": false
-          },
-          "buckets": [
-            {
-              "name": "bucket1",
-              "address": "0.0.0.0",
-              "port": 3000,
-              "kvstorage_type": "postgres",
-              "postgres": {
-                "host": "localhost",
-                "port": 5432,
-                "user": "postgres",
-                "password": "postgres",
-                "dbname": "s3dedup_test",
-                "pool_size": 10
-              },
-              "locks_type": "postgres",
-              "s3storage_type": "minio",
-              "minio": {
-                "endpoint": "http://localhost:9000",
-                "access_key": "minioadmin",
-                "secret_key": "minioadmin",
-                "force_path_style": true
-              }
-            }
-          ]
-        }
-        EOF
-
-        # Run tests
-        cargo test --verbose
+      run: cargo test --verbose
       env:
         RUST_LOG: debug
         DATABASE_URL: postgres://postgres:postgres@localhost:5432/s3dedup_test

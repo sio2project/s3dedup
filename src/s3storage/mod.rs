@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tracing::{debug, info};
 
-pub mod minio;
+pub mod s3compat;
 
 /// Configuration for S3 key sharding
 /// When enabled, transforms keys like "abcdef..." to "ab/cd/abcdef..."
@@ -38,10 +38,8 @@ impl Default for KeyShardingConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub enum S3StorageType {
-    #[serde(rename = "minio")]
-    MinIO,
-    #[serde(rename = "aws")]
-    AWS,
+    #[serde(rename = "s3")]
+    S3Compat,
 }
 
 #[async_trait]
@@ -67,51 +65,37 @@ pub(crate) trait S3StorageTrait {
 }
 
 #[derive(Clone)]
-pub enum S3Storage {
-    MinIO(minio::MinIOClient),
-}
+pub struct S3Storage(s3compat::S3CompatClient);
 
 impl S3Storage {
     pub async fn new(config: &BucketConfig) -> Result<Box<Self>> {
         match config.s3storage_type {
-            S3StorageType::MinIO => {
-                info!("Using MinIO as S3 storage");
-                let client = minio::MinIOClient::new(config).await?;
-                Ok(Box::new(S3Storage::MinIO(*client)))
-            }
-            S3StorageType::AWS => {
-                // TODO: Implement AWS S3 client
-                todo!("AWS S3 client not implemented yet")
+            S3StorageType::S3Compat => {
+                info!("Using S3-compatible storage");
+                let client = s3compat::S3CompatClient::new(config).await?;
+                Ok(Box::new(S3Storage(*client)))
             }
         }
     }
 
     pub async fn put_object(&self, key: &str, data: Vec<u8>) -> Result<()> {
         debug!("Putting object with key: {}", key);
-        match self {
-            S3Storage::MinIO(client) => client.put_object(key, data).await,
-        }
+        self.0.put_object(key, data).await
     }
 
     pub async fn get_object(&self, key: &str) -> Result<Vec<u8>> {
         debug!("Getting object with key: {}", key);
-        match self {
-            S3Storage::MinIO(client) => client.get_object(key).await,
-        }
+        self.0.get_object(key).await
     }
 
     pub async fn delete_object(&self, key: &str) -> Result<()> {
         debug!("Deleting object with key: {}", key);
-        match self {
-            S3Storage::MinIO(client) => client.delete_object(key).await,
-        }
+        self.0.delete_object(key).await
     }
 
     pub async fn object_exists(&self, key: &str) -> Result<bool> {
         debug!("Checking if object exists with key: {}", key);
-        match self {
-            S3Storage::MinIO(client) => client.object_exists(key).await,
-        }
+        self.0.object_exists(key).await
     }
 
     pub async fn list_objects(
@@ -122,15 +106,11 @@ impl S3Storage {
             "Listing objects with continuation_token: {:?}",
             continuation_token
         );
-        match self {
-            S3Storage::MinIO(client) => client.list_objects(continuation_token).await,
-        }
+        self.0.list_objects(continuation_token).await
     }
 
     pub async fn check_health(&self) -> Result<()> {
         debug!("Checking S3 health");
-        match self {
-            S3Storage::MinIO(client) => client.check_health().await,
-        }
+        self.0.check_health().await
     }
 }

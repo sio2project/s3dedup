@@ -9,7 +9,7 @@ pub use crate::kvstorage::sqlite::SQLiteConfig;
 pub use crate::locks::LocksType;
 pub use crate::s3storage::KeyShardingConfig;
 pub use crate::s3storage::S3StorageType;
-pub use crate::s3storage::minio::MinIOConfig;
+pub use crate::s3storage::s3compat::S3CompatConfig;
 
 #[derive(Debug, serde::Deserialize, Clone)]
 pub struct Config {
@@ -37,7 +37,7 @@ pub struct BucketConfig {
     pub s3storage_type: S3StorageType,
 
     #[serde(default)]
-    pub minio: Option<MinIOConfig>,
+    pub s3: Option<S3CompatConfig>,
 
     #[serde(default)]
     pub cleaner: CleanerConfig,
@@ -193,26 +193,26 @@ impl BucketConfig {
             self.port = port;
         }
 
-        // MinIO/S3 overrides
-        if let Some(ref mut minio) = self.minio {
+        // S3 storage overrides
+        if let Some(ref mut s3_config) = self.s3 {
             if let Ok(val) = std::env::var("S3_ENDPOINT") {
-                minio.endpoint = val;
+                s3_config.endpoint = val;
             }
             if let Ok(val) = std::env::var("S3_ACCESS_KEY") {
-                minio.access_key = val;
+                s3_config.access_key = val;
             }
             if let Ok(val) = std::env::var("S3_SECRET_KEY") {
-                minio.secret_key = val;
+                s3_config.secret_key = val;
             }
             if let Ok(val) = std::env::var("S3_KEY_SHARDING_ENABLED")
                 && let Ok(enabled) = val.parse()
             {
-                minio.key_sharding.enabled = enabled;
+                s3_config.key_sharding.enabled = enabled;
             }
             if let Ok(val) = std::env::var("S3_KEY_SHARDING_DEPTH")
                 && let Ok(depth) = val.parse()
             {
-                minio.key_sharding.depth = depth;
+                s3_config.key_sharding.depth = depth;
             }
         }
 
@@ -224,36 +224,26 @@ impl BucketConfig {
 
     /// Create a bucket config from environment variables only
     fn from_env() -> Result<Self> {
-        let s3storage_type_str =
-            std::env::var("S3STORAGE_TYPE").unwrap_or_else(|_| "minio".to_string());
-        let s3storage_type = match s3storage_type_str.as_str() {
-            "minio" => S3StorageType::MinIO,
-            _ => bail!("Invalid S3STORAGE_TYPE: {}", s3storage_type_str),
-        };
-
-        let minio = if matches!(s3storage_type, S3StorageType::MinIO) {
-            Some(MinIOConfig {
-                endpoint: std::env::var("S3_ENDPOINT")?,
-                access_key: std::env::var("S3_ACCESS_KEY")?,
-                secret_key: std::env::var("S3_SECRET_KEY")?,
-                force_path_style: std::env::var("S3_FORCE_PATH_STYLE")
+        let s3 = Some(S3CompatConfig {
+            endpoint: std::env::var("S3_ENDPOINT")?,
+            access_key: std::env::var("S3_ACCESS_KEY")?,
+            secret_key: std::env::var("S3_SECRET_KEY")?,
+            force_path_style: std::env::var("S3_FORCE_PATH_STYLE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(true),
+            region: std::env::var("S3_REGION").unwrap_or_else(|_| "garage".to_string()),
+            key_sharding: KeyShardingConfig {
+                enabled: std::env::var("S3_KEY_SHARDING_ENABLED")
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(true),
-                key_sharding: KeyShardingConfig {
-                    enabled: std::env::var("S3_KEY_SHARDING_ENABLED")
-                        .ok()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(true),
-                    depth: std::env::var("S3_KEY_SHARDING_DEPTH")
-                        .ok()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(2),
-                },
-            })
-        } else {
-            None
-        };
+                depth: std::env::var("S3_KEY_SHARDING_DEPTH")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(2),
+            },
+        });
 
         Ok(BucketConfig {
             name: std::env::var("BUCKET_NAME").unwrap_or_else(|_| "default".to_string()),
@@ -262,8 +252,8 @@ impl BucketConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(8080),
-            s3storage_type,
-            minio,
+            s3storage_type: S3StorageType::S3Compat,
+            s3,
             cleaner: CleanerConfig {
                 enabled: std::env::var("CLEANER_ENABLED")
                     .ok()

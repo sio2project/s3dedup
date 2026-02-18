@@ -11,13 +11,16 @@ use aws_sdk_s3::{Client, Config};
 use serde::Deserialize;
 use tracing::{debug, error};
 
+/// Configuration for generic S3-compatible storage (e.g., Garage, MinIO, etc.)
 #[derive(Debug, Clone, Deserialize)]
-pub struct MinIOConfig {
+pub struct S3CompatConfig {
     pub endpoint: String,
     pub access_key: String,
     pub secret_key: String,
     #[serde(default = "default_force_path_style")]
     pub force_path_style: bool,
+    #[serde(default = "default_region")]
+    pub region: String,
     #[serde(default)]
     pub key_sharding: KeyShardingConfig,
 }
@@ -26,61 +29,66 @@ fn default_force_path_style() -> bool {
     true
 }
 
+fn default_region() -> String {
+    "garage".to_string()
+}
+
+/// Client for generic S3-compatible storage services
 #[derive(Clone)]
-pub struct MinIOClient {
+pub struct S3CompatClient {
     client: Client,
     bucket: String,
     sharding: KeyShardingConfig,
 }
 
 #[async_trait]
-impl S3StorageTrait for MinIOClient {
+impl S3StorageTrait for S3CompatClient {
     async fn new(config: &BucketConfig) -> Result<Box<Self>> {
-        let minio_config = config
-            .minio
+        let s3_config = config
+            .s3
             .as_ref()
-            .ok_or_else(|| anyhow!("MinIO config not found"))?;
+            .ok_or_else(|| anyhow!("S3 config not found (provide 's3' section in config)"))?;
 
-        debug!("Connecting to MinIO at: {}", minio_config.endpoint);
+        debug!("Connecting to S3-compatible storage at: {}", s3_config.endpoint);
 
         // Create credentials
         let credentials = Credentials::new(
-            &minio_config.access_key,
-            &minio_config.secret_key,
+            &s3_config.access_key,
+            &s3_config.secret_key,
             None,
             None,
-            "minio",
+            "s3compat",
         );
 
-        // Set up region (MinIO doesn't care about regions, but AWS SDK requires one)
-        let region = Region::new("us-east-1");
+        // Set up region - defaults to "garage" for Garage S3
+        let region = Region::new(s3_config.region.clone());
 
-        let s3_config = Config::builder()
+        let aws_s3_config = Config::builder()
             .behavior_version(BehaviorVersion::latest())
             .region(region)
             .credentials_provider(credentials)
-            .endpoint_url(&minio_config.endpoint)
-            .force_path_style(minio_config.force_path_style)
+            .endpoint_url(&s3_config.endpoint)
+            .force_path_style(s3_config.force_path_style)
             .build();
 
-        let client = Client::from_conf(s3_config);
+        let client = Client::from_conf(aws_s3_config);
 
-        debug!("MinIO client initialized for bucket: {}", config.name);
+        debug!("S3-compatible client initialized for bucket: {}", config.name);
         debug!(
             "Key sharding: enabled={}, depth={}",
-            minio_config.key_sharding.enabled, minio_config.key_sharding.depth
+            s3_config.key_sharding.enabled, s3_config.key_sharding.depth
         );
 
-        let minio_client = MinIOClient {
+        let s3_client = S3CompatClient {
             client,
             bucket: config.name.clone(),
-            sharding: minio_config.key_sharding.clone(),
+            sharding: s3_config.key_sharding.clone(),
         };
 
         // Create bucket if it doesn't exist
-        minio_client.ensure_bucket_exists().await?;
+        s3_client.ensure_bucket_exists().await?;
 
-        Ok(Box::new(minio_client))
+        Ok(Box::new(s3_client))
     }
 
     async fn put_object(&self, key: &str, data: Vec<u8>) -> Result<()> {
@@ -229,7 +237,7 @@ impl S3StorageTrait for MinIOClient {
     }
 }
 
-impl MinIOClient {
+impl S3CompatClient {
     /// Transform a raw hash to S3 key with sharding prefix
     /// "abcdef..." -> "ab/cd/abcdef..."
     fn hash_to_s3_key(&self, hash: &str) -> String {
@@ -339,7 +347,7 @@ mod tests {
         KeyShardingConfig { enabled, depth }
     }
 
-    // Helper struct to test key transformation without needing full MinIOClient
+    // Helper struct to test key transformation without needing full S3CompatClient
     struct TestClient {
         sharding: KeyShardingConfig,
     }
