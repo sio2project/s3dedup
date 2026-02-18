@@ -24,7 +24,7 @@ fn create_test_config(bucket_name: &str) -> Config {
         r#"{{
             "logging": {{ "level": "info", "json": false }},
             "kvstorage_type": "sqlite",
-            "sqlite": {{ "path": ":memory:", "pool_size": 5 }},
+            "sqlite": {{ "path": ":memory:", "pool_size": 1 }},
             "locks_type": "memory",
             "bucket": {{
                 "name": "{}",
@@ -51,14 +51,16 @@ fn create_test_config(bucket_name: &str) -> Config {
 
 // Helper to setup test environment
 async fn setup_test_env(
-    bucket_name: &str,
+    prefix: &str,
 ) -> (
     Arc<Mutex<Box<KVStorage>>>,
     Arc<Mutex<Box<S3Storage>>>,
     Arc<LocksStorage>,
     String,
 ) {
-    let config = create_test_config(bucket_name);
+    let unique_id = common::generate_unique_id();
+    let bucket_name = format!("{}-{}", prefix, unique_id);
+    let config = create_test_config(&bucket_name);
 
     let kvstorage = KVStorage::new(&config).await.unwrap();
     let s3storage = S3Storage::new(&config.bucket).await.unwrap();
@@ -119,7 +121,7 @@ async fn test_clean_orphaned_ref_files() {
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_clean_orphaned_ref_files").await;
+        setup_test_env("test-clean-orphaned-ref-files").await;
 
     // Create ref_file entries without corresponding refcounts
     kvstorage
@@ -201,7 +203,7 @@ async fn test_clean_unreferenced_refcounts() {
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_clean_unreferenced_refcounts").await;
+        setup_test_env("test-clean-unreferenced-refcounts").await;
 
     // Create refcount entries without corresponding ref_files
     kvstorage
@@ -299,7 +301,7 @@ async fn test_clean_unused_s3_objects() {
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_clean_unused_s3_objects").await;
+        setup_test_env("test-clean-unused-s3-objects").await;
 
     // Upload objects to S3
     s3storage
@@ -321,11 +323,17 @@ async fn test_clean_unused_s3_objects() {
         .await
         .unwrap();
 
-    // Create refcount for hash3 only
+    // Create refcount + ref_file for hash3 only (both needed to survive cleanup)
     kvstorage
         .lock()
         .await
         .atomic_increment_ref_count(&bucket_name, "hash3")
+        .await
+        .unwrap();
+    kvstorage
+        .lock()
+        .await
+        .set_ref_file(&bucket_name, "file3.txt", "hash3")
         .await
         .unwrap();
 
@@ -371,7 +379,7 @@ async fn test_clean_orphaned_logical_sizes() {
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_clean_orphaned_logical_sizes").await;
+        setup_test_env("test-clean-orphaned-logical-sizes").await;
 
     // Create logical_size entries without corresponding refcounts
     kvstorage
@@ -387,7 +395,7 @@ async fn test_clean_orphaned_logical_sizes() {
         .await
         .unwrap();
 
-    // Create one with a refcount
+    // Create one with a refcount + ref_file (both needed to survive cleanup)
     kvstorage
         .lock()
         .await
@@ -398,6 +406,12 @@ async fn test_clean_orphaned_logical_sizes() {
         .lock()
         .await
         .atomic_increment_ref_count(&bucket_name, "hash3")
+        .await
+        .unwrap();
+    kvstorage
+        .lock()
+        .await
+        .set_ref_file(&bucket_name, "file3.txt", "hash3")
         .await
         .unwrap();
 
@@ -463,7 +477,7 @@ async fn test_max_deletes_per_run_limit() {
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_max_deletes_per_run_limit").await;
+        setup_test_env("test-max-deletes-per-run-limit").await;
 
     // Create many orphaned ref_files (more than max_deletes_per_run)
     for i in 0..20 {
@@ -529,7 +543,7 @@ async fn test_batched_processing() {
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_batched_processing").await;
+        setup_test_env("test-batched-processing").await;
 
     // Create more entries than batch_size
     for i in 0..25 {
@@ -589,7 +603,7 @@ async fn test_full_cleanup_cycle() {
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_full_cleanup_cycle").await;
+        setup_test_env("test-full-cleanup-cycle").await;
 
     // Scenario: Simulate a crash during PUT operation
     // 1. S3 object uploaded
