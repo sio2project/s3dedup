@@ -1,3 +1,5 @@
+mod common;
+
 #[cfg(test)]
 mod postgres_locks_tests {
     //! Integration tests for PostgreSQL-based distributed locks
@@ -7,7 +9,7 @@ mod postgres_locks_tests {
     //!
     //! NOTE: These tests require a running PostgreSQL instance with the DATABASE_URL environment variable set.
     //! If DATABASE_URL is not set, the tests are skipped.
-    use s3dedup::config::{BucketConfig, Config, KVStorageType, MinIOConfig, PostgresConfig};
+    use s3dedup::config::{Config, KVStorageType, PostgresConfig};
     use s3dedup::locks::{LocksStorage, LocksType};
     use std::sync::Arc;
 
@@ -17,22 +19,11 @@ mod postgres_locks_tests {
             return None;
         }
 
-        let bucket_config = BucketConfig {
-            name: "test-postgres-locks".to_string(),
-            address: "127.0.0.1".to_string(),
-            port: 3001,
-            s3storage_type: s3dedup::s3storage::S3StorageType::MinIO,
-            minio: Some(MinIOConfig {
-                endpoint: "http://localhost:9000".to_string(),
-                access_key: "minioadmin".to_string(),
-                secret_key: "minioadmin".to_string(),
-                force_path_style: true,
-                key_sharding: Default::default(),
-            }),
-            cleaner: s3dedup::cleaner::CleanerConfig::default(),
-            filetracker_url: None,
-            filetracker_v1_dir: None,
-        };
+        if !super::common::is_s3_available() {
+            return None;
+        }
+
+        let (bucket_config, _) = super::common::create_test_bucket_config("test-postgres-locks");
 
         Some(Config {
             logging: s3dedup::logging::LoggingConfig {

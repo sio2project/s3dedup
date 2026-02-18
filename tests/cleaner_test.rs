@@ -1,3 +1,5 @@
+mod common;
+
 use s3dedup::cleaner::{Cleaner, CleanerConfig};
 use s3dedup::config::Config;
 use s3dedup::kvstorage::KVStorage;
@@ -6,42 +8,40 @@ use s3dedup::s3storage::S3Storage;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-// Helper to check if MinIO is available
-async fn is_minio_available() -> bool {
-    let config = create_test_config("health_check");
-    S3Storage::new(&config.bucket).await.is_ok()
+// Helper to check if S3 storage is available
+async fn is_s3_available() -> bool {
+    if !common::is_s3_available() {
+        return false;
+    }
+    let (bucket_config, _) = common::create_test_bucket_config("health-check");
+    S3Storage::new(&bucket_config).await.is_ok()
 }
 
 // Helper to create test config
 fn create_test_config(bucket_name: &str) -> Config {
+    let s3_config = common::s3_config_from_env();
     let config_str = format!(
         r#"{{
-            "logging": {{
-                "level": "info",
-                "json": false
-            }},
+            "logging": {{ "level": "info", "json": false }},
             "kvstorage_type": "sqlite",
-            "sqlite": {{
-                "path": ":memory:",
-                "pool_size": 5
-            }},
+            "sqlite": {{ "path": ":memory:", "pool_size": 5 }},
             "locks_type": "memory",
             "bucket": {{
                 "name": "{}",
                 "address": "0.0.0.0",
                 "port": 3000,
-                "s3storage_type": "minio",
-                "minio": {{
-                    "endpoint": "http://localhost:9000",
-                    "access_key": "minioadmin",
-                    "secret_key": "minioadmin",
-                    "force_path_style": true
+                "s3storage_type": "s3",
+                "s3": {{
+                    "endpoint": "{}",
+                    "access_key": "{}",
+                    "secret_key": "{}",
+                    "force_path_style": true,
+                    "region": "{}"
                 }}
             }}
         }}"#,
-        bucket_name
+        bucket_name, s3_config.endpoint, s3_config.access_key, s3_config.secret_key, s3_config.region
     );
-
     serde_json::from_str(&config_str).unwrap()
 }
 
@@ -109,8 +109,8 @@ async fn test_cleaner_config_partial_deserialization() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_clean_orphaned_ref_files() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
@@ -191,8 +191,8 @@ async fn test_clean_orphaned_ref_files() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_clean_unreferenced_refcounts() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
@@ -289,8 +289,8 @@ async fn test_clean_unreferenced_refcounts() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_clean_unused_s3_objects() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
@@ -361,8 +361,8 @@ async fn test_clean_unused_s3_objects() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_clean_orphaned_logical_sizes() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
@@ -453,8 +453,8 @@ async fn test_clean_orphaned_logical_sizes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_max_deletes_per_run_limit() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
@@ -519,8 +519,8 @@ async fn test_max_deletes_per_run_limit() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_batched_processing() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
@@ -579,8 +579,8 @@ async fn test_batched_processing() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_full_cleanup_cycle() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
