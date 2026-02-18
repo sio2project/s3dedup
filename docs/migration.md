@@ -22,7 +22,7 @@ Both strategies preserve:
 Before starting migration:
 
 1. **Backup**: Create a backup of your Filetracker data
-2. **S3 Storage**: Ensure S3/MinIO is accessible and configured
+2. **S3 Storage**: Ensure S3-compatible storage (Garage, MinIO, AWS S3, etc.) is accessible and configured
 3. **Database**: Set up PostgreSQL or SQLite for metadata storage
 4. **Network**: Verify connectivity between s3dedup and old Filetracker server
 5. **Capacity**: Ensure sufficient S3 storage (deduplication will reduce actual usage)
@@ -44,10 +44,10 @@ Before starting migration:
 Create a `.env` file with your configuration:
 
 ```bash
-# S3 Configuration
-S3_ENDPOINT=http://minio:9000
-S3_ACCESS_KEY=minioadmin
-S3_SECRET_KEY=minioadmin
+# S3 Configuration (Garage, MinIO, AWS, etc.)
+S3_ENDPOINT=http://garage:3900
+S3_ACCESS_KEY=your_access_key
+S3_SECRET_KEY=your_secret_key
 S3_FORCE_PATH_STYLE=true
 
 # Storage Configuration

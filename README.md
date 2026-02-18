@@ -31,11 +31,13 @@ docker run -d \
   --name s3dedup \
   -p 8080:8080 \
   -v s3dedup-data:/app/data \
-  -e S3_ENDPOINT=http://minio:9000 \
-  -e S3_ACCESS_KEY=minioadmin \
-  -e S3_SECRET_KEY=minioadmin \
+  -e S3_ENDPOINT=http://garage:3900 \
+  -e S3_ACCESS_KEY=your_access_key \
+  -e S3_SECRET_KEY=your_secret_key \
   ghcr.io/sio2project/s3dedup:latest
 ```
+
+The S3 backend can be any S3-compatible storage service (Garage, MinIO, AWS S3, etc.).
 
 Or use an environment file:
 
@@ -67,7 +69,7 @@ docker run -d \
 | `SQLITE_PATH` | `/app/data/kv.db` | SQLite database path |
 | `SQLITE_MAX_CONNECTIONS` | `10` | SQLite connection pool size |
 | `LOCKS_TYPE` | `memory` | Lock manager backend (memory, postgres) |
-| `S3_ENDPOINT` | *required* | S3/MinIO endpoint URL |
+| `S3_ENDPOINT` | *required* | S3-compatible endpoint URL (Garage, MinIO, AWS, etc.) |
 | `S3_ACCESS_KEY` | *required* | S3 access key |
 | `S3_SECRET_KEY` | *required* | S3 secret key |
 | `S3_FORCE_PATH_STYLE` | `true` | Use path-style S3 URLs |
@@ -164,9 +166,9 @@ docker run -d \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=password \
   -e POSTGRES_DB=s3dedup \
-  -e S3_ENDPOINT=http://minio:9000 \
-  -e S3_ACCESS_KEY=minioadmin \
-  -e S3_SECRET_KEY=minioadmin \
+  -e S3_ENDPOINT=http://garage:3900 \
+  -e S3_ACCESS_KEY=your_access_key \
+  -e S3_SECRET_KEY=your_secret_key \
   ghcr.io/sio2project/s3dedup:latest server --env
 
 # Repeat for instances 2, 3, etc., on different ports
@@ -309,9 +311,11 @@ Quick start:
 # Run unit tests (no external dependencies)
 cargo test --lib
 
-# Run all tests (requires PostgreSQL + MinIO)
+# Run all tests (requires PostgreSQL + Garage)
 docker-compose up -d
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
+export S3_ACCESS_KEY=GK0123456789abcdef01234567
+export S3_SECRET_KEY=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
 cargo test
 docker-compose down
 ```
@@ -329,11 +333,13 @@ See **[DEVELOPMENT.md](DEVELOPMENT.md)** for detailed development instructions i
 Quick start:
 
 ```bash
-# Run with Docker Compose (includes PostgreSQL + MinIO)
-docker-compose up
+# Run with Docker Compose (includes PostgreSQL + Garage S3)
+docker-compose up -d
 
-# In another terminal, run tests
+# Run tests (fixed dev credentials, no manual setup needed)
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
+export S3_ACCESS_KEY=GK0123456789abcdef01234567
+export S3_SECRET_KEY=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
 cargo test
 ```
 
@@ -341,7 +347,7 @@ cargo test
 
 - **API Layer**: Axum-based HTTP server with Filetracker routes
 - **Deduplication**: SHA256-based content addressing
-- **Storage Backend**: S3-compatible object storage (MinIO, AWS S3, etc.)
+- **Storage Backend**: S3-compatible object storage (Garage, MinIO, AWS S3, etc.)
 - **Metadata Store**: SQLite or PostgreSQL for file metadata and reference counts
 - **Lock Manager**: In-memory (single-instance) or PostgreSQL advisory locks (distributed, multi-instance HA)
   - Memory locks: Fast, suitable for single-instance deployments
