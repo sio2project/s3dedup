@@ -40,7 +40,11 @@ fn create_test_config(bucket_name: &str) -> Config {
                 }}
             }}
         }}"#,
-        bucket_name, s3_config.endpoint, s3_config.access_key, s3_config.secret_key, s3_config.region
+        bucket_name,
+        s3_config.endpoint,
+        s3_config.access_key,
+        s3_config.secret_key,
+        s3_config.region
     );
     serde_json::from_str(&config_str).unwrap()
 }

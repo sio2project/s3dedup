@@ -49,7 +49,10 @@ impl S3StorageTrait for S3CompatClient {
             .as_ref()
             .ok_or_else(|| anyhow!("S3 config not found (provide 's3' section in config)"))?;
 
-        debug!("Connecting to S3-compatible storage at: {}", s3_config.endpoint);
+        debug!(
+            "Connecting to S3-compatible storage at: {}",
+            s3_config.endpoint
+        );
 
         // Create credentials
         let credentials = Credentials::new(
@@ -73,7 +76,10 @@ impl S3StorageTrait for S3CompatClient {
 
         let client = Client::from_conf(aws_s3_config);
 
-        debug!("S3-compatible client initialized for bucket: {}", config.name);
+        debug!(
+            "S3-compatible client initialized for bucket: {}",
+            config.name
+        );
         debug!(
             "Key sharding: enabled={}, depth={}",
             s3_config.key_sharding.enabled, s3_config.key_sharding.depth
