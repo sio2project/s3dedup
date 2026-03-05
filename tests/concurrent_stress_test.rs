@@ -1,3 +1,5 @@
+mod common;
+
 use axum::Router;
 use axum::routing::get;
 use axum::{
@@ -12,84 +14,12 @@ use tower::ServiceExt;
 // Helper to create test app with access to app state
 async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     use s3dedup::AppState;
-    use s3dedup::config::{
-        BucketConfig, Config, KVStorageType, MinIOConfig, PostgresConfig, SQLiteConfig,
-    };
     use s3dedup::kvstorage::KVStorage;
     use s3dedup::locks::LocksStorage;
     use s3dedup::s3storage::S3Storage;
     use tokio::sync::Mutex;
 
-    // Determine which KV storage to use from environment
-    let use_postgres = std::env::var("DATABASE_URL").is_ok();
-
-    std::fs::create_dir_all("db").ok();
-
-    let thread_id = std::thread::current().id();
-    let thread_id_str = format!("{:?}", thread_id)
-        .replace("ThreadId(", "")
-        .replace(")", "");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let unique_id = format!("{}{}{}", std::process::id(), thread_id_str, nanos);
-
-    let test_db = format!("db/test_concurrent_{}.db", unique_id);
-    let test_bucket = format!("test-concurrent-{}", unique_id.to_lowercase());
-
-    let (kvstorage_type, sqlite_config, postgres_config) = if use_postgres {
-        (
-            KVStorageType::Postgres,
-            None,
-            Some(PostgresConfig {
-                host: "localhost".to_string(),
-                port: 5432,
-                user: "postgres".to_string(),
-                password: "postgres".to_string(),
-                dbname: "s3dedup_test".to_string(),
-                pool_size: 10,
-            }),
-        )
-    } else {
-        (
-            KVStorageType::SQLite,
-            Some(SQLiteConfig {
-                path: test_db.clone(),
-                pool_size: 50,
-            }),
-            None,
-        )
-    };
-
-    let bucket_config = BucketConfig {
-        name: test_bucket.clone(),
-        address: "127.0.0.1".to_string(),
-        port: 3001,
-        s3storage_type: s3dedup::s3storage::S3StorageType::MinIO,
-        minio: Some(MinIOConfig {
-            endpoint: "http://localhost:9000".to_string(),
-            access_key: "minioadmin".to_string(),
-            secret_key: "minioadmin".to_string(),
-            force_path_style: true,
-            key_sharding: Default::default(),
-        }),
-        cleaner: s3dedup::cleaner::CleanerConfig::default(),
-        filetracker_url: None,
-        filetracker_v1_dir: None,
-    };
-
-    let config = Config {
-        logging: s3dedup::logging::LoggingConfig {
-            level: "info".to_string(),
-            json: false,
-        },
-        kvstorage_type,
-        sqlite: sqlite_config,
-        postgres: postgres_config,
-        locks_type: s3dedup::locks::LocksType::Memory,
-        bucket: bucket_config,
-    };
+    let (config, _unique_id) = common::create_test_config("test-concurrent");
 
     let kvstorage = KVStorage::new(&config).await.unwrap();
     let locks = LocksStorage::new_with_config(config.locks_type, &config)
@@ -121,28 +51,14 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     (router, app_state)
 }
 
-// Check if MinIO is available
-async fn is_minio_available() -> bool {
-    use s3dedup::config::{BucketConfig, MinIOConfig};
+// Check if S3 storage is available
+async fn is_s3_available() -> bool {
     use s3dedup::s3storage::S3Storage;
 
-    let bucket_config = BucketConfig {
-        name: "health-check".to_string(),
-        address: "127.0.0.1".to_string(),
-        port: 3001,
-        s3storage_type: s3dedup::s3storage::S3StorageType::MinIO,
-        minio: Some(MinIOConfig {
-            endpoint: "http://localhost:9000".to_string(),
-            access_key: "minioadmin".to_string(),
-            secret_key: "minioadmin".to_string(),
-            force_path_style: true,
-            key_sharding: Default::default(),
-        }),
-        cleaner: s3dedup::cleaner::CleanerConfig::default(),
-        filetracker_url: None,
-        filetracker_v1_dir: None,
-    };
-
+    if !common::is_s3_available() {
+        return false;
+    }
+    let (bucket_config, _) = common::create_test_bucket_config("health-check");
     S3Storage::new(&bucket_config).await.is_ok()
 }
 
@@ -203,8 +119,8 @@ fn create_get_request(path: &str) -> Request<Body> {
 /// Without proper locking, the blob could be deleted while refcount > 0
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_delete_put_race_condition() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available");
         return;
     }
 
@@ -362,8 +278,8 @@ async fn test_delete_put_race_condition() {
 /// All operations should succeed and refcount should be exact
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_concurrent_put_same_content() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available");
         return;
     }
 
@@ -451,8 +367,8 @@ async fn test_concurrent_put_same_content() {
 /// Blob should only be deleted when last reference is removed
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_concurrent_delete_shared_blob() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available");
         return;
     }
 
@@ -552,8 +468,8 @@ async fn test_concurrent_delete_shared_blob() {
 /// Test mixed concurrent operations: PUT, GET, DELETE on overlapping files
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_mixed_concurrent_operations() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available");
         return;
     }
 
@@ -697,8 +613,8 @@ async fn test_mixed_concurrent_operations() {
 /// Stress test: rapid PUT/DELETE cycles on the same path
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_rapid_put_delete_same_path() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available");
         return;
     }
 
@@ -806,8 +722,8 @@ async fn test_rapid_put_delete_same_path() {
 /// Test concurrent overwrites of the same file with different content
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_concurrent_overwrite_different_content() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available");
         return;
     }
 
@@ -891,8 +807,8 @@ async fn test_concurrent_overwrite_different_content() {
 /// Test that cleaner doesn't delete blobs being concurrently referenced
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_cleaner_vs_put_race() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available");
         return;
     }
 

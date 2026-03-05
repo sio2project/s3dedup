@@ -1,9 +1,10 @@
+mod common;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use axum::routing::get;
 use s3dedup::AppState;
-use s3dedup::config::{BucketConfig, Config};
 use s3dedup::filetracker_client::FiletrackerClient;
 use s3dedup::migration::migrate_all_files;
 use std::collections::HashMap;
@@ -166,55 +167,11 @@ async fn create_mock_filetracker() -> (MockFiletrackerState, String) {
 
 // Helper to create test AppState
 async fn create_test_app_state() -> Arc<AppState> {
-    use s3dedup::config::{KVStorageType, MinIOConfig, SQLiteConfig};
     use s3dedup::kvstorage::KVStorage;
     use s3dedup::locks::LocksStorage;
     use s3dedup::s3storage::S3Storage;
 
-    // Use thread ID and nanoseconds to ensure uniqueness across parallel tests
-    let thread_id = std::thread::current().id();
-    let thread_id_str = format!("{:?}", thread_id)
-        .replace("ThreadId(", "")
-        .replace(")", "");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let unique_id = format!("{}{}{}", std::process::id(), thread_id_str, nanos);
-    let test_db = format!("db/test_migration_{}.db", unique_id);
-    let test_bucket = format!("test-migration-{}", unique_id.to_lowercase());
-
-    let bucket_config = BucketConfig {
-        name: test_bucket.clone(),
-        address: "127.0.0.1".to_string(),
-        port: 3001,
-        s3storage_type: s3dedup::s3storage::S3StorageType::MinIO,
-        minio: Some(MinIOConfig {
-            endpoint: "http://localhost:9000".to_string(),
-            access_key: "minioadmin".to_string(),
-            secret_key: "minioadmin".to_string(),
-            force_path_style: true,
-            key_sharding: Default::default(),
-        }),
-        cleaner: s3dedup::cleaner::CleanerConfig::default(),
-        filetracker_url: None,
-        filetracker_v1_dir: None,
-    };
-
-    let config = Config {
-        logging: s3dedup::logging::LoggingConfig {
-            level: "info".to_string(),
-            json: false,
-        },
-        kvstorage_type: KVStorageType::SQLite,
-        sqlite: Some(SQLiteConfig {
-            path: test_db.clone(),
-            pool_size: 50,
-        }),
-        postgres: None,
-        locks_type: s3dedup::locks::LocksType::Memory,
-        bucket: bucket_config,
-    };
+    let (config, _unique_id) = common::create_test_config("test-migration");
 
     let kvstorage = KVStorage::new(&config).await.unwrap();
     let locks = LocksStorage::new_with_config(config.locks_type, &config)

@@ -13,12 +13,13 @@
     "name": "default",
     "address": "0.0.0.0",
     "port": 8080,
-    "s3storage_type": "minio",
-    "minio": {
-      "endpoint": "http://localhost:9000",
-      "access_key": "minioadmin",
-      "secret_key": "minioadmin",
-      "force_path_style": true
+    "s3storage_type": "s3",
+    "s3": {
+      "endpoint": "http://localhost:3900",
+      "access_key": "GK0123456789abcdef01234567",
+      "secret_key": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "force_path_style": true,
+      "region": "garage"
     },
     "cleaner": {
       "enabled": false,

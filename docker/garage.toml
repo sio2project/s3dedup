@@ -1,0 +1,25 @@
+# Garage S3-compatible storage configuration for development/testing
+# https://garagehq.deuxfleurs.fr/documentation/reference-manual/configuration/
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+# Single node configuration - NOT for production use
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+# Fixed RPC secret for reproducible testing (DO NOT use in production)
+rpc_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.localhost"
+
+[admin]
+api_bind_addr = "[::]:3902"
+# Fixed admin token for reproducible testing (DO NOT use in production)
+admin_token = "s3dedup-test-admin-token"
+metrics_token = "s3dedup-test-metrics-token"

@@ -1,3 +1,5 @@
+mod common;
+
 use s3dedup::cleaner::{Cleaner, CleanerConfig};
 use s3dedup::config::Config;
 use s3dedup::kvstorage::KVStorage;
@@ -6,55 +8,59 @@ use s3dedup::s3storage::S3Storage;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-// Helper to check if MinIO is available
-async fn is_minio_available() -> bool {
-    let config = create_test_config("health_check");
-    S3Storage::new(&config.bucket).await.is_ok()
+// Helper to check if S3 storage is available
+async fn is_s3_available() -> bool {
+    if !common::is_s3_available() {
+        return false;
+    }
+    let (bucket_config, _) = common::create_test_bucket_config("health-check");
+    S3Storage::new(&bucket_config).await.is_ok()
 }
 
 // Helper to create test config
 fn create_test_config(bucket_name: &str) -> Config {
+    let s3_config = common::s3_config_from_env();
     let config_str = format!(
         r#"{{
-            "logging": {{
-                "level": "info",
-                "json": false
-            }},
+            "logging": {{ "level": "info", "json": false }},
             "kvstorage_type": "sqlite",
-            "sqlite": {{
-                "path": ":memory:",
-                "pool_size": 5
-            }},
+            "sqlite": {{ "path": ":memory:", "pool_size": 1 }},
             "locks_type": "memory",
             "bucket": {{
                 "name": "{}",
                 "address": "0.0.0.0",
                 "port": 3000,
-                "s3storage_type": "minio",
-                "minio": {{
-                    "endpoint": "http://localhost:9000",
-                    "access_key": "minioadmin",
-                    "secret_key": "minioadmin",
-                    "force_path_style": true
+                "s3storage_type": "s3",
+                "s3": {{
+                    "endpoint": "{}",
+                    "access_key": "{}",
+                    "secret_key": "{}",
+                    "force_path_style": true,
+                    "region": "{}"
                 }}
             }}
         }}"#,
-        bucket_name
+        bucket_name,
+        s3_config.endpoint,
+        s3_config.access_key,
+        s3_config.secret_key,
+        s3_config.region
     );
-
     serde_json::from_str(&config_str).unwrap()
 }
 
 // Helper to setup test environment
 async fn setup_test_env(
-    bucket_name: &str,
+    prefix: &str,
 ) -> (
     Arc<Mutex<Box<KVStorage>>>,
     Arc<Mutex<Box<S3Storage>>>,
     Arc<LocksStorage>,
     String,
 ) {
-    let config = create_test_config(bucket_name);
+    let unique_id = common::generate_unique_id();
+    let bucket_name = format!("{}-{}", prefix, unique_id);
+    let config = create_test_config(&bucket_name);
 
     let kvstorage = KVStorage::new(&config).await.unwrap();
     let s3storage = S3Storage::new(&config.bucket).await.unwrap();
@@ -109,13 +115,13 @@ async fn test_cleaner_config_partial_deserialization() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_clean_orphaned_ref_files() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_clean_orphaned_ref_files").await;
+        setup_test_env("test-clean-orphaned-ref-files").await;
 
     // Create ref_file entries without corresponding refcounts
     kvstorage
@@ -191,13 +197,13 @@ async fn test_clean_orphaned_ref_files() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_clean_unreferenced_refcounts() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_clean_unreferenced_refcounts").await;
+        setup_test_env("test-clean-unreferenced-refcounts").await;
 
     // Create refcount entries without corresponding ref_files
     kvstorage
@@ -289,13 +295,13 @@ async fn test_clean_unreferenced_refcounts() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_clean_unused_s3_objects() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_clean_unused_s3_objects").await;
+        setup_test_env("test-clean-unused-s3-objects").await;
 
     // Upload objects to S3
     s3storage
@@ -317,11 +323,17 @@ async fn test_clean_unused_s3_objects() {
         .await
         .unwrap();
 
-    // Create refcount for hash3 only
+    // Create refcount + ref_file for hash3 only (both needed to survive cleanup)
     kvstorage
         .lock()
         .await
         .atomic_increment_ref_count(&bucket_name, "hash3")
+        .await
+        .unwrap();
+    kvstorage
+        .lock()
+        .await
+        .set_ref_file(&bucket_name, "file3.txt", "hash3")
         .await
         .unwrap();
 
@@ -361,13 +373,13 @@ async fn test_clean_unused_s3_objects() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_clean_orphaned_logical_sizes() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_clean_orphaned_logical_sizes").await;
+        setup_test_env("test-clean-orphaned-logical-sizes").await;
 
     // Create logical_size entries without corresponding refcounts
     kvstorage
@@ -383,7 +395,7 @@ async fn test_clean_orphaned_logical_sizes() {
         .await
         .unwrap();
 
-    // Create one with a refcount
+    // Create one with a refcount + ref_file (both needed to survive cleanup)
     kvstorage
         .lock()
         .await
@@ -394,6 +406,12 @@ async fn test_clean_orphaned_logical_sizes() {
         .lock()
         .await
         .atomic_increment_ref_count(&bucket_name, "hash3")
+        .await
+        .unwrap();
+    kvstorage
+        .lock()
+        .await
+        .set_ref_file(&bucket_name, "file3.txt", "hash3")
         .await
         .unwrap();
 
@@ -453,13 +471,13 @@ async fn test_clean_orphaned_logical_sizes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_max_deletes_per_run_limit() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_max_deletes_per_run_limit").await;
+        setup_test_env("test-max-deletes-per-run-limit").await;
 
     // Create many orphaned ref_files (more than max_deletes_per_run)
     for i in 0..20 {
@@ -519,13 +537,13 @@ async fn test_max_deletes_per_run_limit() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_batched_processing() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_batched_processing").await;
+        setup_test_env("test-batched-processing").await;
 
     // Create more entries than batch_size
     for i in 0..25 {
@@ -579,13 +597,13 @@ async fn test_batched_processing() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_full_cleanup_cycle() {
-    if !is_minio_available().await {
-        eprintln!("Skipping test: MinIO not available");
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
         return;
     }
 
     let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test_full_cleanup_cycle").await;
+        setup_test_env("test-full-cleanup-cycle").await;
 
     // Scenario: Simulate a crash during PUT operation
     // 1. S3 object uploaded

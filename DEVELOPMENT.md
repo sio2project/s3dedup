@@ -57,10 +57,10 @@ cargo test --lib -- --nocapture
 Integration tests require external services. Run specific tests with appropriate setup:
 
 ```bash
-# Run all integration tests (requires PostgreSQL + MinIO)
+# Run all integration tests (requires PostgreSQL + S3-compatible storage)
 cargo test --test integration_test
 
-# Run specific integration test (requires PostgreSQL + MinIO)
+# Run specific integration test (requires PostgreSQL + S3-compatible storage)
 cargo test --test integration_test test_put_and_get_file -- --nocapture
 ```
 
@@ -155,15 +155,43 @@ For complete integration testing with all services:
 # Option 1: Using Docker Compose (recommended for CI/CD)
 docker-compose up -d
 
-# Run all tests
+# Run all tests (credentials are set up automatically)
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
+export S3_ACCESS_KEY=GK0123456789abcdef01234567
+export S3_SECRET_KEY=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
 cargo test
 
 # Cleanup
 docker-compose down
 ```
 
-**Option 2: Manual Setup**
+**Option 2: Manual Setup with Garage**
+
+```bash
+# Terminal 1: Start PostgreSQL
+docker run -d \
+  --name postgres-test \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=s3dedup_test \
+  -p 5432:5432 \
+  postgres:15
+
+# Terminal 2: Start Garage (S3-compatible storage)
+# Garage requires configuration - see docker/garage.toml
+# For quick testing, use docker-compose instead
+
+# Terminal 3: Run tests
+export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
+export S3_ACCESS_KEY=GK0123456789abcdef01234567
+export S3_SECRET_KEY=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+cargo test
+
+# Cleanup
+docker stop postgres-test
+docker rm postgres-test
+```
+
+**Option 3: Manual Setup with MinIO (Alternative)**
 
 ```bash
 # Terminal 1: Start PostgreSQL
@@ -184,6 +212,9 @@ docker run -d \
 
 # Terminal 3: Run tests
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
+export S3_ENDPOINT="http://localhost:9000"
+export S3_ACCESS_KEY="minioadmin"
+export S3_SECRET_KEY="minioadmin"
 cargo test
 
 # Cleanup
@@ -196,17 +227,22 @@ docker rm postgres-test minio-test
 | Test Type | Command | Dependencies | Time |
 |-----------|---------|--------------|------|
 | Unit tests | `cargo test --lib` | None | ~1-2s |
-| PostgreSQL lock tests | `cargo test --test postgres_locks_test` | PostgreSQL | ~5-10s |
-| Migration tests | `cargo test --test migration_test` | PostgreSQL | ~10-20s |
-| Integration tests | `cargo test --test integration_test` | PostgreSQL + MinIO | ~20-30s |
-| Cleaner tests | `cargo test --test cleaner_test` | PostgreSQL | ~5-10s |
-| All tests | `cargo test` | PostgreSQL + MinIO | ~30-50s |
+| PostgreSQL lock tests | `cargo test --test postgres_locks_test` | PostgreSQL + S3 | ~5-10s |
+| Migration tests | `cargo test --test migration_test` | PostgreSQL + S3 | ~10-20s |
+| Integration tests | `cargo test --test integration_test` | PostgreSQL + S3 | ~20-30s |
+| Cleaner tests | `cargo test --test cleaner_test` | PostgreSQL + S3 | ~5-10s |
+| All tests | `cargo test` | PostgreSQL + S3 | ~30-50s |
 
 ### Environment Variables for Testing
 
 ```bash
 # PostgreSQL connection (required for integration/lock/migration tests)
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/s3dedup_test
+
+# S3 connection (required for integration tests)
+S3_ENDPOINT=http://localhost:3900  # Garage default port (MinIO uses 9000)
+S3_ACCESS_KEY=your_access_key
+S3_SECRET_KEY=your_secret_key
 
 # Logging during tests
 RUST_LOG=debug              # Show debug logs

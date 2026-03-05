@@ -1,62 +1,18 @@
+mod common;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::get;
 use s3dedup::AppState;
-use s3dedup::config::{BucketConfig, Config};
+use s3dedup::config::Config;
 use std::sync::Arc;
 use tower::util::ServiceExt;
 
 async fn create_test_app_state() -> Arc<AppState> {
-    // Create unique identifier to avoid conflicts
-    let thread_id = std::thread::current().id();
-    let thread_id_str = format!("{:?}", thread_id)
-        .replace("ThreadId(", "")
-        .replace(")", "");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let unique_id = format!("{}{}{}", std::process::id(), thread_id_str, nanos);
-    let test_bucket = format!("test-metrics-{}", unique_id.to_lowercase());
-
-    std::fs::create_dir_all("db").ok();
-
-    let bucket_config = BucketConfig {
-        name: test_bucket,
-        address: "127.0.0.1".to_string(),
-        port: 3000,
-        s3storage_type: s3dedup::config::S3StorageType::MinIO,
-        minio: Some(s3dedup::config::MinIOConfig {
-            endpoint: "http://localhost:9000".to_string(),
-            access_key: "minioadmin".to_string(),
-            secret_key: "minioadmin".to_string(),
-            force_path_style: true,
-            key_sharding: Default::default(),
-        }),
-        cleaner: Default::default(),
-        filetracker_url: None,
-        filetracker_v1_dir: None,
-    };
-
-    let config = Config {
-        logging: s3dedup::logging::LoggingConfig {
-            level: "info".to_string(),
-            json: false,
-        },
-        kvstorage_type: s3dedup::config::KVStorageType::SQLite,
-        sqlite: Some(s3dedup::config::SQLiteConfig {
-            path: format!("db/test-metrics-{}.db", unique_id),
-            pool_size: 10,
-        }),
-        postgres: None,
-        locks_type: s3dedup::config::LocksType::Memory,
-        bucket: bucket_config,
-    };
-
+    let (config, _unique_id) = common::create_test_config("test-metrics");
     let app_state = AppState::new(&config).await.unwrap();
     app_state.kvstorage.lock().await.setup().await.unwrap();
-
     app_state
 }
 
@@ -250,37 +206,10 @@ async fn test_metrics_uptime_increases() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_migration_active_metric() {
-    // Create unique identifier
-    let thread_id = std::thread::current().id();
-    let thread_id_str = format!("{:?}", thread_id)
-        .replace("ThreadId(", "")
-        .replace(")", "");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let unique_id = format!("{}{}{}", std::process::id(), thread_id_str, nanos);
-    let test_bucket = format!("test-migration-{}", unique_id.to_lowercase());
+    let (mut bucket_config, unique_id) = common::create_test_bucket_config("test-migration");
+    bucket_config.filetracker_url = Some("http://localhost:8000".to_string());
 
     std::fs::create_dir_all("db").ok();
-
-    // Create app with filetracker client (migration mode)
-    let bucket_config = BucketConfig {
-        name: test_bucket,
-        address: "127.0.0.1".to_string(),
-        port: 3000,
-        s3storage_type: s3dedup::config::S3StorageType::MinIO,
-        minio: Some(s3dedup::config::MinIOConfig {
-            endpoint: "http://localhost:9000".to_string(),
-            access_key: "minioadmin".to_string(),
-            secret_key: "minioadmin".to_string(),
-            force_path_style: true,
-            key_sharding: Default::default(),
-        }),
-        cleaner: Default::default(),
-        filetracker_url: Some("http://localhost:8000".to_string()),
-        filetracker_v1_dir: None,
-    };
 
     let config = Config {
         logging: s3dedup::logging::LoggingConfig {

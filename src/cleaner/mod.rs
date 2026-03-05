@@ -217,6 +217,9 @@ impl Cleaner {
                 break;
             }
 
+            let batch_len = ref_files.len();
+            let deleted_before = deleted_count;
+
             for (path, hash) in ref_files.iter() {
                 let refcount = self
                     .kvstorage
@@ -310,7 +313,10 @@ impl Cleaner {
                 }
             }
 
-            offset += self.config.batch_size;
+            // Only advance offset by entries that were NOT deleted,
+            // since deleted entries shift remaining rows down
+            let batch_deleted = deleted_count - deleted_before;
+            offset += batch_len - batch_deleted;
         }
 
         Ok(deleted_count)
@@ -334,6 +340,9 @@ impl Cleaner {
             if refcounts.is_empty() {
                 break;
             }
+
+            let batch_len = refcounts.len();
+            let deleted_before = deleted_count;
 
             for (hash, count) in refcounts {
                 // Check if hash is referenced by any ref_file (database lookup)
@@ -370,7 +379,8 @@ impl Cleaner {
                 }
             }
 
-            offset += self.config.batch_size;
+            let batch_deleted = deleted_count - deleted_before;
+            offset += batch_len - batch_deleted;
         }
 
         Ok(deleted_count)
@@ -488,6 +498,9 @@ impl Cleaner {
                 break;
             }
 
+            let batch_len = hashes.len();
+            let deleted_before = deleted_count;
+
             for hash in hashes {
                 let refcount = self
                     .kvstorage
@@ -519,7 +532,8 @@ impl Cleaner {
                 }
             }
 
-            offset += self.config.batch_size;
+            let batch_deleted = deleted_count - deleted_before;
+            offset += batch_len - batch_deleted;
         }
 
         Ok(deleted_count)
