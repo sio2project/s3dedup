@@ -91,6 +91,9 @@ impl AppState {
         let total_storage_bytes = kv.get_total_storage_bytes(&self.bucket_name).await?;
         let total_logical_bytes = kv.get_total_logical_bytes(&self.bucket_name).await?;
         let deduplicated_bytes_saved = kv.get_deduplicated_bytes_saved(&self.bucket_name).await?;
+        let total_compressed_no_dedup = kv
+            .get_total_compressed_bytes_no_dedup(&self.bucket_name)
+            .await?;
 
         // Update gauges
         metrics::TOTAL_FILES.set(total_files);
@@ -98,6 +101,7 @@ impl AppState {
         metrics::TOTAL_STORAGE_BYTES.set(total_storage_bytes);
         metrics::TOTAL_LOGICAL_SIZE_BYTES.set(total_logical_bytes);
         metrics::DEDUPLICATED_BYTES_SAVED.set(deduplicated_bytes_saved);
+        metrics::TOTAL_COMPRESSED_BYTES_NO_DEDUP.set(total_compressed_no_dedup);
 
         // Calculate derived metrics
         if total_files > 0 && total_blobs > 0 {

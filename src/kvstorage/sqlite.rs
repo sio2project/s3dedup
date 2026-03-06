@@ -417,6 +417,19 @@ impl KVStorageTrait for SQLite {
         Ok(total.unwrap_or(0))
     }
 
+    async fn get_total_compressed_bytes_no_dedup(&mut self, bucket: &str) -> Result<i64> {
+        let (total,): (Option<i64>,) = sqlx::query_as(
+            "SELECT SUM(r.refcount * l.compressed_size)
+             FROM refcount r
+             INNER JOIN logical_size l ON r.bucket = l.bucket AND r.hash = l.hash
+             WHERE r.bucket = ?1 AND r.refcount > 0",
+        )
+        .bind(bucket)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(total.unwrap_or(0))
+    }
+
     async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64> {
         let (total,): (Option<i64>,) = sqlx::query_as(
             "SELECT SUM((r.refcount - 1) * l.logical_size)

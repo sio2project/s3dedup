@@ -53,6 +53,12 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref TOTAL_COMPRESSED_BYTES_NO_DEDUP: IntGauge = register_int_gauge!(
+        "s3dedup_total_compressed_bytes_no_dedup",
+        "Total compressed storage that would be used without deduplication (sum of refcount * compressed_size)"
+    )
+    .unwrap();
+
     pub static ref DEDUPLICATED_BYTES_SAVED: IntGauge = register_int_gauge!(
         "s3dedup_deduplicated_bytes_saved",
         "Bytes saved by deduplication: sum of (refcount - 1) * logical_size"
