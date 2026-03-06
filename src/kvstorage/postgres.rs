@@ -541,6 +541,23 @@ impl KVStorageTrait for Postgres {
         Ok(total)
     }
 
+    async fn get_total_compressed_bytes_no_dedup(&mut self, bucket: &str) -> Result<i64> {
+        let refcount_table = self.table_name("refcount");
+        let logical_size_table = self.table_name("logical_size");
+        let query = format!(
+            "SELECT COALESCE(SUM(r.refcount * l.compressed_size), 0)::BIGINT
+             FROM {} r
+             INNER JOIN {} l ON r.bucket = l.bucket AND r.hash = l.hash
+             WHERE r.bucket = $1 AND r.refcount > 0",
+            refcount_table, logical_size_table
+        );
+        let (total,): (i64,) = sqlx::query_as(&query)
+            .bind(bucket)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(total)
+    }
+
     async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64> {
         let refcount_table = self.table_name("refcount");
         let logical_size_table = self.table_name("logical_size");
