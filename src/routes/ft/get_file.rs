@@ -151,6 +151,10 @@ pub async fn ft_get_file(
             .with_label_values(&["GET", "/ft/files"])
             .observe(start.elapsed().as_secs_f64());
 
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release file lock: {}", e);
+        }
+
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
