@@ -63,6 +63,16 @@ enum Commands {
         /// Maximum number of concurrent migration workers per bucket
         #[arg(short, long, default_value = "10")]
         max_concurrency: usize,
+        /// Run in proxy-only mode: forward GETs to filetracker, dual-write PUTs,
+        /// but do NOT start background migration. Use this as the first phase of
+        /// migrating huge filetracker instances.
+        #[arg(long, conflicts_with = "file_list")]
+        proxy_only: bool,
+        /// Path to a file containing one file path per line to migrate, instead of
+        /// calling /list/. Uses infinite retry with backoff for ft downtime resilience.
+        /// Generate with: find /var/lib/filetracker/links -type l | sed 's|^/var/lib/filetracker/links||'
+        #[arg(long, conflicts_with = "proxy_only", value_name = "PATH")]
+        file_list: Option<String>,
     },
     /// Migrate data from V1 filetracker filesystem to s3dedup
     MigrateV1 {
@@ -329,6 +339,8 @@ async fn run_live_migrate(
     config_path: Option<&str>,
     use_env: bool,
     max_concurrency: usize,
+    proxy_only: bool,
+    file_list: Option<&str>,
 ) -> anyhow::Result<()> {
     let config = if use_env {
         config::Config::from_env().context("Failed to load configuration from environment")?
@@ -347,8 +359,22 @@ async fn run_live_migrate(
     info!("Bucket: {}", config.bucket.name);
     info!("Max concurrency: {}", max_concurrency);
 
+    // Validate file-list if provided (open to check both existence and read permissions)
+    if let Some(path) = file_list {
+        std::fs::File::open(path)
+            .with_context(|| format!("File list not found or not readable: {}", path))?;
+        info!("Using file list for migration: {}", path);
+    }
+
     // Check if this bucket has a filetracker URL configured
     let filetracker_url = &config.bucket.filetracker_url;
+
+    if (proxy_only || file_list.is_some()) && filetracker_url.is_none() {
+        anyhow::bail!(
+            "Cannot use --proxy-only or --file-list without filetracker_url configured for bucket '{}'",
+            config.bucket.name
+        );
+    }
 
     if filetracker_url.is_none() {
         info!(
@@ -384,21 +410,44 @@ async fn run_live_migrate(
 
     start_background_tasks(app_state.clone(), &config.bucket);
 
-    // Start background migration worker if filetracker URL is configured
+    // Start background migration worker based on mode
     if filetracker_url.is_some() {
-        let migration_app_state = app_state.clone();
-        let migration_client = app_state
-            .filetracker_client
-            .clone()
-            .context("Filetracker client not available")?;
-        tokio::spawn(async move {
-            s3dedup::migration::live_migration_worker(
-                migration_client,
-                migration_app_state,
-                max_concurrency,
-            )
-            .await;
-        });
+        if proxy_only {
+            info!(
+                "Proxy-only mode: server running with filetracker fallback, no background migration worker. \
+                 migration_active metric will remain 1 until server is restarted with --file-list or in normal mode."
+            );
+        } else if let Some(path) = file_list {
+            let migration_app_state = app_state.clone();
+            let migration_client = app_state
+                .filetracker_client
+                .clone()
+                .context("Filetracker client not available")?;
+            let file_list_path = path.to_string();
+            tokio::spawn(async move {
+                s3dedup::migration::live_migration_worker_from_file_list(
+                    file_list_path,
+                    migration_client,
+                    migration_app_state,
+                    max_concurrency,
+                )
+                .await;
+            });
+        } else {
+            let migration_app_state = app_state.clone();
+            let migration_client = app_state
+                .filetracker_client
+                .clone()
+                .context("Filetracker client not available")?;
+            tokio::spawn(async move {
+                s3dedup::migration::live_migration_worker(
+                    migration_client,
+                    migration_app_state,
+                    max_concurrency,
+                )
+                .await;
+            });
+        }
     }
 
     let app = create_router(app_state);
@@ -533,8 +582,17 @@ async fn main() -> anyhow::Result<()> {
             config,
             env,
             max_concurrency,
+            proxy_only,
+            file_list,
         } => {
-            run_live_migrate(config.as_deref(), env, max_concurrency).await?;
+            run_live_migrate(
+                config.as_deref(),
+                env,
+                max_concurrency,
+                proxy_only,
+                file_list.as_deref(),
+            )
+            .await?;
         }
         Commands::MigrateV1 {
             config,
@@ -563,4 +621,56 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_proxy_only_and_file_list_mutually_exclusive() {
+        let result = Cli::try_parse_from([
+            "s3dedup",
+            "live-migrate",
+            "--proxy-only",
+            "--file-list",
+            "/tmp/files.txt",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_proxy_only_flag_accepted() {
+        let cli = Cli::try_parse_from(["s3dedup", "live-migrate", "--proxy-only"]);
+        assert!(cli.is_ok());
+        match cli.unwrap().command {
+            Commands::LiveMigrate {
+                proxy_only,
+                file_list,
+                ..
+            } => {
+                assert!(proxy_only);
+                assert!(file_list.is_none());
+            }
+            _ => panic!("Expected LiveMigrate command"),
+        }
+    }
+
+    #[test]
+    fn test_file_list_flag_accepted() {
+        let cli = Cli::try_parse_from(["s3dedup", "live-migrate", "--file-list", "/tmp/files.txt"]);
+        assert!(cli.is_ok());
+        match cli.unwrap().command {
+            Commands::LiveMigrate {
+                proxy_only,
+                file_list,
+                ..
+            } => {
+                assert!(!proxy_only);
+                assert_eq!(file_list.as_deref(), Some("/tmp/files.txt"));
+            }
+            _ => panic!("Expected LiveMigrate command"),
+        }
+    }
 }

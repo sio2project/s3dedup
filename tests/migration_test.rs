@@ -6,9 +6,10 @@ use axum::http::{Response, StatusCode};
 use axum::routing::get;
 use s3dedup::AppState;
 use s3dedup::filetracker_client::FiletrackerClient;
-use s3dedup::migration::migrate_all_files;
+use s3dedup::migration::{migrate_all_files, migrate_all_files_from_file_list};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Mutex;
 use tower::util::ServiceExt;
 
@@ -813,10 +814,343 @@ async fn test_live_migration_subsequent_get_from_s3dedup() {
     assert_eq!(response2.status(), StatusCode::OK);
 
     // Verify response body is still correct
-    let body_bytes = axum::body::to_bytes(response2.into_body(), usize::MAX)
+    let body_bytes2 = axum::body::to_bytes(response2.into_body(), usize::MAX)
         .await
         .unwrap();
 
-    let decompressed = s3dedup::routes::ft::storage_helpers::decompress_gzip(&body_bytes).unwrap();
-    assert_eq!(&decompressed[..], test_data);
+    let decompressed2 =
+        s3dedup::routes::ft::storage_helpers::decompress_gzip(&body_bytes2).unwrap();
+    assert_eq!(&decompressed2[..], test_data);
+}
+
+// ============================================================================
+// File-list migration tests
+// ============================================================================
+
+/// Mock filetracker state that can simulate transient failures
+#[derive(Clone)]
+struct FlakyMockFiletrackerState {
+    files: FileStorage,
+    /// Number of GET requests to fail before succeeding
+    fail_next_n: Arc<AtomicUsize>,
+}
+
+impl FlakyMockFiletrackerState {
+    fn new() -> Self {
+        Self {
+            files: Arc::new(Mutex::new(HashMap::new())),
+            fail_next_n: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    async fn add_file(&self, path: &str, data: Vec<u8>) {
+        let timestamp = chrono::Utc::now().timestamp();
+        self.files
+            .lock()
+            .await
+            .insert(path.to_string(), (data, timestamp));
+    }
+}
+
+async fn flaky_mock_ft_list(
+    axum::extract::State(state): axum::extract::State<FlakyMockFiletrackerState>,
+    path: Option<axum::extract::Path<String>>,
+) -> Response<Body> {
+    let _path = path.map(|p| p.0).unwrap_or_default();
+    let files = state.files.lock().await;
+    let file_list: Vec<String> = files.keys().cloned().collect();
+    let response_body = file_list.join("\n");
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::from(if response_body.is_empty() {
+            "".to_string()
+        } else {
+            response_body + "\n"
+        }))
+        .unwrap()
+}
+
+async fn flaky_mock_ft_get(
+    axum::extract::State(state): axum::extract::State<FlakyMockFiletrackerState>,
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> Response<Body> {
+    // Check if we should simulate a failure
+    let should_fail = state
+        .fail_next_n
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            if n > 0 { Some(n - 1) } else { None }
+        })
+        .is_ok();
+    if should_fail {
+        return Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .body(Body::empty())
+            .unwrap();
+    }
+
+    let path = path.strip_prefix('/').unwrap_or(&path);
+    let files = state.files.lock().await;
+
+    match files.get(path) {
+        Some((data, timestamp)) => {
+            let compressed = s3dedup::routes::ft::storage_helpers::compress_gzip(data).unwrap();
+            let last_modified = chrono::DateTime::from_timestamp(*timestamp, 0)
+                .unwrap()
+                .to_rfc2822();
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/octet-stream")
+                .header("Content-Length", compressed.len().to_string())
+                .header("Content-Encoding", "gzip")
+                .header("Last-Modified", last_modified)
+                .header("Logical-Size", data.len().to_string())
+                .body(Body::from(compressed))
+                .unwrap()
+        }
+        None => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .unwrap(),
+    }
+}
+
+async fn create_flaky_mock_filetracker() -> (FlakyMockFiletrackerState, String) {
+    let state = FlakyMockFiletrackerState::new();
+
+    let app = Router::new()
+        .route("/list/", get(flaky_mock_ft_list))
+        .route("/list/{*path}", get(flaky_mock_ft_list))
+        .route(
+            "/files/{*path}",
+            get(flaky_mock_ft_get)
+                .put({
+                    |axum::extract::State(state): axum::extract::State<
+                        FlakyMockFiletrackerState,
+                    >,
+                     axum::extract::Path(path): axum::extract::Path<String>,
+                     body: Body| async move {
+                        let path = path.strip_prefix('/').unwrap_or(&path).to_string();
+                        let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+                        let timestamp = chrono::Utc::now().timestamp();
+                        state
+                            .files
+                            .lock()
+                            .await
+                            .insert(path, (bytes.to_vec(), timestamp));
+                        let last_modified = chrono::DateTime::from_timestamp(timestamp, 0)
+                            .unwrap()
+                            .to_rfc2822();
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Last-Modified", last_modified)
+                            .body(Body::empty())
+                            .unwrap()
+                    }
+                })
+                .delete(
+                    |axum::extract::State(state): axum::extract::State<
+                        FlakyMockFiletrackerState,
+                    >,
+                     axum::extract::Path(path): axum::extract::Path<String>| async move {
+                        let path = path.strip_prefix('/').unwrap_or(&path).to_string();
+                        let mut files = state.files.lock().await;
+                        match files.remove(&path) {
+                            Some(_) => Response::builder()
+                                .status(StatusCode::OK)
+                                .body(Body::empty())
+                                .unwrap(),
+                            None => Response::builder()
+                                .status(StatusCode::NOT_FOUND)
+                                .body(Body::empty())
+                                .unwrap(),
+                        }
+                    },
+                ),
+        )
+        .with_state(state.clone());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{}", addr);
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    (state, url)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_file_list_migration() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+    let client = Arc::new(FiletrackerClient::new(url));
+
+    // Add 3 files to mock filetracker
+    mock_state
+        .add_file("file_a.txt", b"content A".to_vec())
+        .await;
+    mock_state
+        .add_file("file_b.txt", b"content B".to_vec())
+        .await;
+    mock_state
+        .add_file("file_c.txt", b"content C".to_vec())
+        .await;
+
+    // Write file list with only 2 of the 3 files
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let file_list_path = tmp_dir.path().join("file_list.txt");
+    std::fs::write(&file_list_path, "file_a.txt\nfile_b.txt\n").unwrap();
+
+    // Run file-list migration
+    let result = migrate_all_files_from_file_list(
+        file_list_path.to_str().unwrap(),
+        client,
+        app_state.clone(),
+        5,
+    )
+    .await;
+    assert!(result.is_ok());
+
+    let stats = result.unwrap();
+    assert_eq!(stats.total_files, 2);
+    assert_eq!(stats.migrated, 2);
+    assert_eq!(stats.failed, 0);
+    assert_eq!(stats.skipped, 0);
+
+    // Verify file_a and file_b were migrated
+    let modified_a = app_state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state.bucket_name, "file_a.txt")
+        .await
+        .unwrap();
+    assert!(modified_a > 0);
+
+    let modified_b = app_state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state.bucket_name, "file_b.txt")
+        .await
+        .unwrap();
+    assert!(modified_b > 0);
+
+    // Verify file_c was NOT migrated
+    let modified_c = app_state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state.bucket_name, "file_c.txt")
+        .await
+        .unwrap();
+    assert_eq!(modified_c, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_file_list_migration_retries_on_ft_failure() {
+    let (mock_state, url) = create_flaky_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+    let client = Arc::new(FiletrackerClient::new(url));
+
+    // Add a file
+    mock_state
+        .add_file("retry_test.txt", b"retry content".to_vec())
+        .await;
+
+    // Make first 3 GET requests fail
+    mock_state.fail_next_n.store(3, Ordering::SeqCst);
+
+    // Write file list
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let file_list_path = tmp_dir.path().join("file_list.txt");
+    std::fs::write(&file_list_path, "retry_test.txt\n").unwrap();
+
+    // Run file-list migration — should succeed after retries
+    let result = migrate_all_files_from_file_list(
+        file_list_path.to_str().unwrap(),
+        client,
+        app_state.clone(),
+        1,
+    )
+    .await;
+    assert!(result.is_ok());
+
+    let stats = result.unwrap();
+    assert_eq!(stats.total_files, 1);
+    assert_eq!(stats.migrated, 1);
+    assert_eq!(stats.failed, 0);
+
+    // Verify file was migrated
+    let modified = app_state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state.bucket_name, "retry_test.txt")
+        .await
+        .unwrap();
+    assert!(modified > 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_file_list_migration_empty_file() {
+    let (_mock_state, url) = create_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+    let client = Arc::new(FiletrackerClient::new(url));
+
+    // Write empty file list (with whitespace/empty lines)
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let file_list_path = tmp_dir.path().join("file_list.txt");
+    std::fs::write(&file_list_path, "\n\n  \n").unwrap();
+
+    let result =
+        migrate_all_files_from_file_list(file_list_path.to_str().unwrap(), client, app_state, 5)
+            .await;
+    assert!(result.is_ok());
+
+    let stats = result.unwrap();
+    assert_eq!(stats.total_files, 0);
+    assert_eq!(stats.migrated, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_file_list_migration_skips_already_migrated() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+    let client = Arc::new(FiletrackerClient::new(url));
+
+    mock_state
+        .add_file("existing.txt", b"existing content".to_vec())
+        .await;
+
+    // Migrate once
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let file_list_path = tmp_dir.path().join("file_list.txt");
+    std::fs::write(&file_list_path, "existing.txt\n").unwrap();
+
+    let result = migrate_all_files_from_file_list(
+        file_list_path.to_str().unwrap(),
+        client.clone(),
+        app_state.clone(),
+        5,
+    )
+    .await;
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().migrated, 1);
+
+    // Migrate again — should skip
+    let result =
+        migrate_all_files_from_file_list(file_list_path.to_str().unwrap(), client, app_state, 5)
+            .await;
+    assert!(result.is_ok());
+
+    let stats = result.unwrap();
+    assert_eq!(stats.total_files, 1);
+    assert_eq!(stats.migrated, 0);
+    assert_eq!(stats.skipped, 1);
 }
