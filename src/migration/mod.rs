@@ -15,6 +15,9 @@ const DEFAULT_MAX_RETRIES: u32 = 3;
 /// Base delay for exponential backoff (in milliseconds)
 const RETRY_BASE_DELAY_MS: u64 = 1000;
 
+/// Maximum delay for infinite retry backoff (in milliseconds)
+const MAX_RETRY_DELAY_MS: u64 = 60_000;
+
 pub mod v1_filesystem;
 
 pub struct MigrationStats {
@@ -842,6 +845,260 @@ pub async fn live_migration_worker(
     // Reset migration_active gauge to indicate migration is complete
     crate::metrics::MIGRATION_ACTIVE.set(0);
     info!("Background migration worker finished, migration_active set to 0");
+}
+
+/// Migrate a single file with infinite retry and capped exponential backoff.
+/// Never gives up — retries forever until the file is migrated or skipped.
+/// Backoff caps at MAX_RETRY_DELAY_MS (60s).
+async fn migrate_single_file_with_infinite_retry(
+    filetracker_client: &FiletrackerClient,
+    app_state: Arc<AppState>,
+    path: &str,
+) -> MigrationResult {
+    let mut attempt: u32 = 0;
+    loop {
+        if attempt > 0 {
+            let delay_ms = std::cmp::min(
+                RETRY_BASE_DELAY_MS
+                    .saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1).min(16))),
+                MAX_RETRY_DELAY_MS,
+            );
+            warn!(
+                "Retrying migration of '{}' (attempt {}) after {}ms delay",
+                path,
+                attempt + 1,
+                delay_ms
+            );
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+        }
+        match migrate_single_file(filetracker_client, app_state.clone(), path).await {
+            Ok(true) => return MigrationResult::Migrated,
+            Ok(false) => return MigrationResult::Skipped,
+            Err(e) => {
+                warn!(
+                    "Migration attempt {} for '{}' failed: {}",
+                    attempt + 1,
+                    path,
+                    e
+                );
+                attempt = attempt.saturating_add(1);
+            }
+        }
+    }
+}
+
+/// Migrate all files listed in a file, one path per line.
+/// Uses chunked streaming to avoid loading the entire file into memory.
+/// Uses infinite retry so transient filetracker failures don't abort migration.
+pub async fn migrate_all_files_from_file_list(
+    file_list_path: &str,
+    filetracker_client: Arc<FiletrackerClient>,
+    app_state: Arc<AppState>,
+    max_concurrency: usize,
+) -> Result<MigrationStats> {
+    info!("Starting file-list migration from: {}", file_list_path);
+    info!("Max concurrency: {}", max_concurrency);
+    info!(
+        "Retry policy: infinite retry with capped exponential backoff (max {}ms)",
+        MAX_RETRY_DELAY_MS
+    );
+    info!("Reading file list in chunks to handle large file counts efficiently");
+
+    let total_files = Arc::new(AtomicUsize::new(0));
+    let migrated = Arc::new(AtomicUsize::new(0));
+    let skipped = Arc::new(AtomicUsize::new(0));
+    let semaphore = Arc::new(Semaphore::new(max_concurrency));
+
+    let file_chunk_size = 10_000;
+    let task_batch_size = max_concurrency * 10;
+
+    // Create a channel to send chunks from blocking reader to async processor
+    let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<String>>();
+
+    let path_owned = file_list_path.to_string();
+
+    // Spawn the file reader in a blocking task
+    let reader_handle = tokio::task::spawn_blocking(move || {
+        use std::io::BufRead;
+        let file = std::fs::File::open(&path_owned)
+            .with_context(|| format!("Failed to open file list: {}", path_owned))?;
+        let reader = std::io::BufReader::new(file);
+        let mut chunk = Vec::with_capacity(file_chunk_size);
+        for line in reader.lines() {
+            let line = line.context("Failed to read line from file list")?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Strip leading '/' to normalize paths (find output may include it)
+            let path = trimmed.strip_prefix('/').unwrap_or(trimmed).to_string();
+            chunk.push(path);
+            if chunk.len() >= file_chunk_size
+                && chunk_tx
+                    .send(std::mem::replace(
+                        &mut chunk,
+                        Vec::with_capacity(file_chunk_size),
+                    ))
+                    .is_err()
+            {
+                anyhow::bail!("Chunk receiver dropped");
+            }
+        }
+        if !chunk.is_empty() && chunk_tx.send(chunk).is_err() {
+            anyhow::bail!("Chunk receiver dropped");
+        }
+        Ok::<_, anyhow::Error>(())
+    });
+
+    // Process chunks as they arrive
+    let mut chunk_count = 0;
+    let mut files_offset = 0usize; // running offset for accurate progress logging
+    while let Some(file_chunk) = chunk_rx.recv().await {
+        chunk_count += 1;
+        let chunk_size = file_chunk.len();
+        total_files.fetch_add(chunk_size, Ordering::Relaxed);
+        let total_so_far = total_files.load(Ordering::Relaxed);
+
+        info!(
+            "Processing file-list chunk {} with {} files (total discovered: {})",
+            chunk_count, chunk_size, total_so_far
+        );
+
+        // Process this chunk in task batches
+        let total_batches = file_chunk.chunks(task_batch_size).len();
+        for (batch_idx, batch) in file_chunk.chunks(task_batch_size).enumerate() {
+            let batch_start = files_offset + batch_idx * task_batch_size;
+
+            if batch_idx.is_multiple_of(10) {
+                let current_migrated = migrated.load(Ordering::Relaxed);
+                let current_skipped = skipped.load(Ordering::Relaxed);
+                info!(
+                    "Progress: file ~{}/{} (migrated: {}, skipped: {}) [chunk {} batch {}/{}]",
+                    batch_start,
+                    total_so_far,
+                    current_migrated,
+                    current_skipped,
+                    chunk_count,
+                    batch_idx + 1,
+                    total_batches
+                );
+            }
+
+            let mut handles = vec![];
+
+            for path in batch.iter() {
+                let filetracker_client = filetracker_client.clone();
+                let app_state = app_state.clone();
+                let migrated = migrated.clone();
+                let skipped = skipped.clone();
+                let semaphore = semaphore.clone();
+                let path = path.clone();
+
+                let handle = tokio::spawn(async move {
+                    // Acquire semaphore permit
+                    let _permit = match semaphore.acquire().await {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            error!("Semaphore closed unexpectedly for file: {}", path);
+                            return;
+                        }
+                    };
+
+                    match migrate_single_file_with_infinite_retry(
+                        &filetracker_client,
+                        app_state,
+                        &path,
+                    )
+                    .await
+                    {
+                        MigrationResult::Migrated => {
+                            migrated.fetch_add(1, Ordering::Relaxed);
+                        }
+                        MigrationResult::Skipped => {
+                            skipped.fetch_add(1, Ordering::Relaxed);
+                        }
+                        // infinite retry never returns PermanentFailure
+                        MigrationResult::PermanentFailure(path, err) => {
+                            error!("Unexpected permanent failure for '{}': {}", path, err);
+                        }
+                    }
+                });
+
+                handles.push(handle);
+            }
+
+            // Wait for this batch to complete before moving to next batch
+            let _ = join_all(handles).await;
+        }
+
+        files_offset += chunk_size;
+    }
+
+    // Wait for the reader to finish and check for errors
+    match reader_handle.await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            error!("File list reader failed: {}", e);
+            return Err(e);
+        }
+        Err(e) => {
+            error!("File list reader task panicked: {}", e);
+            anyhow::bail!("File list reader task panicked: {}", e);
+        }
+    }
+
+    let total = total_files.load(Ordering::Relaxed);
+    let migrated_count = migrated.load(Ordering::Relaxed);
+    let skipped_count = skipped.load(Ordering::Relaxed);
+
+    info!("File-list migration complete:");
+    info!("  Total files: {}", total);
+    info!("  Migrated: {}", migrated_count);
+    info!("  Skipped: {}", skipped_count);
+
+    Ok(MigrationStats {
+        total_files: total,
+        migrated: migrated_count,
+        failed: 0,
+        skipped: skipped_count,
+    })
+}
+
+/// Background worker for live migration from a file list
+/// This runs file-list based migration in the background while the server is running
+pub async fn live_migration_worker_from_file_list(
+    file_list_path: String,
+    filetracker_client: Arc<FiletrackerClient>,
+    app_state: Arc<AppState>,
+    max_concurrency: usize,
+) {
+    info!(
+        "Starting background file-list migration worker from: {}",
+        file_list_path
+    );
+    info!("Max concurrency: {}", max_concurrency);
+
+    match migrate_all_files_from_file_list(
+        &file_list_path,
+        filetracker_client,
+        app_state,
+        max_concurrency,
+    )
+    .await
+    {
+        Ok(stats) => {
+            info!("Background file-list migration completed successfully");
+            info!("Total files: {}", stats.total_files);
+            info!("Migrated: {}", stats.migrated);
+            info!("Skipped: {}", stats.skipped);
+        }
+        Err(e) => {
+            error!("Background file-list migration failed: {}", e);
+        }
+    }
+
+    crate::metrics::MIGRATION_ACTIVE.set(0);
+    info!("Background file-list migration worker finished, migration_active set to 0");
 }
 
 /// Migrate all files from V1 filetracker filesystem to s3dedup
