@@ -87,6 +87,7 @@ pub fn create_test_config(prefix: &str) -> (Config, String) {
         logging: s3dedup::logging::LoggingConfig {
             level: "info".to_string(),
             json: false,
+            json_log_path: None,
         },
         kvstorage_type,
         sqlite,

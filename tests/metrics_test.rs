@@ -215,6 +215,7 @@ async fn test_migration_active_metric() {
         logging: s3dedup::logging::LoggingConfig {
             level: "info".to_string(),
             json: false,
+            json_log_path: None,
         },
         kvstorage_type: s3dedup::config::KVStorageType::SQLite,
         sqlite: Some(s3dedup::config::SQLiteConfig {

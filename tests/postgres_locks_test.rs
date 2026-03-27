@@ -29,6 +29,7 @@ mod postgres_locks_tests {
             logging: s3dedup::logging::LoggingConfig {
                 level: "info".to_string(),
                 json: false,
+                json_log_path: None,
             },
             kvstorage_type: KVStorageType::Postgres,
             sqlite: None,

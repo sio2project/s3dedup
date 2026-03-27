@@ -177,7 +177,7 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) -> anyhow:
         config::Config::new(config_path.unwrap_or("config.json"))
             .context("Failed to load configuration from file")?
     };
-    s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
+    let _log_guard = s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting server for bucket: {}", config.bucket.name);
 
@@ -226,7 +226,7 @@ async fn run_migrate(
         config::Config::new(config_path.unwrap_or("config.json"))
             .context("Failed to load configuration from file")?
     };
-    s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
+    let _log_guard = s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting offline migration from old filetracker to s3dedup");
     if use_env {
@@ -289,7 +289,7 @@ async fn run_migrate_v1(
         config::Config::new(config_path.unwrap_or("config.json"))
             .context("Failed to load configuration from file")?
     };
-    s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
+    let _log_guard = s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting offline V1 filesystem migration to s3dedup");
     if use_env {
@@ -348,7 +348,7 @@ async fn run_live_migrate(
         config::Config::new(config_path.unwrap_or("config.json"))
             .context("Failed to load configuration from file")?
     };
-    s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
+    let _log_guard = s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting live migration from old filetracker to s3dedup");
     if use_env {
@@ -471,7 +471,7 @@ async fn run_live_migrate_v1(
         config::Config::new(config_path.unwrap_or("config.json"))
             .context("Failed to load configuration from file")?
     };
-    s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
+    let _log_guard = s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting live migration from V1 filetracker to s3dedup");
     if use_env {

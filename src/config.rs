@@ -70,6 +70,7 @@ impl Config {
                 .unwrap_or_else(|_| "false".to_string())
                 .parse()
                 .unwrap_or(false),
+            json_log_path: std::env::var("JSON_LOG_PATH").ok(),
         };
 
         let kvstorage_type_str =
