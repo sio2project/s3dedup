@@ -18,6 +18,19 @@ impl std::fmt::Display for FileNotFoundError {
 
 impl std::error::Error for FileNotFoundError {}
 
+/// Transient error that should be retried (connection failures, timeouts, server errors).
+/// Non-transient errors (corrupt data, bad headers) should NOT be retried.
+#[derive(Debug)]
+pub struct TransientError(pub String);
+
+impl std::fmt::Display for TransientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Transient error: {}", self.0)
+    }
+}
+
+impl std::error::Error for TransientError {}
+
 #[derive(Clone)]
 pub struct FiletrackerClient {
     base_url: String,
@@ -97,7 +110,12 @@ impl FiletrackerClient {
         let url = format!("{}/files/{}", self.base_url, path);
         debug!("Getting file from filetracker: {}", url);
 
-        let response = self.client.get(&url).send().await?;
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| TransientError(e.to_string()))?;
 
         if response.status() == StatusCode::NOT_FOUND {
             return Err(FileNotFoundError(path.to_string()).into());
@@ -116,7 +134,11 @@ impl FiletrackerClient {
                 "Failed to get file: HTTP {} - X-Exception: {} - Body: {}",
                 status, x_exception, body
             );
-            bail!("HTTP {} - {}", status, x_exception)
+            let msg = format!("HTTP {} - {}", status, x_exception);
+            if status.is_server_error() {
+                return Err(TransientError(msg).into());
+            }
+            bail!("{}", msg)
         }
 
         // Extract headers
@@ -142,8 +164,12 @@ impl FiletrackerClient {
             .map(|v| v == "gzip")
             .unwrap_or(false);
 
-        // Get body
-        let data = response.bytes().await?.to_vec();
+        // Get body (network failure during download is transient)
+        let data = response
+            .bytes()
+            .await
+            .map_err(|e| TransientError(e.to_string()))?
+            .to_vec();
 
         debug!(
             "Got file from filetracker: {} bytes, logical_size: {}, compressed: {}",

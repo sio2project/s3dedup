@@ -18,6 +18,9 @@ const RETRY_BASE_DELAY_MS: u64 = 1000;
 /// Maximum delay for infinite retry backoff (in milliseconds)
 const MAX_RETRY_DELAY_MS: u64 = 60_000;
 
+/// Maximum retries for non-transient errors before giving up (e.g. corrupt data)
+const MAX_PERMANENT_ERROR_RETRIES: u32 = 5;
+
 pub mod v1_filesystem;
 
 pub struct MigrationStats {
@@ -851,14 +854,17 @@ pub async fn live_migration_worker(
 
 /// Migrate a single file with retry logic:
 /// - If the file is not found on filetracker (404), skip it immediately (file was deleted).
-/// - For all other errors (connection errors, timeouts, 5xx), retry forever with capped
+/// - Transient errors (connection failures, timeouts, 5xx): retry forever with capped
 ///   exponential backoff up to MAX_RETRY_DELAY_MS (60s).
+/// - Non-transient errors (corrupt data, bad headers): retry up to MAX_PERMANENT_ERROR_RETRIES
+///   times, then skip with an error log.
 async fn migrate_single_file_with_infinite_retry(
     filetracker_client: &FiletrackerClient,
     app_state: Arc<AppState>,
     path: &str,
 ) -> MigrationResult {
     let mut attempt: u32 = 0;
+    let mut permanent_error_count: u32 = 0;
     loop {
         if attempt > 0 {
             let delay_ms = std::cmp::min(
@@ -885,12 +891,35 @@ async fn migrate_single_file_with_infinite_retry(
                     warn!("File '{}' not found on filetracker, skipping", path);
                     return MigrationResult::Skipped;
                 }
-                warn!(
-                    "Migration attempt {} for '{}' failed: {}",
-                    attempt + 1,
-                    path,
-                    e
-                );
+
+                let is_transient = e
+                    .downcast_ref::<crate::filetracker_client::TransientError>()
+                    .is_some();
+
+                if is_transient {
+                    // Transient error (connection failure, timeout, 5xx) — retry forever
+                    warn!(
+                        "Transient error migrating '{}' (attempt {}): {}",
+                        path,
+                        attempt + 1,
+                        e
+                    );
+                } else {
+                    // Non-transient error (corrupt data, bad headers) — limited retries
+                    permanent_error_count += 1;
+                    if permanent_error_count >= MAX_PERMANENT_ERROR_RETRIES {
+                        error!(
+                            "Permanent failure migrating '{}' after {} attempts, skipping: {}",
+                            path, permanent_error_count, e
+                        );
+                        return MigrationResult::PermanentFailure(path.to_string(), e);
+                    }
+                    warn!(
+                        "Non-transient error migrating '{}' (attempt {}/{}): {}",
+                        path, permanent_error_count, MAX_PERMANENT_ERROR_RETRIES, e
+                    );
+                }
+
                 attempt = attempt.saturating_add(1);
             }
         }
@@ -909,14 +938,15 @@ pub async fn migrate_all_files_from_file_list(
     info!("Starting file-list migration from: {}", file_list_path);
     info!("Max concurrency: {}", max_concurrency);
     info!(
-        "Retry policy: infinite retry with capped exponential backoff (max {}ms)",
-        MAX_RETRY_DELAY_MS
+        "Retry policy: infinite retry for transient errors, {} retries for permanent errors, backoff max {}ms",
+        MAX_PERMANENT_ERROR_RETRIES, MAX_RETRY_DELAY_MS
     );
     info!("Reading file list in chunks to handle large file counts efficiently");
 
     let total_files = Arc::new(AtomicUsize::new(0));
     let migrated = Arc::new(AtomicUsize::new(0));
     let skipped = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicUsize::new(0));
     let semaphore = Arc::new(Semaphore::new(max_concurrency));
 
     let file_chunk_size = 10_000;
@@ -982,12 +1012,14 @@ pub async fn migrate_all_files_from_file_list(
             if batch_idx.is_multiple_of(10) {
                 let current_migrated = migrated.load(Ordering::Relaxed);
                 let current_skipped = skipped.load(Ordering::Relaxed);
+                let current_failed = failed.load(Ordering::Relaxed);
                 info!(
-                    "Progress: file ~{}/{} (migrated: {}, skipped: {}) [chunk {} batch {}/{}]",
+                    "Progress: file ~{}/{} (migrated: {}, skipped: {}, failed: {}) [chunk {} batch {}/{}]",
                     batch_start,
                     total_so_far,
                     current_migrated,
                     current_skipped,
+                    current_failed,
                     chunk_count,
                     batch_idx + 1,
                     total_batches
@@ -1001,6 +1033,7 @@ pub async fn migrate_all_files_from_file_list(
                 let app_state = app_state.clone();
                 let migrated = migrated.clone();
                 let skipped = skipped.clone();
+                let failed = failed.clone();
                 let semaphore = semaphore.clone();
                 let path = path.clone();
 
@@ -1027,9 +1060,9 @@ pub async fn migrate_all_files_from_file_list(
                         MigrationResult::Skipped => {
                             skipped.fetch_add(1, Ordering::Relaxed);
                         }
-                        // infinite retry never returns PermanentFailure
                         MigrationResult::PermanentFailure(path, err) => {
-                            error!("Unexpected permanent failure for '{}': {}", path, err);
+                            error!("Permanent failure for '{}': {}", path, err);
+                            failed.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                 });
@@ -1060,16 +1093,25 @@ pub async fn migrate_all_files_from_file_list(
     let total = total_files.load(Ordering::Relaxed);
     let migrated_count = migrated.load(Ordering::Relaxed);
     let skipped_count = skipped.load(Ordering::Relaxed);
+    let failed_count = failed.load(Ordering::Relaxed);
 
     info!("File-list migration complete:");
     info!("  Total files: {}", total);
     info!("  Migrated: {}", migrated_count);
     info!("  Skipped: {}", skipped_count);
+    info!("  Failed: {}", failed_count);
+
+    if failed_count > 0 {
+        warn!(
+            "{} files failed permanently (corrupt data or other non-transient errors)",
+            failed_count
+        );
+    }
 
     Ok(MigrationStats {
         total_files: total,
         migrated: migrated_count,
-        failed: 0,
+        failed: failed_count,
         skipped: skipped_count,
     })
 }
@@ -1097,10 +1139,18 @@ pub async fn live_migration_worker_from_file_list(
     .await
     {
         Ok(stats) => {
-            info!("Background file-list migration completed successfully");
+            info!("Background file-list migration completed");
             info!("Total files: {}", stats.total_files);
             info!("Migrated: {}", stats.migrated);
             info!("Skipped: {}", stats.skipped);
+            info!("Failed: {}", stats.failed);
+
+            if stats.failed > 0 {
+                warn!(
+                    "{} files failed permanently — check error logs above for details",
+                    stats.failed
+                );
+            }
         }
         Err(e) => {
             error!("Background file-list migration failed: {}", e);
