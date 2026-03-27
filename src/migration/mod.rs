@@ -225,7 +225,8 @@ async fn migrate_single_file_with_retry(
     for attempt in 0..=max_retries {
         if attempt > 0 {
             // Exponential backoff: 1s, 2s, 4s, ...
-            let delay_ms = RETRY_BASE_DELAY_MS * (1 << (attempt - 1));
+            let delay_ms = RETRY_BASE_DELAY_MS
+                .saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1).min(16)));
             warn!(
                 "Retrying migration of '{}' (attempt {}/{}) after {}ms delay",
                 path,
@@ -275,7 +276,8 @@ async fn migrate_single_file_from_v1_fs_with_retry(
     for attempt in 0..=max_retries {
         if attempt > 0 {
             // Exponential backoff: 1s, 2s, 4s, ...
-            let delay_ms = RETRY_BASE_DELAY_MS * (1 << (attempt - 1));
+            let delay_ms = RETRY_BASE_DELAY_MS
+                .saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1).min(16)));
             warn!(
                 "Retrying V1 migration of '{}' (attempt {}/{}) after {}ms delay",
                 file_info.relative_path,
@@ -847,9 +849,10 @@ pub async fn live_migration_worker(
     info!("Background migration worker finished, migration_active set to 0");
 }
 
-/// Migrate a single file with infinite retry and capped exponential backoff.
-/// Never gives up — retries forever until the file is migrated or skipped.
-/// Backoff caps at MAX_RETRY_DELAY_MS (60s).
+/// Migrate a single file with retry logic:
+/// - If the file is not found on filetracker (404), skip it immediately (file was deleted).
+/// - For all other errors (connection errors, timeouts, 5xx), retry forever with capped
+///   exponential backoff up to MAX_RETRY_DELAY_MS (60s).
 async fn migrate_single_file_with_infinite_retry(
     filetracker_client: &FiletrackerClient,
     app_state: Arc<AppState>,
@@ -875,6 +878,13 @@ async fn migrate_single_file_with_infinite_retry(
             Ok(true) => return MigrationResult::Migrated,
             Ok(false) => return MigrationResult::Skipped,
             Err(e) => {
+                // If file was not found (404), skip it — the file was likely deleted
+                if e.downcast_ref::<crate::filetracker_client::FileNotFoundError>()
+                    .is_some()
+                {
+                    warn!("File '{}' not found on filetracker, skipping", path);
+                    return MigrationResult::Skipped;
+                }
                 warn!(
                     "Migration attempt {} for '{}' failed: {}",
                     attempt + 1,
@@ -930,7 +940,7 @@ pub async fn migrate_all_files_from_file_list(
             if trimmed.is_empty() {
                 continue;
             }
-            // Strip leading '/' to normalize paths (find output may include it)
+            // Strip leading '/' to normalize paths
             let path = trimmed.strip_prefix('/').unwrap_or(trimmed).to_string();
             chunk.push(path);
             if chunk.len() >= file_chunk_size

@@ -1154,3 +1154,53 @@ async fn test_file_list_migration_skips_already_migrated() {
     assert_eq!(stats.migrated, 0);
     assert_eq!(stats.skipped, 1);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_file_list_migration_skips_deleted_files() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    let app_state = create_test_app_state().await;
+    let client = Arc::new(FiletrackerClient::new(url));
+
+    // Add only one file — the other is "deleted" (not on ft)
+    mock_state.add_file("exists.txt", b"I exist".to_vec()).await;
+
+    // File list references both an existing and a deleted file
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let file_list_path = tmp_dir.path().join("file_list.txt");
+    std::fs::write(&file_list_path, "exists.txt\ndeleted_eval_file.txt\n").unwrap();
+
+    let result = migrate_all_files_from_file_list(
+        file_list_path.to_str().unwrap(),
+        client,
+        app_state.clone(),
+        5,
+    )
+    .await;
+    assert!(result.is_ok());
+
+    let stats = result.unwrap();
+    assert_eq!(stats.total_files, 2);
+    assert_eq!(stats.migrated, 1);
+    assert_eq!(stats.skipped, 1); // deleted file was skipped, not retried forever
+    assert_eq!(stats.failed, 0);
+
+    // Verify the existing file was migrated
+    let modified = app_state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state.bucket_name, "exists.txt")
+        .await
+        .unwrap();
+    assert!(modified > 0);
+
+    // Verify the deleted file was not migrated
+    let modified_deleted = app_state
+        .kvstorage
+        .lock()
+        .await
+        .get_modified(&app_state.bucket_name, "deleted_eval_file.txt")
+        .await
+        .unwrap();
+    assert_eq!(modified_deleted, 0);
+}

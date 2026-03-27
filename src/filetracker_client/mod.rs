@@ -5,6 +5,19 @@ use chrono::DateTime;
 use reqwest::{Client, StatusCode};
 use tracing::{debug, error, warn};
 
+/// Error indicating that the requested file was not found on the filetracker (HTTP 404).
+/// This is distinct from connection errors or server errors, which should be retried.
+#[derive(Debug)]
+pub struct FileNotFoundError(pub String);
+
+impl std::fmt::Display for FileNotFoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "File not found: {}", self.0)
+    }
+}
+
+impl std::error::Error for FileNotFoundError {}
+
 #[derive(Clone)]
 pub struct FiletrackerClient {
     base_url: String,
@@ -87,7 +100,7 @@ impl FiletrackerClient {
         let response = self.client.get(&url).send().await?;
 
         if response.status() == StatusCode::NOT_FOUND {
-            bail!("File not found");
+            return Err(FileNotFoundError(path.to_string()).into());
         }
 
         if !response.status().is_success() {
