@@ -64,12 +64,7 @@ pub async fn ft_delete_file(
     };
 
     // 3. Check if file exists
-    let current_modified = state
-        .kvstorage
-        .lock()
-        .await
-        .get_modified(&state.bucket_name, path)
-        .await;
+    let current_modified = state.kvstorage.get_modified(&state.bucket_name, path).await;
     if current_modified.is_err() {
         error!("Failed to get current modified");
         record_metrics("500");
@@ -113,12 +108,7 @@ pub async fn ft_delete_file(
     }
 
     // 5. Get the hash for this path
-    let hash = state
-        .kvstorage
-        .lock()
-        .await
-        .get_ref_file(&state.bucket_name, path)
-        .await;
+    let hash = state.kvstorage.get_ref_file(&state.bucket_name, path).await;
     if hash.is_err() {
         error!("Failed to get ref file");
         record_metrics("500");
@@ -165,8 +155,6 @@ pub async fn ft_delete_file(
     // 7. Decrement reference count atomically and get new count
     let ref_count = match state
         .kvstorage
-        .lock()
-        .await
         .atomic_decrement_ref_count(&state.bucket_name, &hash)
         .await
     {
@@ -191,7 +179,7 @@ pub async fn ft_delete_file(
     if ref_count <= 0 {
         debug!("Deleting blob with hash: {}", hash);
         // Delete blob from S3
-        if let Err(e) = state.s3storage.lock().await.delete_object(&hash).await {
+        if let Err(e) = state.s3storage.delete_object(&hash).await {
             error!(
                 "Failed to delete object from S3 (bucket={}, key={}): {}",
                 state.bucket_name, hash, e
@@ -202,8 +190,6 @@ pub async fn ft_delete_file(
         // Delete logical size metadata
         let _ = state
             .kvstorage
-            .lock()
-            .await
             .set_logical_size(&state.bucket_name, &hash, 0)
             .await;
     }
@@ -216,8 +202,6 @@ pub async fn ft_delete_file(
     // 9. Delete file metadata (path -> hash mapping and timestamp)
     if let Err(e) = state
         .kvstorage
-        .lock()
-        .await
         .delete_ref_file(&state.bucket_name, path)
         .await
     {
@@ -234,8 +218,6 @@ pub async fn ft_delete_file(
 
     if let Err(e) = state
         .kvstorage
-        .lock()
-        .await
         .delete_modified(&state.bucket_name, path)
         .await
     {

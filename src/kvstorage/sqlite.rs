@@ -61,7 +61,7 @@ impl KVStorageTrait for SQLite {
         }))
     }
 
-    async fn setup(&mut self) -> Result<()> {
+    async fn setup(&self) -> Result<()> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS refcount (
                 bucket TEXT NOT NULL,
@@ -99,7 +99,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+    async fn get_ref_count(&self, bucket: &str, hash: &str) -> Result<i32> {
         let result: Result<(i32,), sqlx::Error> =
             sqlx::query_as("SELECT refcount FROM refcount WHERE bucket = ?1 AND hash = ?2")
                 .bind(bucket)
@@ -113,7 +113,7 @@ impl KVStorageTrait for SQLite {
         }
     }
 
-    async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+    async fn atomic_increment_ref_count(&self, bucket: &str, hash: &str) -> Result<i32> {
         // SQLite atomic increment using INSERT...ON CONFLICT...RETURNING (SQLite 3.35+)
         // - New hash: INSERT with refcount=1, return 1
         // - Existing hash: UPDATE refcount = refcount + 1, return new value
@@ -129,7 +129,7 @@ impl KVStorageTrait for SQLite {
         Ok(count)
     }
 
-    async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+    async fn atomic_decrement_ref_count(&self, bucket: &str, hash: &str) -> Result<i32> {
         // SQLite atomic decrement using UPDATE...RETURNING (SQLite 3.35+)
         // Use fetch_optional to return 0 if row doesn't exist (matches PostgreSQL behavior)
         let result = sqlx::query_as::<_, (i32,)>(
@@ -149,7 +149,7 @@ impl KVStorageTrait for SQLite {
         }
     }
 
-    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64> {
+    async fn get_modified(&self, bucket: &str, path: &str) -> Result<i64> {
         let result: Result<(i64,), sqlx::Error> =
             sqlx::query_as("SELECT modified FROM modified WHERE bucket = ?1 AND path = ?2")
                 .bind(bucket)
@@ -163,7 +163,7 @@ impl KVStorageTrait for SQLite {
         }
     }
 
-    async fn set_modified(&mut self, bucket: &str, path: &str, modified: i64) -> Result<()> {
+    async fn set_modified(&self, bucket: &str, path: &str, modified: i64) -> Result<()> {
         sqlx::query("INSERT OR REPLACE INTO modified (bucket, path, modified) VALUES (?1, ?2, ?3)")
             .bind(bucket)
             .bind(path)
@@ -173,7 +173,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<()> {
+    async fn delete_modified(&self, bucket: &str, path: &str) -> Result<()> {
         sqlx::query("DELETE FROM modified WHERE bucket = ?1 AND path = ?2")
             .bind(bucket)
             .bind(path)
@@ -182,7 +182,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String> {
+    async fn get_ref_file(&self, bucket: &str, path: &str) -> Result<String> {
         let result: Result<(String,), sqlx::Error> =
             sqlx::query_as("SELECT hash FROM ref_file WHERE bucket = ?1 AND path = ?2")
                 .bind(bucket)
@@ -196,7 +196,7 @@ impl KVStorageTrait for SQLite {
         }
     }
 
-    async fn set_ref_file(&mut self, bucket: &str, path: &str, hash: &str) -> Result<()> {
+    async fn set_ref_file(&self, bucket: &str, path: &str, hash: &str) -> Result<()> {
         sqlx::query("INSERT OR REPLACE INTO ref_file (bucket, path, hash) VALUES (?1, ?2, ?3)")
             .bind(bucket)
             .bind(path)
@@ -206,7 +206,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<()> {
+    async fn delete_ref_file(&self, bucket: &str, path: &str) -> Result<()> {
         sqlx::query("DELETE FROM ref_file WHERE bucket = ?1 AND path = ?2")
             .bind(bucket)
             .bind(path)
@@ -215,7 +215,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn get_logical_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
+    async fn get_logical_size(&self, bucket: &str, hash: &str) -> Result<usize> {
         let result: Result<(i64,), sqlx::Error> =
             sqlx::query_as("SELECT logical_size FROM logical_size WHERE bucket = ?1 AND hash = ?2")
                 .bind(bucket)
@@ -229,7 +229,7 @@ impl KVStorageTrait for SQLite {
         }
     }
 
-    async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()> {
+    async fn set_logical_size(&self, bucket: &str, hash: &str, size: usize) -> Result<()> {
         sqlx::query(
             "INSERT INTO logical_size (bucket, hash, logical_size, compressed_size) VALUES (?1, ?2, ?3, 0)
              ON CONFLICT (bucket, hash) DO UPDATE SET logical_size = ?3",
@@ -243,7 +243,7 @@ impl KVStorageTrait for SQLite {
     }
 
     async fn list_files(
-        &mut self,
+        &self,
         bucket: &str,
         path_prefix: &str,
         timestamp: i64,
@@ -262,7 +262,7 @@ impl KVStorageTrait for SQLite {
     }
 
     async fn list_ref_files_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
@@ -280,7 +280,7 @@ impl KVStorageTrait for SQLite {
     }
 
     async fn list_refcounts_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
@@ -298,7 +298,7 @@ impl KVStorageTrait for SQLite {
     }
 
     async fn list_logical_sizes_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
@@ -315,7 +315,7 @@ impl KVStorageTrait for SQLite {
         Ok(rows.into_iter().map(|(hash,)| hash).collect())
     }
 
-    async fn delete_refcount(&mut self, bucket: &str, hash: &str) -> Result<()> {
+    async fn delete_refcount(&self, bucket: &str, hash: &str) -> Result<()> {
         sqlx::query("DELETE FROM refcount WHERE bucket = ?1 AND hash = ?2")
             .bind(bucket)
             .bind(hash)
@@ -324,7 +324,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn delete_logical_size(&mut self, bucket: &str, hash: &str) -> Result<()> {
+    async fn delete_logical_size(&self, bucket: &str, hash: &str) -> Result<()> {
         sqlx::query("DELETE FROM logical_size WHERE bucket = ?1 AND hash = ?2")
             .bind(bucket)
             .bind(hash)
@@ -333,7 +333,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn hash_is_referenced(&mut self, bucket: &str, hash: &str) -> Result<bool> {
+    async fn hash_is_referenced(&self, bucket: &str, hash: &str) -> Result<bool> {
         let result: Option<(i32,)> =
             sqlx::query_as("SELECT 1 FROM ref_file WHERE bucket = ?1 AND hash = ?2 LIMIT 1")
                 .bind(bucket)
@@ -343,7 +343,7 @@ impl KVStorageTrait for SQLite {
         Ok(result.is_some())
     }
 
-    async fn get_compressed_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
+    async fn get_compressed_size(&self, bucket: &str, hash: &str) -> Result<usize> {
         let result: Result<(Option<i64>,), sqlx::Error> = sqlx::query_as(
             "SELECT compressed_size FROM logical_size WHERE bucket = ?1 AND hash = ?2",
         )
@@ -360,7 +360,7 @@ impl KVStorageTrait for SQLite {
         }
     }
 
-    async fn set_compressed_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()> {
+    async fn set_compressed_size(&self, bucket: &str, hash: &str, size: usize) -> Result<()> {
         sqlx::query(
             "INSERT INTO logical_size (bucket, hash, logical_size, compressed_size) VALUES (?1, ?2, 0, ?3)
              ON CONFLICT (bucket, hash) DO UPDATE SET compressed_size = ?3",
@@ -373,7 +373,7 @@ impl KVStorageTrait for SQLite {
         Ok(())
     }
 
-    async fn get_total_files(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_total_files(&self, bucket: &str) -> Result<i64> {
         let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM modified WHERE bucket = ?1")
             .bind(bucket)
             .fetch_one(&self.pool)
@@ -381,7 +381,7 @@ impl KVStorageTrait for SQLite {
         Ok(count)
     }
 
-    async fn get_total_blobs(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_total_blobs(&self, bucket: &str) -> Result<i64> {
         let (count,): (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM refcount WHERE bucket = ?1 AND refcount > 0")
                 .bind(bucket)
@@ -390,7 +390,7 @@ impl KVStorageTrait for SQLite {
         Ok(count)
     }
 
-    async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_total_storage_bytes(&self, bucket: &str) -> Result<i64> {
         // Only count storage for blobs that are actually referenced (refcount > 0)
         let (total,): (Option<i64>,) = sqlx::query_as(
             "SELECT SUM(l.compressed_size)
@@ -404,7 +404,7 @@ impl KVStorageTrait for SQLite {
         Ok(total.unwrap_or(0))
     }
 
-    async fn get_total_logical_bytes(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_total_logical_bytes(&self, bucket: &str) -> Result<i64> {
         let (total,): (Option<i64>,) = sqlx::query_as(
             "SELECT SUM(r.refcount * l.logical_size)
              FROM refcount r
@@ -417,7 +417,7 @@ impl KVStorageTrait for SQLite {
         Ok(total.unwrap_or(0))
     }
 
-    async fn get_total_compressed_bytes_no_dedup(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_total_compressed_bytes_no_dedup(&self, bucket: &str) -> Result<i64> {
         let (total,): (Option<i64>,) = sqlx::query_as(
             "SELECT SUM(r.refcount * l.compressed_size)
              FROM refcount r
@@ -430,7 +430,7 @@ impl KVStorageTrait for SQLite {
         Ok(total.unwrap_or(0))
     }
 
-    async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_deduplicated_bytes_saved(&self, bucket: &str) -> Result<i64> {
         let (total,): (Option<i64>,) = sqlx::query_as(
             "SELECT SUM((r.refcount - 1) * l.logical_size)
              FROM refcount r
@@ -450,7 +450,7 @@ impl KVStorageTrait for SQLite {
         (active_connections, idle_connections)
     }
 
-    async fn get_version(&mut self) -> Result<Option<String>> {
+    async fn get_version(&self) -> Result<Option<String>> {
         let result: Option<(String,)> =
             sqlx::query_as("SELECT version FROM version WHERE bucket = ?1")
                 .bind(&self.bucket)
@@ -459,7 +459,7 @@ impl KVStorageTrait for SQLite {
         Ok(result.map(|r| r.0))
     }
 
-    async fn set_version(&mut self, version: &str) -> Result<()> {
+    async fn set_version(&self, version: &str) -> Result<()> {
         sqlx::query("INSERT OR REPLACE INTO version (bucket, version) VALUES (?1, ?2)")
             .bind(&self.bucket)
             .bind(version)

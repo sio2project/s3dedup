@@ -40,12 +40,7 @@ pub async fn ft_get_file(
     };
 
     // 2. Check if file exists and get metadata
-    let modified_time = state
-        .kvstorage
-        .lock()
-        .await
-        .get_modified(&state.bucket_name, path)
-        .await;
+    let modified_time = state.kvstorage.get_modified(&state.bucket_name, path).await;
     if modified_time.is_err() {
         error!("Failed to get modified time");
         metrics::HTTP_REQUESTS_TOTAL
@@ -162,12 +157,7 @@ pub async fn ft_get_file(
     }
 
     // 3. Get the hash for this path
-    let hash = state
-        .kvstorage
-        .lock()
-        .await
-        .get_ref_file(&state.bucket_name, path)
-        .await;
+    let hash = state.kvstorage.get_ref_file(&state.bucket_name, path).await;
     if hash.is_err() {
         error!("Failed to get ref file");
         metrics::HTTP_REQUESTS_TOTAL
@@ -208,8 +198,6 @@ pub async fn ft_get_file(
     // 4. Get logical size
     let logical_size = state
         .kvstorage
-        .lock()
-        .await
         .get_logical_size(&state.bucket_name, &hash)
         .await;
     if logical_size.is_err() {
@@ -232,7 +220,7 @@ pub async fn ft_get_file(
     let logical_size = logical_size.unwrap();
 
     // 5. Fetch the blob from S3
-    let blob_data = state.s3storage.lock().await.get_object(&hash).await;
+    let blob_data = state.s3storage.get_object(&hash).await;
     if blob_data.is_err() {
         error!(
             "Failed to get object from S3 (bucket={}, key={}): {}",

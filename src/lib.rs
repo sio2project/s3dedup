@@ -2,8 +2,6 @@ use anyhow::Result;
 use serde::Serialize;
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
-
 pub mod cleaner;
 pub mod config;
 pub mod filetracker_client;
@@ -30,9 +28,9 @@ pub struct HealthChecks {
 
 pub struct AppState {
     pub bucket_name: String,
-    pub kvstorage: Arc<Mutex<Box<kvstorage::KVStorage>>>,
+    pub kvstorage: Arc<kvstorage::KVStorage>,
     pub locks: Arc<locks::LocksStorage>,
-    pub s3storage: Arc<Mutex<Box<s3storage::S3Storage>>>,
+    pub s3storage: Arc<s3storage::S3Storage>,
     pub filetracker_client: Option<Arc<filetracker_client::FiletrackerClient>>,
     pub metrics: Arc<metrics::Metrics>,
 }
@@ -45,9 +43,9 @@ impl AppState {
         let metrics = Arc::new(metrics::Metrics::new());
         Ok(Arc::new(Self {
             bucket_name: config.bucket.name.clone(),
-            kvstorage: Arc::new(Mutex::new(kvstorage)),
+            kvstorage: Arc::new(*kvstorage),
             locks: Arc::new(*locks),
-            s3storage: Arc::new(Mutex::new(s3storage)),
+            s3storage: Arc::new(*s3storage),
             filetracker_client: None,
             metrics,
         }))
@@ -68,9 +66,9 @@ impl AppState {
 
         Ok(Arc::new(Self {
             bucket_name: config.bucket.name.clone(),
-            kvstorage: Arc::new(Mutex::new(kvstorage)),
+            kvstorage: Arc::new(*kvstorage),
             locks: Arc::new(*locks),
-            s3storage: Arc::new(Mutex::new(s3storage)),
+            s3storage: Arc::new(*s3storage),
             filetracker_client: Some(Arc::new(filetracker_client)),
             metrics,
         }))
@@ -78,20 +76,28 @@ impl AppState {
 
     /// Update storage gauge metrics from database
     pub async fn update_storage_metrics(&self) -> Result<()> {
-        let mut kv = self.kvstorage.lock().await;
-
         // Update database connection pool metrics
-        let (active_conns, idle_conns) = kv.get_pool_stats();
+        let (active_conns, idle_conns) = self.kvstorage.get_pool_stats();
         metrics::DB_CONNECTIONS_ACTIVE.set(active_conns as i64);
         metrics::DB_CONNECTIONS_IDLE.set(idle_conns as i64);
 
         // Get all stats
-        let total_files = kv.get_total_files(&self.bucket_name).await?;
-        let total_blobs = kv.get_total_blobs(&self.bucket_name).await?;
-        let total_storage_bytes = kv.get_total_storage_bytes(&self.bucket_name).await?;
-        let total_logical_bytes = kv.get_total_logical_bytes(&self.bucket_name).await?;
-        let deduplicated_bytes_saved = kv.get_deduplicated_bytes_saved(&self.bucket_name).await?;
-        let total_compressed_no_dedup = kv
+        let total_files = self.kvstorage.get_total_files(&self.bucket_name).await?;
+        let total_blobs = self.kvstorage.get_total_blobs(&self.bucket_name).await?;
+        let total_storage_bytes = self
+            .kvstorage
+            .get_total_storage_bytes(&self.bucket_name)
+            .await?;
+        let total_logical_bytes = self
+            .kvstorage
+            .get_total_logical_bytes(&self.bucket_name)
+            .await?;
+        let deduplicated_bytes_saved = self
+            .kvstorage
+            .get_deduplicated_bytes_saved(&self.bucket_name)
+            .await?;
+        let total_compressed_no_dedup = self
+            .kvstorage
             .get_total_compressed_bytes_no_dedup(&self.bucket_name)
             .await?;
 
@@ -130,13 +136,7 @@ impl AppState {
         let uptime_seconds = self.metrics.start_time.elapsed().as_secs() as i64;
 
         // Check database connectivity
-        let db_status = match self
-            .kvstorage
-            .lock()
-            .await
-            .get_total_files(&self.bucket_name)
-            .await
-        {
+        let db_status = match self.kvstorage.get_total_files(&self.bucket_name).await {
             Ok(_) => "ok".to_string(),
             Err(e) => {
                 tracing::error!("Database health check failed: {}", e);
@@ -147,7 +147,7 @@ impl AppState {
         // Check S3 connectivity
         let s3_status = match tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            self.s3storage.lock().await.check_health(),
+            self.s3storage.check_health(),
         )
         .await
         {

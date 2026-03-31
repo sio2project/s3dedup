@@ -182,14 +182,14 @@ async fn create_test_app_state() -> Arc<AppState> {
 
     let app_state = Arc::new(AppState {
         bucket_name: config.bucket.name.clone(),
-        kvstorage: Arc::new(tokio::sync::Mutex::new(kvstorage)),
+        kvstorage: Arc::new(*kvstorage),
         locks: Arc::new(*locks),
-        s3storage: Arc::new(tokio::sync::Mutex::new(s3storage)),
+        s3storage: Arc::new(*s3storage),
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
     });
 
-    app_state.kvstorage.lock().await.setup().await.unwrap();
+    app_state.kvstorage.setup().await.unwrap();
 
     app_state
 }
@@ -233,8 +233,6 @@ async fn test_offline_migration_single_file() {
     // Verify file was migrated
     let modified = app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, "test.txt")
         .await
         .unwrap();
@@ -269,8 +267,6 @@ async fn test_offline_migration_multiple_files() {
     for i in 0..10 {
         let modified = app_state
             .kvstorage
-            .lock()
-            .await
             .get_modified(&app_state.bucket_name, &format!("file{}.txt", i))
             .await
             .unwrap();
@@ -324,8 +320,6 @@ async fn test_migration_deduplication() {
     for file in &["file1.txt", "file2.txt", "file3.txt"] {
         let modified = app_state
             .kvstorage
-            .lock()
-            .await
             .get_modified(&app_state.bucket_name, file)
             .await
             .unwrap();
@@ -335,22 +329,16 @@ async fn test_migration_deduplication() {
     // Verify they all point to the same hash
     let hash1 = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_file(&app_state.bucket_name, "file1.txt")
         .await
         .unwrap();
     let hash2 = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_file(&app_state.bucket_name, "file2.txt")
         .await
         .unwrap();
     let hash3 = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_file(&app_state.bucket_name, "file3.txt")
         .await
         .unwrap();
@@ -361,8 +349,6 @@ async fn test_migration_deduplication() {
     // Verify reference count is 3
     let ref_count = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_count(&app_state.bucket_name, &hash1)
         .await
         .unwrap();
@@ -416,8 +402,6 @@ async fn test_live_migration_get_fallback() {
     // Verify file was migrated to s3dedup
     let modified = app_state_with_ft
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state_with_ft.bucket_name, "fallback.txt")
         .await
         .unwrap();
@@ -474,8 +458,6 @@ async fn test_live_migration_put_dual_write() {
     // Verify file is in s3dedup
     let modified_s3dedup = app_state_with_ft
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state_with_ft.bucket_name, "dualwrite.txt")
         .await
         .unwrap();
@@ -519,8 +501,6 @@ async fn test_live_migration_delete_dual_delete() {
     // Verify file exists in both before deletion
     let modified_before = app_state_with_ft
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state_with_ft.bucket_name, "todelete.txt")
         .await
         .unwrap();
@@ -557,8 +537,6 @@ async fn test_live_migration_delete_dual_delete() {
     // Verify file is deleted from s3dedup
     let modified_after = app_state_with_ft
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state_with_ft.bucket_name, "todelete.txt")
         .await
         .unwrap();
@@ -734,8 +712,6 @@ async fn test_live_migration_get_no_deadlock_on_fallback() {
     // Verify file was successfully migrated to s3dedup
     let modified = app_state_with_ft
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state_with_ft.bucket_name, "deadlock_test.txt")
         .await
         .unwrap();
@@ -1025,8 +1001,6 @@ async fn test_file_list_migration() {
     // Verify file_a and file_b were migrated
     let modified_a = app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, "file_a.txt")
         .await
         .unwrap();
@@ -1034,8 +1008,6 @@ async fn test_file_list_migration() {
 
     let modified_b = app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, "file_b.txt")
         .await
         .unwrap();
@@ -1044,8 +1016,6 @@ async fn test_file_list_migration() {
     // Verify file_c was NOT migrated
     let modified_c = app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, "file_c.txt")
         .await
         .unwrap();
@@ -1089,8 +1059,6 @@ async fn test_file_list_migration_retries_on_ft_failure() {
     // Verify file was migrated
     let modified = app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, "retry_test.txt")
         .await
         .unwrap();
@@ -1187,8 +1155,6 @@ async fn test_file_list_migration_skips_deleted_files() {
     // Verify the existing file was migrated
     let modified = app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, "exists.txt")
         .await
         .unwrap();
@@ -1197,8 +1163,6 @@ async fn test_file_list_migration_skips_deleted_files() {
     // Verify the deleted file was not migrated
     let modified_deleted = app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, "deleted_eval_file.txt")
         .await
         .unwrap();

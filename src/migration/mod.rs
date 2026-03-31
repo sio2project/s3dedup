@@ -328,8 +328,6 @@ pub async fn migrate_single_file_from_metadata(
     // Check if file already exists in s3dedup with same or newer version
     let current_modified = app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, path)
         .await?;
 
@@ -364,8 +362,6 @@ pub async fn migrate_single_file_from_metadata(
     // Recheck if file was already migrated after acquiring lock (race condition protection)
     let current_modified_after_lock = match app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, path)
         .await
     {
@@ -396,13 +392,7 @@ pub async fn migrate_single_file_from_metadata(
     };
 
     // Check if blob already exists in S3
-    let blob_exists = match app_state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&digest)
-        .await
-    {
+    let blob_exists = match app_state.s3storage.object_exists(&digest).await {
         Ok(v) => v,
         Err(e) => {
             let _ = hash_guard.release().await;
@@ -415,8 +405,6 @@ pub async fn migrate_single_file_from_metadata(
     if !blob_exists
         && let Err(e) = app_state
             .s3storage
-            .lock()
-            .await
             .put_object(&digest, compressed_data)
             .await
     {
@@ -428,8 +416,6 @@ pub async fn migrate_single_file_from_metadata(
     // Store logical size metadata
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_logical_size(&app_state.bucket_name, &digest, logical_size)
         .await
     {
@@ -441,8 +427,6 @@ pub async fn migrate_single_file_from_metadata(
     // Store compressed size metadata
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_compressed_size(&app_state.bucket_name, &digest, compressed_size)
         .await
     {
@@ -454,8 +438,6 @@ pub async fn migrate_single_file_from_metadata(
     // Increment reference count atomically
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .atomic_increment_ref_count(&app_state.bucket_name, &digest)
         .await
     {
@@ -473,8 +455,6 @@ pub async fn migrate_single_file_from_metadata(
     if current_modified > 0 {
         let old_hash = match app_state
             .kvstorage
-            .lock()
-            .await
             .get_ref_file(&app_state.bucket_name, path)
             .await
         {
@@ -500,8 +480,6 @@ pub async fn migrate_single_file_from_metadata(
             // Decrement old reference count atomically and get new count
             let old_ref_count = match app_state
                 .kvstorage
-                .lock()
-                .await
                 .atomic_decrement_ref_count(&app_state.bucket_name, &old_hash)
                 .await
             {
@@ -515,12 +493,7 @@ pub async fn migrate_single_file_from_metadata(
 
             // Delete blob if no longer referenced
             if old_ref_count <= 0
-                && let Err(e) = app_state
-                    .s3storage
-                    .lock()
-                    .await
-                    .delete_object(&old_hash)
-                    .await
+                && let Err(e) = app_state.s3storage.delete_object(&old_hash).await
             {
                 warn!(
                     "Failed to delete orphaned S3 object (bucket={}, key={}) during migration: {}",
@@ -538,8 +511,6 @@ pub async fn migrate_single_file_from_metadata(
     // Update file metadata
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_ref_file(&app_state.bucket_name, path, &digest)
         .await
     {
@@ -549,8 +520,6 @@ pub async fn migrate_single_file_from_metadata(
 
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_modified(&app_state.bucket_name, path, file_metadata.last_modified)
         .await
     {
@@ -577,8 +546,6 @@ async fn migrate_single_file(
     // Check if file already exists in s3dedup with same or newer version
     let current_modified = app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, path)
         .await?;
 
@@ -613,8 +580,6 @@ async fn migrate_single_file(
     // Recheck if file was already migrated after acquiring lock (race condition protection)
     let current_modified_after_lock = match app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, path)
         .await
     {
@@ -645,13 +610,7 @@ async fn migrate_single_file(
     };
 
     // Check if blob already exists in S3
-    let blob_exists = match app_state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&digest)
-        .await
-    {
+    let blob_exists = match app_state.s3storage.object_exists(&digest).await {
         Ok(v) => v,
         Err(e) => {
             let _ = hash_guard.release().await;
@@ -664,8 +623,6 @@ async fn migrate_single_file(
     if !blob_exists
         && let Err(e) = app_state
             .s3storage
-            .lock()
-            .await
             .put_object(&digest, compressed_data)
             .await
     {
@@ -677,8 +634,6 @@ async fn migrate_single_file(
     // Store logical size metadata
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_logical_size(&app_state.bucket_name, &digest, logical_size)
         .await
     {
@@ -690,8 +645,6 @@ async fn migrate_single_file(
     // Store compressed size metadata
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_compressed_size(&app_state.bucket_name, &digest, compressed_size)
         .await
     {
@@ -703,8 +656,6 @@ async fn migrate_single_file(
     // Increment reference count atomically
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .atomic_increment_ref_count(&app_state.bucket_name, &digest)
         .await
     {
@@ -722,8 +673,6 @@ async fn migrate_single_file(
     if current_modified > 0 {
         let old_hash = match app_state
             .kvstorage
-            .lock()
-            .await
             .get_ref_file(&app_state.bucket_name, path)
             .await
         {
@@ -749,8 +698,6 @@ async fn migrate_single_file(
             // Decrement old reference count atomically and get new count
             let old_ref_count = match app_state
                 .kvstorage
-                .lock()
-                .await
                 .atomic_decrement_ref_count(&app_state.bucket_name, &old_hash)
                 .await
             {
@@ -764,12 +711,7 @@ async fn migrate_single_file(
 
             // Delete blob if no longer referenced
             if old_ref_count <= 0
-                && let Err(e) = app_state
-                    .s3storage
-                    .lock()
-                    .await
-                    .delete_object(&old_hash)
-                    .await
+                && let Err(e) = app_state.s3storage.delete_object(&old_hash).await
             {
                 warn!(
                     "Failed to delete orphaned S3 object (bucket={}, key={}) during migration: {}",
@@ -787,8 +729,6 @@ async fn migrate_single_file(
     // Update file metadata
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_ref_file(&app_state.bucket_name, path, &digest)
         .await
     {
@@ -798,8 +738,6 @@ async fn migrate_single_file(
 
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_modified(&app_state.bucket_name, path, file_metadata.last_modified)
         .await
     {
@@ -1397,8 +1335,6 @@ async fn migrate_single_file_from_v1_fs(
     // Check if file already exists in s3dedup with same or newer version
     let current_modified = app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, path)
         .await?;
 
@@ -1440,8 +1376,6 @@ async fn migrate_single_file_from_v1_fs(
     // Recheck if file was already migrated after acquiring lock (race condition protection)
     let current_modified_after_lock = match app_state
         .kvstorage
-        .lock()
-        .await
         .get_modified(&app_state.bucket_name, path)
         .await
     {
@@ -1472,13 +1406,7 @@ async fn migrate_single_file_from_v1_fs(
     };
 
     // Check if blob already exists in S3
-    let blob_exists = match app_state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&digest)
-        .await
-    {
+    let blob_exists = match app_state.s3storage.object_exists(&digest).await {
         Ok(v) => v,
         Err(e) => {
             let _ = hash_guard.release().await;
@@ -1491,8 +1419,6 @@ async fn migrate_single_file_from_v1_fs(
     if !blob_exists
         && let Err(e) = app_state
             .s3storage
-            .lock()
-            .await
             .put_object(&digest, compressed_data.clone())
             .await
     {
@@ -1504,8 +1430,6 @@ async fn migrate_single_file_from_v1_fs(
     // Store logical size metadata
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_logical_size(&app_state.bucket_name, &digest, logical_size)
         .await
     {
@@ -1517,8 +1441,6 @@ async fn migrate_single_file_from_v1_fs(
     // Store compressed size metadata
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_compressed_size(&app_state.bucket_name, &digest, compressed_data.len())
         .await
     {
@@ -1530,8 +1452,6 @@ async fn migrate_single_file_from_v1_fs(
     // Increment reference count atomically
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .atomic_increment_ref_count(&app_state.bucket_name, &digest)
         .await
     {
@@ -1549,8 +1469,6 @@ async fn migrate_single_file_from_v1_fs(
     if current_modified > 0 {
         let old_hash = match app_state
             .kvstorage
-            .lock()
-            .await
             .get_ref_file(&app_state.bucket_name, path)
             .await
         {
@@ -1576,8 +1494,6 @@ async fn migrate_single_file_from_v1_fs(
             // Decrement old reference count atomically and get new count
             let old_ref_count = match app_state
                 .kvstorage
-                .lock()
-                .await
                 .atomic_decrement_ref_count(&app_state.bucket_name, &old_hash)
                 .await
             {
@@ -1591,12 +1507,7 @@ async fn migrate_single_file_from_v1_fs(
 
             // Delete blob if no longer referenced
             if old_ref_count <= 0
-                && let Err(e) = app_state
-                    .s3storage
-                    .lock()
-                    .await
-                    .delete_object(&old_hash)
-                    .await
+                && let Err(e) = app_state.s3storage.delete_object(&old_hash).await
             {
                 warn!(
                     "Failed to delete orphaned S3 object (bucket={}, key={}) during migration: {}",
@@ -1614,8 +1525,6 @@ async fn migrate_single_file_from_v1_fs(
     // Update file metadata
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_ref_file(&app_state.bucket_name, path, &digest)
         .await
     {
@@ -1625,8 +1534,6 @@ async fn migrate_single_file_from_v1_fs(
 
     if let Err(e) = app_state
         .kvstorage
-        .lock()
-        .await
         .set_modified(&app_state.bucket_name, path, file_info.last_modified)
         .await
     {

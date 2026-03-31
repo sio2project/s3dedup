@@ -65,7 +65,7 @@ impl KVStorageTrait for Postgres {
             bucket: config.bucket.name.clone(),
         }))
     }
-    async fn setup(&mut self) -> Result<()> {
+    async fn setup(&self) -> Result<()> {
         // PostgreSQL doesn't support multiple statements in a single query
         // Create tables with bucket-specific names to allow parallel tests
         let refcount_table = self.table_name("refcount");
@@ -145,7 +145,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+    async fn get_ref_count(&self, bucket: &str, hash: &str) -> Result<i32> {
         let table = self.table_name("refcount");
         let query = format!(
             "SELECT refcount FROM {} WHERE bucket = $1 AND hash = $2",
@@ -163,7 +163,7 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+    async fn atomic_increment_ref_count(&self, bucket: &str, hash: &str) -> Result<i32> {
         let table = self.table_name("refcount");
         // PostgreSQL: atomic increment using INSERT...ON CONFLICT...DO UPDATE...RETURNING
         // Must qualify refcount column with table name to avoid ambiguity
@@ -181,7 +181,7 @@ impl KVStorageTrait for Postgres {
         Ok(count)
     }
 
-    async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+    async fn atomic_decrement_ref_count(&self, bucket: &str, hash: &str) -> Result<i32> {
         let table = self.table_name("refcount");
         // PostgreSQL: atomic decrement using UPDATE...RETURNING with GREATEST to prevent negative
         let query = format!(
@@ -206,7 +206,7 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64> {
+    async fn get_modified(&self, bucket: &str, path: &str) -> Result<i64> {
         let table = self.table_name("modified");
         let query = format!(
             "SELECT modified FROM {} WHERE bucket = $1 AND path = $2",
@@ -224,7 +224,7 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn set_modified(&mut self, bucket: &str, path: &str, modified: i64) -> Result<()> {
+    async fn set_modified(&self, bucket: &str, path: &str, modified: i64) -> Result<()> {
         let table = self.table_name("modified");
         let query = format!(
             "INSERT INTO {} (bucket, path, modified) VALUES ($1, $2, $3)
@@ -240,7 +240,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<()> {
+    async fn delete_modified(&self, bucket: &str, path: &str) -> Result<()> {
         let table = self.table_name("modified");
         let query = format!("DELETE FROM {} WHERE bucket = $1 AND path = $2", table);
         sqlx::query(&query)
@@ -251,7 +251,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String> {
+    async fn get_ref_file(&self, bucket: &str, path: &str) -> Result<String> {
         let table = self.table_name("ref_file");
         let query = format!("SELECT hash FROM {} WHERE bucket = $1 AND path = $2", table);
         let result: Result<(String,), sqlx::Error> = sqlx::query_as(&query)
@@ -266,7 +266,7 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn set_ref_file(&mut self, bucket: &str, path: &str, hash: &str) -> Result<()> {
+    async fn set_ref_file(&self, bucket: &str, path: &str, hash: &str) -> Result<()> {
         let table = self.table_name("ref_file");
         let query = format!(
             "INSERT INTO {} (bucket, path, hash) VALUES ($1, $2, $3)
@@ -282,7 +282,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<()> {
+    async fn delete_ref_file(&self, bucket: &str, path: &str) -> Result<()> {
         let table = self.table_name("ref_file");
         let query = format!("DELETE FROM {} WHERE bucket = $1 AND path = $2", table);
         sqlx::query(&query)
@@ -293,7 +293,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_logical_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
+    async fn get_logical_size(&self, bucket: &str, hash: &str) -> Result<usize> {
         let table = self.table_name("logical_size");
         let query = format!(
             "SELECT logical_size FROM {} WHERE bucket = $1 AND hash = $2",
@@ -311,7 +311,7 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()> {
+    async fn set_logical_size(&self, bucket: &str, hash: &str, size: usize) -> Result<()> {
         let table = self.table_name("logical_size");
         let query = format!(
             "INSERT INTO {} (bucket, hash, logical_size, compressed_size) VALUES ($1, $2, $3, 0) ON CONFLICT (bucket, hash) DO UPDATE SET logical_size = $3",
@@ -327,7 +327,7 @@ impl KVStorageTrait for Postgres {
     }
 
     async fn list_files(
-        &mut self,
+        &self,
         bucket: &str,
         path_prefix: &str,
         timestamp: i64,
@@ -349,7 +349,7 @@ impl KVStorageTrait for Postgres {
     }
 
     async fn list_ref_files_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
@@ -370,7 +370,7 @@ impl KVStorageTrait for Postgres {
     }
 
     async fn list_refcounts_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
@@ -391,7 +391,7 @@ impl KVStorageTrait for Postgres {
     }
 
     async fn list_logical_sizes_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
@@ -411,7 +411,7 @@ impl KVStorageTrait for Postgres {
         Ok(rows.into_iter().map(|(hash,)| hash).collect())
     }
 
-    async fn delete_refcount(&mut self, bucket: &str, hash: &str) -> Result<()> {
+    async fn delete_refcount(&self, bucket: &str, hash: &str) -> Result<()> {
         let table = self.table_name("refcount");
         let query = format!("DELETE FROM {} WHERE bucket = $1 AND hash = $2", table);
         sqlx::query(&query)
@@ -422,7 +422,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn delete_logical_size(&mut self, bucket: &str, hash: &str) -> Result<()> {
+    async fn delete_logical_size(&self, bucket: &str, hash: &str) -> Result<()> {
         let table = self.table_name("logical_size");
         let query = format!("DELETE FROM {} WHERE bucket = $1 AND hash = $2", table);
         sqlx::query(&query)
@@ -433,7 +433,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn hash_is_referenced(&mut self, bucket: &str, hash: &str) -> Result<bool> {
+    async fn hash_is_referenced(&self, bucket: &str, hash: &str) -> Result<bool> {
         let table = self.table_name("ref_file");
         let query = format!(
             "SELECT 1 FROM {} WHERE bucket = $1 AND hash = $2 LIMIT 1",
@@ -447,7 +447,7 @@ impl KVStorageTrait for Postgres {
         Ok(result.is_some())
     }
 
-    async fn get_compressed_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
+    async fn get_compressed_size(&self, bucket: &str, hash: &str) -> Result<usize> {
         let table = self.table_name("logical_size");
         let query = format!(
             "SELECT compressed_size FROM {} WHERE bucket = $1 AND hash = $2",
@@ -467,7 +467,7 @@ impl KVStorageTrait for Postgres {
         }
     }
 
-    async fn set_compressed_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()> {
+    async fn set_compressed_size(&self, bucket: &str, hash: &str, size: usize) -> Result<()> {
         let table = self.table_name("logical_size");
         let query = format!(
             "INSERT INTO {} (bucket, hash, logical_size, compressed_size) VALUES ($1, $2, 0, $3)
@@ -483,7 +483,7 @@ impl KVStorageTrait for Postgres {
         Ok(())
     }
 
-    async fn get_total_files(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_total_files(&self, bucket: &str) -> Result<i64> {
         let table = self.table_name("modified");
         let query = format!("SELECT COUNT(*) FROM {} WHERE bucket = $1", table);
         let (count,): (i64,) = sqlx::query_as(&query)
@@ -493,7 +493,7 @@ impl KVStorageTrait for Postgres {
         Ok(count)
     }
 
-    async fn get_total_blobs(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_total_blobs(&self, bucket: &str) -> Result<i64> {
         let table = self.table_name("refcount");
         let query = format!(
             "SELECT COUNT(*) FROM {} WHERE bucket = $1 AND refcount > 0",
@@ -506,7 +506,7 @@ impl KVStorageTrait for Postgres {
         Ok(count)
     }
 
-    async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_total_storage_bytes(&self, bucket: &str) -> Result<i64> {
         // Only count storage for blobs that are actually referenced (refcount > 0)
         let refcount_table = self.table_name("refcount");
         let logical_size_table = self.table_name("logical_size");
@@ -524,7 +524,7 @@ impl KVStorageTrait for Postgres {
         Ok(total)
     }
 
-    async fn get_total_logical_bytes(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_total_logical_bytes(&self, bucket: &str) -> Result<i64> {
         let refcount_table = self.table_name("refcount");
         let logical_size_table = self.table_name("logical_size");
         let query = format!(
@@ -541,7 +541,7 @@ impl KVStorageTrait for Postgres {
         Ok(total)
     }
 
-    async fn get_total_compressed_bytes_no_dedup(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_total_compressed_bytes_no_dedup(&self, bucket: &str) -> Result<i64> {
         let refcount_table = self.table_name("refcount");
         let logical_size_table = self.table_name("logical_size");
         let query = format!(
@@ -558,7 +558,7 @@ impl KVStorageTrait for Postgres {
         Ok(total)
     }
 
-    async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64> {
+    async fn get_deduplicated_bytes_saved(&self, bucket: &str) -> Result<i64> {
         let refcount_table = self.table_name("refcount");
         let logical_size_table = self.table_name("logical_size");
         let query = format!(
@@ -582,14 +582,14 @@ impl KVStorageTrait for Postgres {
         (active_connections, idle_connections)
     }
 
-    async fn get_version(&mut self) -> Result<Option<String>> {
+    async fn get_version(&self) -> Result<Option<String>> {
         let table = self.table_name("version");
         let query = format!("SELECT version FROM {} WHERE id = 1", table);
         let result: Option<(String,)> = sqlx::query_as(&query).fetch_optional(&self.pool).await?;
         Ok(result.map(|r| r.0))
     }
 
-    async fn set_version(&mut self, version: &str) -> Result<()> {
+    async fn set_version(&self, version: &str) -> Result<()> {
         let table = self.table_name("version");
         // Use upsert to ensure only one row exists
         let query = format!(

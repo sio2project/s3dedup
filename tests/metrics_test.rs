@@ -12,7 +12,7 @@ use tower::util::ServiceExt;
 async fn create_test_app_state() -> Arc<AppState> {
     let (config, _unique_id) = common::create_test_config("test-metrics");
     let app_state = AppState::new(&config).await.unwrap();
-    app_state.kvstorage.lock().await.setup().await.unwrap();
+    app_state.kvstorage.setup().await.unwrap();
     app_state
 }
 
@@ -230,7 +230,7 @@ async fn test_migration_active_metric() {
     let app_state = AppState::new_with_filetracker(&config, "http://localhost:8000".to_string())
         .await
         .unwrap();
-    app_state.kvstorage.lock().await.setup().await.unwrap();
+    app_state.kvstorage.setup().await.unwrap();
 
     let app = Router::new()
         .route("/metrics", get(s3dedup::routes::metrics::metrics_handler))

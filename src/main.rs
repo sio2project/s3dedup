@@ -186,8 +186,6 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) -> anyhow:
         .context("Failed to initialize app state")?;
     app_state
         .kvstorage
-        .lock()
-        .await
         .setup()
         .await
         .context("Failed to setup KV storage")?;
@@ -195,8 +193,6 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) -> anyhow:
     // Store instance version
     app_state
         .kvstorage
-        .lock()
-        .await
         .set_version(env!("CARGO_PKG_VERSION"))
         .await
         .context("Failed to store instance version")?;
@@ -246,8 +242,6 @@ async fn run_migrate(
     // Setup KV storage
     app_state
         .kvstorage
-        .lock()
-        .await
         .setup()
         .await
         .context("Failed to setup KV storage")?;
@@ -309,8 +303,6 @@ async fn run_migrate_v1(
     // Setup KV storage
     app_state
         .kvstorage
-        .lock()
-        .await
         .setup()
         .await
         .context("Failed to setup KV storage")?;
@@ -402,8 +394,6 @@ async fn run_live_migrate(
 
     app_state
         .kvstorage
-        .lock()
-        .await
         .setup()
         .await
         .context("Failed to setup KV storage")?;
@@ -510,8 +500,6 @@ async fn run_live_migrate_v1(
     };
     app_state
         .kvstorage
-        .lock()
-        .await
         .setup()
         .await
         .context("Failed to setup KV storage")?;

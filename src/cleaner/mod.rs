@@ -9,7 +9,6 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Deserialize, Clone)]
@@ -49,8 +48,8 @@ impl Default for CleanerConfig {
 
 pub struct Cleaner {
     bucket_name: String,
-    kvstorage: Arc<Mutex<Box<KVStorage>>>,
-    s3storage: Arc<Mutex<Box<S3Storage>>>,
+    kvstorage: Arc<KVStorage>,
+    s3storage: Arc<S3Storage>,
     locks: Arc<LocksStorage>,
     config: CleanerConfig,
 }
@@ -58,8 +57,8 @@ pub struct Cleaner {
 impl Cleaner {
     pub fn new(
         bucket_name: String,
-        kvstorage: Arc<Mutex<Box<KVStorage>>>,
-        s3storage: Arc<Mutex<Box<S3Storage>>>,
+        kvstorage: Arc<KVStorage>,
+        s3storage: Arc<S3Storage>,
         locks: Arc<LocksStorage>,
         config: CleanerConfig,
     ) -> Self {
@@ -208,8 +207,6 @@ impl Cleaner {
         loop {
             let ref_files = self
                 .kvstorage
-                .lock()
-                .await
                 .list_ref_files_batch(&self.bucket_name, self.config.batch_size, offset)
                 .await?;
 
@@ -223,8 +220,6 @@ impl Cleaner {
             for (path, hash) in ref_files.iter() {
                 let refcount = self
                     .kvstorage
-                    .lock()
-                    .await
                     .get_ref_count(&self.bucket_name, hash)
                     .await?;
 
@@ -246,12 +241,8 @@ impl Cleaner {
                     };
 
                     // Re-check refcount after acquiring lock (double-check pattern)
-                    let refcount_after_lock = self
-                        .kvstorage
-                        .lock()
-                        .await
-                        .get_ref_count(&self.bucket_name, hash)
-                        .await;
+                    let refcount_after_lock =
+                        self.kvstorage.get_ref_count(&self.bucket_name, hash).await;
 
                     let refcount_after_lock = match refcount_after_lock {
                         Ok(r) => r,
@@ -279,8 +270,6 @@ impl Cleaner {
                     // Delete ref_file and modified entries
                     if let Err(e) = self
                         .kvstorage
-                        .lock()
-                        .await
                         .delete_ref_file(&self.bucket_name, path)
                         .await
                     {
@@ -293,8 +282,6 @@ impl Cleaner {
 
                     if let Err(e) = self
                         .kvstorage
-                        .lock()
-                        .await
                         .delete_modified(&self.bucket_name, path)
                         .await
                     {
@@ -332,8 +319,6 @@ impl Cleaner {
         loop {
             let refcounts = self
                 .kvstorage
-                .lock()
-                .await
                 .list_refcounts_batch(&self.bucket_name, self.config.batch_size, offset)
                 .await?;
 
@@ -348,8 +333,6 @@ impl Cleaner {
                 // Check if hash is referenced by any ref_file (database lookup)
                 let is_referenced = self
                     .kvstorage
-                    .lock()
-                    .await
                     .hash_is_referenced(&self.bucket_name, &hash)
                     .await?;
 
@@ -362,8 +345,6 @@ impl Cleaner {
                     // Delete the refcount entry
                     if let Err(e) = self
                         .kvstorage
-                        .lock()
-                        .await
                         .delete_refcount(&self.bucket_name, &hash)
                         .await
                     {
@@ -396,8 +377,6 @@ impl Cleaner {
         loop {
             let (keys, next_token) = self
                 .s3storage
-                .lock()
-                .await
                 .list_objects(continuation_token.clone())
                 .await?;
 
@@ -418,13 +397,7 @@ impl Cleaner {
                     }
                 };
 
-                let refcount = match self
-                    .kvstorage
-                    .lock()
-                    .await
-                    .get_ref_count(&self.bucket_name, &key)
-                    .await
-                {
+                let refcount = match self.kvstorage.get_ref_count(&self.bucket_name, &key).await {
                     Ok(v) => v,
                     Err(e) => {
                         let _ = hash_guard.release().await;
@@ -438,14 +411,12 @@ impl Cleaner {
                     // Get compressed size before deleting (for metrics)
                     let compressed_size = self
                         .kvstorage
-                        .lock()
-                        .await
                         .get_compressed_size(&self.bucket_name, &key)
                         .await
                         .unwrap_or(0);
 
                     // Delete the S3 object
-                    if let Err(e) = self.s3storage.lock().await.delete_object(&key).await {
+                    if let Err(e) = self.s3storage.delete_object(&key).await {
                         error!(
                             "Failed to delete S3 object (bucket={}, key={}): {}",
                             self.bucket_name, key, e
@@ -489,8 +460,6 @@ impl Cleaner {
         loop {
             let hashes = self
                 .kvstorage
-                .lock()
-                .await
                 .list_logical_sizes_batch(&self.bucket_name, self.config.batch_size, offset)
                 .await?;
 
@@ -504,8 +473,6 @@ impl Cleaner {
             for hash in hashes {
                 let refcount = self
                     .kvstorage
-                    .lock()
-                    .await
                     .get_ref_count(&self.bucket_name, &hash)
                     .await?;
 
@@ -515,8 +482,6 @@ impl Cleaner {
                     // Delete the logical_size entry
                     if let Err(e) = self
                         .kvstorage
-                        .lock()
-                        .await
                         .delete_logical_size(&self.bucket_name, &hash)
                         .await
                     {

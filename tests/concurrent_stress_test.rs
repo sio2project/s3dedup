@@ -17,7 +17,6 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     use s3dedup::kvstorage::KVStorage;
     use s3dedup::locks::LocksStorage;
     use s3dedup::s3storage::S3Storage;
-    use tokio::sync::Mutex;
 
     let (config, _unique_id) = common::create_test_config("test-concurrent");
 
@@ -29,14 +28,14 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
 
     let app_state = Arc::new(AppState {
         bucket_name: config.bucket.name.clone(),
-        kvstorage: Arc::new(Mutex::new(kvstorage)),
+        kvstorage: Arc::new(*kvstorage),
         locks: Arc::new(*locks),
-        s3storage: Arc::new(Mutex::new(s3storage)),
+        s3storage: Arc::new(*s3storage),
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
     });
 
-    app_state.kvstorage.lock().await.setup().await.unwrap();
+    app_state.kvstorage.setup().await.unwrap();
 
     let router = Router::new()
         .route(
@@ -153,8 +152,6 @@ async fn test_delete_put_race_condition() {
     // Verify initial refcount
     let initial_refcount = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_count(&app_state.bucket_name, &sha256)
         .await
         .unwrap();
@@ -247,8 +244,6 @@ async fn test_delete_put_race_condition() {
     // Verify final refcount matches expected (num_concurrent new files)
     let final_refcount = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_count(&app_state.bucket_name, &sha256)
         .await
         .unwrap();
@@ -260,13 +255,7 @@ async fn test_delete_put_race_condition() {
     );
 
     // Verify blob exists in S3
-    let blob_exists = app_state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256)
-        .await
-        .unwrap();
+    let blob_exists = app_state.s3storage.object_exists(&sha256).await.unwrap();
 
     assert!(
         blob_exists,
@@ -332,8 +321,6 @@ async fn test_concurrent_put_same_content() {
     // Verify refcount
     let refcount = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_count(&app_state.bucket_name, &sha256)
         .await
         .unwrap();
@@ -395,8 +382,6 @@ async fn test_concurrent_delete_shared_blob() {
     // Verify initial state
     let initial_refcount = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_count(&app_state.bucket_name, &sha256)
         .await
         .unwrap();
@@ -444,21 +429,13 @@ async fn test_concurrent_delete_shared_blob() {
     // Verify final refcount is 0
     let final_refcount = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_count(&app_state.bucket_name, &sha256)
         .await
         .unwrap();
     assert_eq!(final_refcount, 0, "Final refcount should be 0");
 
     // Verify blob is deleted from S3
-    let blob_exists = app_state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256)
-        .await
-        .unwrap();
+    let blob_exists = app_state.s3storage.object_exists(&sha256).await.unwrap();
     assert!(
         !blob_exists,
         "S3 blob should be deleted when refcount reaches 0"
@@ -580,8 +557,6 @@ async fn test_mixed_concurrent_operations() {
         let sha256 = s3dedup::routes::ft::storage_helpers::compute_sha256(content);
         let refcount = app_state
             .kvstorage
-            .lock()
-            .await
             .get_ref_count(&app_state.bucket_name, &sha256)
             .await
             .unwrap();
@@ -594,13 +569,7 @@ async fn test_mixed_concurrent_operations() {
 
         // If refcount > 0, blob should exist
         if refcount > 0 {
-            let blob_exists = app_state
-                .s3storage
-                .lock()
-                .await
-                .object_exists(&sha256)
-                .await
-                .unwrap();
+            let blob_exists = app_state.s3storage.object_exists(&sha256).await.unwrap();
             assert!(
                 blob_exists,
                 "Blob should exist when refcount is {} > 0",
@@ -681,27 +650,17 @@ async fn test_rapid_put_delete_same_path() {
     // Final state: file either exists or doesn't, but system should be consistent
     let file_hash = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_file(&app_state.bucket_name, path)
         .await
         .unwrap();
 
     let refcount = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_count(&app_state.bucket_name, &sha256)
         .await
         .unwrap();
 
-    let blob_exists = app_state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256)
-        .await
-        .unwrap();
+    let blob_exists = app_state.s3storage.object_exists(&sha256).await.unwrap();
 
     // Consistency check
     if !file_hash.is_empty() {
@@ -793,8 +752,6 @@ async fn test_concurrent_overwrite_different_content() {
     let initial_sha256 = s3dedup::routes::ft::storage_helpers::compute_sha256(initial_content);
     let initial_refcount = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_count(&app_state.bucket_name, &initial_sha256)
         .await
         .unwrap();
@@ -841,8 +798,6 @@ async fn test_cleaner_vs_put_race() {
         // Note: In real cleaner, this is protected by hash lock
         cleaner_app_state
             .kvstorage
-            .lock()
-            .await
             .get_ref_count(&cleaner_app_state.bucket_name, &cleaner_sha256)
             .await
             .unwrap()
@@ -878,8 +833,6 @@ async fn test_cleaner_vs_put_race() {
     // Verify all new files exist and blob is intact
     let final_refcount = app_state
         .kvstorage
-        .lock()
-        .await
         .get_ref_count(&app_state.bucket_name, &sha256)
         .await
         .unwrap();
@@ -892,13 +845,7 @@ async fn test_cleaner_vs_put_race() {
         final_refcount
     );
 
-    let blob_exists = app_state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256)
-        .await
-        .unwrap();
+    let blob_exists = app_state.s3storage.object_exists(&sha256).await.unwrap();
     assert!(
         blob_exists,
         "Blob should exist - cleaner race caused data loss!"

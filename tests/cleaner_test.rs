@@ -6,7 +6,6 @@ use s3dedup::kvstorage::KVStorage;
 use s3dedup::locks::LocksStorage;
 use s3dedup::s3storage::S3Storage;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 // Helper to check if S3 storage is available
 async fn is_s3_available() -> bool {
@@ -52,12 +51,7 @@ fn create_test_config(bucket_name: &str) -> Config {
 // Helper to setup test environment
 async fn setup_test_env(
     prefix: &str,
-) -> (
-    Arc<Mutex<Box<KVStorage>>>,
-    Arc<Mutex<Box<S3Storage>>>,
-    Arc<LocksStorage>,
-    String,
-) {
+) -> (Arc<KVStorage>, Arc<S3Storage>, Arc<LocksStorage>, String) {
     let unique_id = common::generate_unique_id();
     let bucket_name = format!("{}-{}", prefix, unique_id);
     let config = create_test_config(&bucket_name);
@@ -68,12 +62,12 @@ async fn setup_test_env(
         .await
         .unwrap();
 
-    let kvstorage = Arc::new(Mutex::new(kvstorage));
-    let s3storage = Arc::new(Mutex::new(s3storage));
+    let kvstorage = Arc::new(*kvstorage);
+    let s3storage = Arc::new(*s3storage);
     let locks = Arc::new(*locks);
 
     // Setup KV storage
-    kvstorage.lock().await.setup().await.unwrap();
+    kvstorage.setup().await.unwrap();
 
     (kvstorage, s3storage, locks, bucket_name.to_string())
 }
@@ -125,35 +119,25 @@ async fn test_clean_orphaned_ref_files() {
 
     // Create ref_file entries without corresponding refcounts
     kvstorage
-        .lock()
-        .await
         .set_ref_file(&bucket_name, "file1.txt", "hash1")
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .set_modified(&bucket_name, "file1.txt", 1000)
         .await
         .unwrap();
 
     kvstorage
-        .lock()
-        .await
         .set_ref_file(&bucket_name, "file2.txt", "hash2")
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .set_modified(&bucket_name, "file2.txt", 2000)
         .await
         .unwrap();
 
     // Verify ref_files exist
     let hash1 = kvstorage
-        .lock()
-        .await
         .get_ref_file(&bucket_name, "file1.txt")
         .await
         .unwrap();
@@ -179,16 +163,12 @@ async fn test_clean_orphaned_ref_files() {
 
     // Verify ref_files were cleaned up
     let hash1 = kvstorage
-        .lock()
-        .await
         .get_ref_file(&bucket_name, "file1.txt")
         .await
         .unwrap();
     assert_eq!(hash1, ""); // Should be deleted
 
     let modified1 = kvstorage
-        .lock()
-        .await
         .get_modified(&bucket_name, "file1.txt")
         .await
         .unwrap();
@@ -207,42 +187,30 @@ async fn test_clean_unreferenced_refcounts() {
 
     // Create refcount entries without corresponding ref_files
     kvstorage
-        .lock()
-        .await
         .atomic_increment_ref_count(&bucket_name, "hash1")
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .atomic_increment_ref_count(&bucket_name, "hash2")
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .atomic_increment_ref_count(&bucket_name, "hash2")
         .await
         .unwrap();
 
     // Create one ref_file that points to hash3 (which will have a refcount)
     kvstorage
-        .lock()
-        .await
         .set_ref_file(&bucket_name, "file3.txt", "hash3")
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .atomic_increment_ref_count(&bucket_name, "hash3")
         .await
         .unwrap();
 
     // Verify refcounts exist
     let count1 = kvstorage
-        .lock()
-        .await
         .get_ref_count(&bucket_name, "hash1")
         .await
         .unwrap();
@@ -268,16 +236,12 @@ async fn test_clean_unreferenced_refcounts() {
 
     // Verify unreferenced refcounts were cleaned up
     let count1 = kvstorage
-        .lock()
-        .await
         .get_ref_count(&bucket_name, "hash1")
         .await
         .unwrap();
     assert_eq!(count1, 0); // Should be deleted
 
     let count2 = kvstorage
-        .lock()
-        .await
         .get_ref_count(&bucket_name, "hash2")
         .await
         .unwrap();
@@ -285,8 +249,6 @@ async fn test_clean_unreferenced_refcounts() {
 
     // hash3 should still exist because it has a ref_file pointing to it
     let count3 = kvstorage
-        .lock()
-        .await
         .get_ref_count(&bucket_name, "hash3")
         .await
         .unwrap();
@@ -304,41 +266,22 @@ async fn test_clean_unused_s3_objects() {
         setup_test_env("test-clean-unused-s3-objects").await;
 
     // Upload objects to S3
-    s3storage
-        .lock()
-        .await
-        .put_object("hash1", vec![1, 2, 3])
-        .await
-        .unwrap();
-    s3storage
-        .lock()
-        .await
-        .put_object("hash2", vec![4, 5, 6])
-        .await
-        .unwrap();
-    s3storage
-        .lock()
-        .await
-        .put_object("hash3", vec![7, 8, 9])
-        .await
-        .unwrap();
+    s3storage.put_object("hash1", vec![1, 2, 3]).await.unwrap();
+    s3storage.put_object("hash2", vec![4, 5, 6]).await.unwrap();
+    s3storage.put_object("hash3", vec![7, 8, 9]).await.unwrap();
 
     // Create refcount + ref_file for hash3 only (both needed to survive cleanup)
     kvstorage
-        .lock()
-        .await
         .atomic_increment_ref_count(&bucket_name, "hash3")
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .set_ref_file(&bucket_name, "file3.txt", "hash3")
         .await
         .unwrap();
 
     // Verify objects exist
-    let exists1 = s3storage.lock().await.object_exists("hash1").await.unwrap();
+    let exists1 = s3storage.object_exists("hash1").await.unwrap();
     assert!(exists1);
 
     // Run cleaner
@@ -360,14 +303,14 @@ async fn test_clean_unused_s3_objects() {
     assert!(result.is_ok());
 
     // Verify unused S3 objects were cleaned up
-    let exists1 = s3storage.lock().await.object_exists("hash1").await.unwrap();
+    let exists1 = s3storage.object_exists("hash1").await.unwrap();
     assert!(!exists1); // Should be deleted
 
-    let exists2 = s3storage.lock().await.object_exists("hash2").await.unwrap();
+    let exists2 = s3storage.object_exists("hash2").await.unwrap();
     assert!(!exists2); // Should be deleted
 
     // hash3 should still exist because it has a refcount
-    let exists3 = s3storage.lock().await.object_exists("hash3").await.unwrap();
+    let exists3 = s3storage.object_exists("hash3").await.unwrap();
     assert!(exists3); // Should still exist
 }
 
@@ -383,42 +326,30 @@ async fn test_clean_orphaned_logical_sizes() {
 
     // Create logical_size entries without corresponding refcounts
     kvstorage
-        .lock()
-        .await
         .set_logical_size(&bucket_name, "hash1", 100)
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .set_logical_size(&bucket_name, "hash2", 200)
         .await
         .unwrap();
 
     // Create one with a refcount + ref_file (both needed to survive cleanup)
     kvstorage
-        .lock()
-        .await
         .set_logical_size(&bucket_name, "hash3", 300)
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .atomic_increment_ref_count(&bucket_name, "hash3")
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .set_ref_file(&bucket_name, "file3.txt", "hash3")
         .await
         .unwrap();
 
     // Verify logical_sizes exist
     let size1 = kvstorage
-        .lock()
-        .await
         .get_logical_size(&bucket_name, "hash1")
         .await
         .unwrap();
@@ -444,16 +375,12 @@ async fn test_clean_orphaned_logical_sizes() {
 
     // Verify orphaned logical_sizes were cleaned up
     let size1 = kvstorage
-        .lock()
-        .await
         .get_logical_size(&bucket_name, "hash1")
         .await
         .unwrap();
     assert_eq!(size1, 0); // Should be deleted
 
     let size2 = kvstorage
-        .lock()
-        .await
         .get_logical_size(&bucket_name, "hash2")
         .await
         .unwrap();
@@ -461,8 +388,6 @@ async fn test_clean_orphaned_logical_sizes() {
 
     // hash3 should still exist because it has a refcount
     let size3 = kvstorage
-        .lock()
-        .await
         .get_logical_size(&bucket_name, "hash3")
         .await
         .unwrap();
@@ -482,8 +407,6 @@ async fn test_max_deletes_per_run_limit() {
     // Create many orphaned ref_files (more than max_deletes_per_run)
     for i in 0..20 {
         kvstorage
-            .lock()
-            .await
             .set_ref_file(
                 &bucket_name,
                 &format!("file{}.txt", i),
@@ -492,8 +415,6 @@ async fn test_max_deletes_per_run_limit() {
             .await
             .unwrap();
         kvstorage
-            .lock()
-            .await
             .set_modified(&bucket_name, &format!("file{}.txt", i), 1000 + i as i64)
             .await
             .unwrap();
@@ -521,8 +442,6 @@ async fn test_max_deletes_per_run_limit() {
     let mut remaining = 0;
     for i in 0..20 {
         let hash = kvstorage
-            .lock()
-            .await
             .get_ref_file(&bucket_name, &format!("file{}.txt", i))
             .await
             .unwrap();
@@ -548,8 +467,6 @@ async fn test_batched_processing() {
     // Create more entries than batch_size
     for i in 0..25 {
         kvstorage
-            .lock()
-            .await
             .set_ref_file(
                 &bucket_name,
                 &format!("file{}.txt", i),
@@ -558,8 +475,6 @@ async fn test_batched_processing() {
             .await
             .unwrap();
         kvstorage
-            .lock()
-            .await
             .set_modified(&bucket_name, &format!("file{}.txt", i), 1000 + i as i64)
             .await
             .unwrap();
@@ -586,8 +501,6 @@ async fn test_batched_processing() {
     // All ref_files should be cleaned (none have refcounts)
     for i in 0..25 {
         let hash = kvstorage
-            .lock()
-            .await
             .get_ref_file(&bucket_name, &format!("file{}.txt", i))
             .await
             .unwrap();
@@ -608,24 +521,18 @@ async fn test_full_cleanup_cycle() {
     // Scenario: Simulate a crash during PUT operation
     // 1. S3 object uploaded
     s3storage
-        .lock()
-        .await
         .put_object("crash_hash", vec![1, 2, 3, 4, 5])
         .await
         .unwrap();
 
     // 2. Refcount incremented
     kvstorage
-        .lock()
-        .await
         .atomic_increment_ref_count(&bucket_name, "crash_hash")
         .await
         .unwrap();
 
     // 3. Logical size set
     kvstorage
-        .lock()
-        .await
         .set_logical_size(&bucket_name, "crash_hash", 5)
         .await
         .unwrap();
@@ -635,32 +542,22 @@ async fn test_full_cleanup_cycle() {
 
     // Also add a properly completed file
     s3storage
-        .lock()
-        .await
         .put_object("good_hash", vec![6, 7, 8])
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .atomic_increment_ref_count(&bucket_name, "good_hash")
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .set_logical_size(&bucket_name, "good_hash", 3)
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .set_ref_file(&bucket_name, "good_file.txt", "good_hash")
         .await
         .unwrap();
     kvstorage
-        .lock()
-        .await
         .set_modified(&bucket_name, "good_file.txt", 5000)
         .await
         .unwrap();
@@ -685,16 +582,12 @@ async fn test_full_cleanup_cycle() {
 
     // Verify crash_hash was cleaned up (no ref_file points to it)
     let crash_refcount = kvstorage
-        .lock()
-        .await
         .get_ref_count(&bucket_name, "crash_hash")
         .await
         .unwrap();
     assert_eq!(crash_refcount, 0, "crash_hash refcount should be deleted");
 
     let crash_size = kvstorage
-        .lock()
-        .await
         .get_logical_size(&bucket_name, "crash_hash")
         .await
         .unwrap();
@@ -705,26 +598,17 @@ async fn test_full_cleanup_cycle() {
 
     // Verify good_hash is still intact
     let good_refcount = kvstorage
-        .lock()
-        .await
         .get_ref_count(&bucket_name, "good_hash")
         .await
         .unwrap();
     assert_eq!(good_refcount, 1, "good_hash refcount should remain");
 
     let good_size = kvstorage
-        .lock()
-        .await
         .get_logical_size(&bucket_name, "good_hash")
         .await
         .unwrap();
     assert_eq!(good_size, 3, "good_hash logical_size should remain");
 
-    let good_exists = s3storage
-        .lock()
-        .await
-        .object_exists("good_hash")
-        .await
-        .unwrap();
+    let good_exists = s3storage.object_exists("good_hash").await.unwrap();
     assert!(good_exists, "good_hash S3 object should remain");
 }
