@@ -120,12 +120,7 @@ pub async fn ft_put_file(
     };
 
     // 5. Check existing version (matching original logic)
-    let current_modified = state
-        .kvstorage
-        .lock()
-        .await
-        .get_modified(&state.bucket_name, path)
-        .await;
+    let current_modified = state.kvstorage.get_modified(&state.bucket_name, path).await;
     if current_modified.is_err() {
         error!("Failed to get current modified");
         record_metrics("500");
@@ -236,7 +231,7 @@ pub async fn ft_put_file(
 
     debug!("Checking if blob {} already exists", s3_key);
     // Check if blob already exists
-    let blob_exists = match state.s3storage.lock().await.object_exists(s3_key).await {
+    let blob_exists = match state.s3storage.object_exists(s3_key).await {
         Ok(exists) => exists,
         Err(e) => {
             error!(
@@ -272,13 +267,7 @@ pub async fn ft_put_file(
     if !blob_exists {
         debug!("Creating new blob.");
         // Store blob in S3 (clone data before moving it in case we need it for dual-write)
-        if let Err(e) = state
-            .s3storage
-            .lock()
-            .await
-            .put_object(s3_key, final_data.clone())
-            .await
-        {
+        if let Err(e) = state.s3storage.put_object(s3_key, final_data.clone()).await {
             error!(
                 "Failed to store object in S3 for path '{}' (bucket={}, key={}): {}",
                 path, state.bucket_name, s3_key, e
@@ -300,8 +289,6 @@ pub async fn ft_put_file(
     // Store compressed size metadata (always, in case KV metadata was lost but S3 blob still exists)
     if let Err(e) = state
         .kvstorage
-        .lock()
-        .await
         .set_compressed_size(&state.bucket_name, &digest, final_data.len())
         .await
     {
@@ -322,8 +309,6 @@ pub async fn ft_put_file(
     // Store logical size metadata (always, in case KV metadata was lost but S3 blob still exists)
     if let Err(e) = state
         .kvstorage
-        .lock()
-        .await
         .set_logical_size(&state.bucket_name, &digest, logical_size)
         .await
     {
@@ -345,8 +330,6 @@ pub async fn ft_put_file(
     let old_hash = if current_modified > 0 {
         state
             .kvstorage
-            .lock()
-            .await
             .get_ref_file(&state.bucket_name, path)
             .await
             .ok()
@@ -366,8 +349,6 @@ pub async fn ft_put_file(
     if should_increment
         && let Err(e) = state
             .kvstorage
-            .lock()
-            .await
             .atomic_increment_ref_count(&state.bucket_name, &digest)
             .await
     {
@@ -421,8 +402,6 @@ pub async fn ft_put_file(
         // Decrement old reference count atomically and get new count
         let old_ref_count_result = state
             .kvstorage
-            .lock()
-            .await
             .atomic_decrement_ref_count(&state.bucket_name, &old_hash)
             .await;
 
@@ -431,7 +410,7 @@ pub async fn ft_put_file(
             && old_ref_count <= 0
         {
             debug!("Deleting unused blob: {}", old_hash);
-            let _ = state.s3storage.lock().await.delete_object(&old_hash).await;
+            let _ = state.s3storage.delete_object(&old_hash).await;
         }
 
         // Release old hash lock
@@ -443,8 +422,6 @@ pub async fn ft_put_file(
     // 9. Update file metadata (path -> hash mapping and timestamp)
     if let Err(e) = state
         .kvstorage
-        .lock()
-        .await
         .set_ref_file(&state.bucket_name, path, &digest)
         .await
     {
@@ -461,8 +438,6 @@ pub async fn ft_put_file(
 
     if let Err(e) = state
         .kvstorage
-        .lock()
-        .await
         .set_modified(&state.bucket_name, path, timestamp)
         .await
     {

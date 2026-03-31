@@ -21,7 +21,6 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
     use s3dedup::kvstorage::KVStorage;
     use s3dedup::locks::LocksStorage;
     use s3dedup::s3storage::S3Storage;
-    use tokio::sync::Mutex;
 
     let (config, _unique_id) = common::create_test_config("test");
 
@@ -33,14 +32,14 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
 
     let app_state = Arc::new(AppState {
         bucket_name: config.bucket.name.clone(),
-        kvstorage: Arc::new(Mutex::new(kvstorage)),
+        kvstorage: Arc::new(*kvstorage),
         locks: Arc::new(*locks),
-        s3storage: Arc::new(Mutex::new(s3storage)),
+        s3storage: Arc::new(*s3storage),
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
     });
 
-    app_state.kvstorage.lock().await.setup().await.unwrap();
+    app_state.kvstorage.setup().await.unwrap();
 
     let router = Router::new()
         .route(
@@ -473,13 +472,7 @@ async fn test_delete_file() {
     assert_eq!(put_response.status(), StatusCode::OK);
 
     // Verify blob exists in S3
-    let blob_exists = state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256)
-        .await
-        .unwrap();
+    let blob_exists = state.s3storage.object_exists(&sha256).await.unwrap();
     assert!(blob_exists, "Blob should exist in S3 after upload");
 
     // DELETE the file
@@ -500,13 +493,7 @@ async fn test_delete_file() {
     assert_eq!(delete_response.status(), StatusCode::OK);
 
     // Verify blob is deleted from S3
-    let blob_exists = state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256)
-        .await
-        .unwrap();
+    let blob_exists = state.s3storage.object_exists(&sha256).await.unwrap();
     assert!(
         !blob_exists,
         "Blob should be deleted from S3 after file deletion"
@@ -696,13 +683,7 @@ async fn test_dedup_blob_deleted_when_refcount_zero() {
     .unwrap();
 
     // Verify blob exists in S3
-    let blob_exists = state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256)
-        .await
-        .unwrap();
+    let blob_exists = state.s3storage.object_exists(&sha256).await.unwrap();
     assert!(blob_exists, "Blob should exist in S3 after upload");
 
     // DELETE first file - blob should still exist (refcount = 1)
@@ -720,13 +701,7 @@ async fn test_dedup_blob_deleted_when_refcount_zero() {
     .unwrap();
 
     // Verify blob still exists in S3 (refcount = 1)
-    let blob_exists = state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256)
-        .await
-        .unwrap();
+    let blob_exists = state.s3storage.object_exists(&sha256).await.unwrap();
     assert!(
         blob_exists,
         "Blob should still exist in S3 after first deletion (refcount=1)"
@@ -768,13 +743,7 @@ async fn test_dedup_blob_deleted_when_refcount_zero() {
     .unwrap();
 
     // Verify blob is deleted from S3
-    let blob_exists = state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256)
-        .await
-        .unwrap();
+    let blob_exists = state.s3storage.object_exists(&sha256).await.unwrap();
     assert!(
         !blob_exists,
         "Blob should be deleted from S3 after refcount reaches 0"
@@ -997,13 +966,7 @@ async fn test_dedup_update_same_path() {
     assert_eq!(put1.status(), StatusCode::OK);
 
     // Verify v1 blob exists in S3
-    let v1_exists = state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256_v1)
-        .await
-        .unwrap();
+    let v1_exists = state.s3storage.object_exists(&sha256_v1).await.unwrap();
     assert!(v1_exists, "V1 blob should exist in S3");
 
     // PUT version 2 to the same path (should decrement refcount of v1, increment v2)
@@ -1033,23 +996,11 @@ async fn test_dedup_update_same_path() {
     assert_eq!(put2.status(), StatusCode::OK);
 
     // Verify v1 blob is deleted from S3 (refcount dropped to 0)
-    let v1_exists = state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256_v1)
-        .await
-        .unwrap();
+    let v1_exists = state.s3storage.object_exists(&sha256_v1).await.unwrap();
     assert!(!v1_exists, "V1 blob should be deleted from S3 after update");
 
     // Verify v2 blob exists in S3
-    let v2_exists = state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256_v2)
-        .await
-        .unwrap();
+    let v2_exists = state.s3storage.object_exists(&sha256_v2).await.unwrap();
     assert!(v2_exists, "V2 blob should exist in S3");
 
     // GET should return version 2
@@ -1112,8 +1063,6 @@ async fn test_dedup_same_content_same_path_refcount() {
     // Verify refcount is 1
     let refcount1 = state
         .kvstorage
-        .lock()
-        .await
         .get_ref_count(&state.bucket_name, &sha256)
         .await
         .unwrap();
@@ -1145,8 +1094,6 @@ async fn test_dedup_same_content_same_path_refcount() {
     // Verify refcount is STILL 1 (not incremented)
     let refcount2 = state
         .kvstorage
-        .lock()
-        .await
         .get_ref_count(&state.bucket_name, &sha256)
         .await
         .unwrap();
@@ -1156,13 +1103,7 @@ async fn test_dedup_same_content_same_path_refcount() {
     );
 
     // Verify blob still exists in S3
-    let blob_exists = state
-        .s3storage
-        .lock()
-        .await
-        .object_exists(&sha256)
-        .await
-        .unwrap();
+    let blob_exists = state.s3storage.object_exists(&sha256).await.unwrap();
     assert!(blob_exists, "Blob should still exist in S3");
 
     // GET should return the content
@@ -1225,8 +1166,6 @@ async fn test_compressed_size_preserved() {
     // Verify compressed_size is set correctly (should be size of gzipped data)
     let compressed_size = state
         .kvstorage
-        .lock()
-        .await
         .get_compressed_size(&state.bucket_name, &sha256)
         .await
         .unwrap();
@@ -1239,8 +1178,6 @@ async fn test_compressed_size_preserved() {
     // Verify logical_size is set correctly
     let logical_size = state
         .kvstorage
-        .lock()
-        .await
         .get_logical_size(&state.bucket_name, &sha256)
         .await
         .unwrap();
@@ -1277,8 +1214,6 @@ async fn test_compressed_size_preserved() {
     // Verify compressed_size is STILL preserved (bug fix test)
     let compressed_size_after = state
         .kvstorage
-        .lock()
-        .await
         .get_compressed_size(&state.bucket_name, &sha256)
         .await
         .unwrap();
@@ -1290,8 +1225,6 @@ async fn test_compressed_size_preserved() {
     // Verify logical_size is still correct
     let logical_size_after = state
         .kvstorage
-        .lock()
-        .await
         .get_logical_size(&state.bucket_name, &sha256)
         .await
         .unwrap();
@@ -1303,8 +1236,6 @@ async fn test_compressed_size_preserved() {
     // Verify metrics query works correctly
     let total_storage = state
         .kvstorage
-        .lock()
-        .await
         .get_total_storage_bytes(&state.bucket_name)
         .await
         .unwrap();

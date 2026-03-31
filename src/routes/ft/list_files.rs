@@ -62,8 +62,6 @@ pub async fn ft_list_files(
     // Get all files under this path prefix
     let files_result = state
         .kvstorage
-        .lock()
-        .await
         .list_files(&state.bucket_name, path, timestamp)
         .await;
 

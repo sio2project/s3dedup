@@ -20,35 +20,35 @@ pub(crate) trait KVStorageTrait {
     where
         Self: Sized;
 
-    async fn setup(&mut self) -> Result<()>;
-    async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32>;
+    async fn setup(&self) -> Result<()>;
+    async fn get_ref_count(&self, bucket: &str, hash: &str) -> Result<i32>;
 
     /// Atomically increment the reference count (database-level atomic operation)
     /// Returns the new reference count after incrementing.
-    async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32>;
+    async fn atomic_increment_ref_count(&self, bucket: &str, hash: &str) -> Result<i32>;
 
     /// Atomically decrement the reference count (database-level atomic operation)
     /// If the reference count is already 0, do nothing and return 0.
     /// Returns the new reference count after decrementing.
-    async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32>;
+    async fn atomic_decrement_ref_count(&self, bucket: &str, hash: &str) -> Result<i32>;
 
-    async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64>;
-    async fn set_modified(&mut self, bucket: &str, path: &str, modified: i64) -> Result<()>;
-    async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<()>;
+    async fn get_modified(&self, bucket: &str, path: &str) -> Result<i64>;
+    async fn set_modified(&self, bucket: &str, path: &str, modified: i64) -> Result<()>;
+    async fn delete_modified(&self, bucket: &str, path: &str) -> Result<()>;
 
-    async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String>;
-    async fn set_ref_file(&mut self, bucket: &str, path: &str, hash: &str) -> Result<()>;
-    async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<()>;
+    async fn get_ref_file(&self, bucket: &str, path: &str) -> Result<String>;
+    async fn set_ref_file(&self, bucket: &str, path: &str, hash: &str) -> Result<()>;
+    async fn delete_ref_file(&self, bucket: &str, path: &str) -> Result<()>;
 
-    async fn get_logical_size(&mut self, bucket: &str, hash: &str) -> Result<usize>;
-    async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()>;
+    async fn get_logical_size(&self, bucket: &str, hash: &str) -> Result<usize>;
+    async fn set_logical_size(&self, bucket: &str, hash: &str, size: usize) -> Result<()>;
 
-    async fn get_compressed_size(&mut self, bucket: &str, hash: &str) -> Result<usize>;
-    async fn set_compressed_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()>;
+    async fn get_compressed_size(&self, bucket: &str, hash: &str) -> Result<usize>;
+    async fn set_compressed_size(&self, bucket: &str, hash: &str, size: usize) -> Result<()>;
 
     /// List all files under a given path prefix that were modified at or before the given timestamp
     async fn list_files(
-        &mut self,
+        &self,
         bucket: &str,
         path_prefix: &str,
         timestamp: i64,
@@ -57,7 +57,7 @@ pub(crate) trait KVStorageTrait {
     // Batched methods for cleaner
     /// List ref_file entries in batches (path, hash)
     async fn list_ref_files_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
@@ -65,7 +65,7 @@ pub(crate) trait KVStorageTrait {
 
     /// List refcount entries in batches (hash, count)
     async fn list_refcounts_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
@@ -73,47 +73,47 @@ pub(crate) trait KVStorageTrait {
 
     /// List logical_size entries in batches (hash)
     async fn list_logical_sizes_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
     ) -> Result<Vec<String>>;
 
     /// Delete a refcount entry
-    async fn delete_refcount(&mut self, bucket: &str, hash: &str) -> Result<()>;
+    async fn delete_refcount(&self, bucket: &str, hash: &str) -> Result<()>;
 
     /// Delete a logical_size entry
-    async fn delete_logical_size(&mut self, bucket: &str, hash: &str) -> Result<()>;
+    async fn delete_logical_size(&self, bucket: &str, hash: &str) -> Result<()>;
 
     /// Check if a hash is referenced by any ref_file entry
     /// Used by cleaner to check if a refcount entry is orphaned
-    async fn hash_is_referenced(&mut self, bucket: &str, hash: &str) -> Result<bool>;
+    async fn hash_is_referenced(&self, bucket: &str, hash: &str) -> Result<bool>;
 
     // Aggregate statistics methods for metrics
     /// Get total number of files (count of file_modified entries)
-    async fn get_total_files(&mut self, bucket: &str) -> Result<i64>;
+    async fn get_total_files(&self, bucket: &str) -> Result<i64>;
 
     /// Get total number of blobs (count of refcount entries where refcount > 0)
-    async fn get_total_blobs(&mut self, bucket: &str) -> Result<i64>;
+    async fn get_total_blobs(&self, bucket: &str) -> Result<i64>;
 
     /// Get total storage bytes (sum of compressed_size for all blobs - actual S3 storage)
-    async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64>;
+    async fn get_total_storage_bytes(&self, bucket: &str) -> Result<i64>;
 
     /// Get total logical bytes (sum of logical_size * refcount for all blobs - what storage would be without dedup)
-    async fn get_total_logical_bytes(&mut self, bucket: &str) -> Result<i64>;
+    async fn get_total_logical_bytes(&self, bucket: &str) -> Result<i64>;
 
     // Version tracking
     /// Get the stored instance version
-    async fn get_version(&mut self) -> Result<Option<String>>;
+    async fn get_version(&self) -> Result<Option<String>>;
 
     /// Store the instance version
-    async fn set_version(&mut self, version: &str) -> Result<()>;
+    async fn set_version(&self, version: &str) -> Result<()>;
 
     /// Get deduplicated bytes saved (sum of (refcount - 1) * logical_size for all blobs)
-    async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64>;
+    async fn get_deduplicated_bytes_saved(&self, bucket: &str) -> Result<i64>;
 
     /// Get total compressed bytes without deduplication (sum of refcount * compressed_size)
-    async fn get_total_compressed_bytes_no_dedup(&mut self, bucket: &str) -> Result<i64>;
+    async fn get_total_compressed_bytes_no_dedup(&self, bucket: &str) -> Result<i64>;
 
     /// Get connection pool statistics (active connections, idle connections)
     /// Returns (active, idle)
@@ -148,7 +148,7 @@ impl KVStorage {
     /**
      * Setup the KV storage.
      */
-    pub async fn setup(&mut self) -> Result<()> {
+    pub async fn setup(&self) -> Result<()> {
         match self {
             KVStorage::Postgres(storage) => storage.setup().await,
             KVStorage::SQLite(storage) => storage.setup().await,
@@ -159,7 +159,7 @@ impl KVStorage {
      * Get the reference count for a hash.
      * If the hash does not exist, return 0.
      */
-    pub async fn get_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+    pub async fn get_ref_count(&self, bucket: &str, hash: &str) -> Result<i32> {
         debug!("Getting ref count for bucket: {}, hash: {}", bucket, hash);
         match self {
             KVStorage::Postgres(storage) => storage.get_ref_count(bucket, hash).await,
@@ -171,7 +171,7 @@ impl KVStorage {
      * Atomically increment the reference count (database-level atomic operation).
      * Returns the new reference count after incrementing.
      */
-    pub async fn atomic_increment_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+    pub async fn atomic_increment_ref_count(&self, bucket: &str, hash: &str) -> Result<i32> {
         debug!(
             "Atomically incrementing ref count for bucket: {}, hash: {}",
             bucket, hash
@@ -187,7 +187,7 @@ impl KVStorage {
      * If the reference count is already 0, do nothing and return 0.
      * Returns the new reference count after decrementing.
      */
-    pub async fn atomic_decrement_ref_count(&mut self, bucket: &str, hash: &str) -> Result<i32> {
+    pub async fn atomic_decrement_ref_count(&self, bucket: &str, hash: &str) -> Result<i32> {
         debug!(
             "Atomically decrementing ref count for bucket: {}, hash: {}",
             bucket, hash
@@ -202,7 +202,7 @@ impl KVStorage {
      * Get the modified time for a path.
      * If the path does not exist, return 0.
      */
-    pub async fn get_modified(&mut self, bucket: &str, path: &str) -> Result<i64> {
+    pub async fn get_modified(&self, bucket: &str, path: &str) -> Result<i64> {
         debug!(
             "Getting modified time for bucket: {}, path: {}",
             bucket, path
@@ -216,7 +216,7 @@ impl KVStorage {
     /**
      * Set the modified time for a path.
      */
-    pub async fn set_modified(&mut self, bucket: &str, path: &str, modified: i64) -> Result<()> {
+    pub async fn set_modified(&self, bucket: &str, path: &str, modified: i64) -> Result<()> {
         debug!(
             "Setting modified time for bucket: {}, path: {} to {}",
             bucket, path, modified
@@ -230,7 +230,7 @@ impl KVStorage {
     /**
      * Delete the modified time for a path.
      */
-    pub async fn delete_modified(&mut self, bucket: &str, path: &str) -> Result<()> {
+    pub async fn delete_modified(&self, bucket: &str, path: &str) -> Result<()> {
         debug!(
             "Deleting modified time for bucket: {}, path: {}",
             bucket, path
@@ -245,7 +245,7 @@ impl KVStorage {
      * Get the reference file for a path.
      * If the path does not exist, return an empty string.
      */
-    pub async fn get_ref_file(&mut self, bucket: &str, path: &str) -> Result<String> {
+    pub async fn get_ref_file(&self, bucket: &str, path: &str) -> Result<String> {
         debug!("Getting ref file for bucket: {}, path: {}", bucket, path);
         match self {
             KVStorage::Postgres(storage) => storage.get_ref_file(bucket, path).await,
@@ -256,7 +256,7 @@ impl KVStorage {
     /**
      * Set the reference file for a path.
      */
-    pub async fn set_ref_file(&mut self, bucket: &str, path: &str, hash: &str) -> Result<()> {
+    pub async fn set_ref_file(&self, bucket: &str, path: &str, hash: &str) -> Result<()> {
         debug!(
             "Setting ref file for bucket: {}, path: {} to {}",
             bucket, path, hash
@@ -270,7 +270,7 @@ impl KVStorage {
     /**
      * Delete the reference file for a path.
      */
-    pub async fn delete_ref_file(&mut self, bucket: &str, path: &str) -> Result<()> {
+    pub async fn delete_ref_file(&self, bucket: &str, path: &str) -> Result<()> {
         debug!("Deleting ref file for bucket: {}, path: {}", bucket, path);
         match self {
             KVStorage::Postgres(storage) => storage.delete_ref_file(bucket, path).await,
@@ -282,7 +282,7 @@ impl KVStorage {
      * Get the logical size for a hash.
      * If the hash does not exist, return 0.
      */
-    pub async fn get_logical_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
+    pub async fn get_logical_size(&self, bucket: &str, hash: &str) -> Result<usize> {
         debug!(
             "Getting logical size for bucket: {}, hash: {}",
             bucket, hash
@@ -296,7 +296,7 @@ impl KVStorage {
     /**
      * Set the logical size for a hash.
      */
-    pub async fn set_logical_size(&mut self, bucket: &str, hash: &str, size: usize) -> Result<()> {
+    pub async fn set_logical_size(&self, bucket: &str, hash: &str, size: usize) -> Result<()> {
         debug!(
             "Setting logical size for bucket: {}, hash: {} to {}",
             bucket, hash, size
@@ -307,7 +307,7 @@ impl KVStorage {
         }
     }
 
-    pub async fn get_compressed_size(&mut self, bucket: &str, hash: &str) -> Result<usize> {
+    pub async fn get_compressed_size(&self, bucket: &str, hash: &str) -> Result<usize> {
         debug!(
             "Getting compressed size for bucket: {}, hash: {}",
             bucket, hash
@@ -318,12 +318,7 @@ impl KVStorage {
         }
     }
 
-    pub async fn set_compressed_size(
-        &mut self,
-        bucket: &str,
-        hash: &str,
-        size: usize,
-    ) -> Result<()> {
+    pub async fn set_compressed_size(&self, bucket: &str, hash: &str, size: usize) -> Result<()> {
         debug!(
             "Setting compressed size for bucket: {}, hash: {} to {}",
             bucket, hash, size
@@ -338,7 +333,7 @@ impl KVStorage {
      * List all files under a given path prefix that were modified at or before the given timestamp.
      */
     pub async fn list_files(
-        &mut self,
+        &self,
         bucket: &str,
         path_prefix: &str,
         timestamp: i64,
@@ -356,7 +351,7 @@ impl KVStorage {
     }
 
     pub async fn list_ref_files_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
@@ -370,7 +365,7 @@ impl KVStorage {
     }
 
     pub async fn list_refcounts_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
@@ -384,7 +379,7 @@ impl KVStorage {
     }
 
     pub async fn list_logical_sizes_batch(
-        &mut self,
+        &self,
         bucket: &str,
         limit: usize,
         offset: usize,
@@ -403,14 +398,14 @@ impl KVStorage {
         }
     }
 
-    pub async fn delete_refcount(&mut self, bucket: &str, hash: &str) -> Result<()> {
+    pub async fn delete_refcount(&self, bucket: &str, hash: &str) -> Result<()> {
         match self {
             KVStorage::Postgres(storage) => storage.delete_refcount(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.delete_refcount(bucket, hash).await,
         }
     }
 
-    pub async fn delete_logical_size(&mut self, bucket: &str, hash: &str) -> Result<()> {
+    pub async fn delete_logical_size(&self, bucket: &str, hash: &str) -> Result<()> {
         match self {
             KVStorage::Postgres(storage) => storage.delete_logical_size(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.delete_logical_size(bucket, hash).await,
@@ -418,49 +413,49 @@ impl KVStorage {
     }
 
     /// Check if a hash is referenced by any ref_file entry
-    pub async fn hash_is_referenced(&mut self, bucket: &str, hash: &str) -> Result<bool> {
+    pub async fn hash_is_referenced(&self, bucket: &str, hash: &str) -> Result<bool> {
         match self {
             KVStorage::Postgres(storage) => storage.hash_is_referenced(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.hash_is_referenced(bucket, hash).await,
         }
     }
 
-    pub async fn get_total_files(&mut self, bucket: &str) -> Result<i64> {
+    pub async fn get_total_files(&self, bucket: &str) -> Result<i64> {
         match self {
             KVStorage::Postgres(storage) => storage.get_total_files(bucket).await,
             KVStorage::SQLite(storage) => storage.get_total_files(bucket).await,
         }
     }
 
-    pub async fn get_total_blobs(&mut self, bucket: &str) -> Result<i64> {
+    pub async fn get_total_blobs(&self, bucket: &str) -> Result<i64> {
         match self {
             KVStorage::Postgres(storage) => storage.get_total_blobs(bucket).await,
             KVStorage::SQLite(storage) => storage.get_total_blobs(bucket).await,
         }
     }
 
-    pub async fn get_total_storage_bytes(&mut self, bucket: &str) -> Result<i64> {
+    pub async fn get_total_storage_bytes(&self, bucket: &str) -> Result<i64> {
         match self {
             KVStorage::Postgres(storage) => storage.get_total_storage_bytes(bucket).await,
             KVStorage::SQLite(storage) => storage.get_total_storage_bytes(bucket).await,
         }
     }
 
-    pub async fn get_total_logical_bytes(&mut self, bucket: &str) -> Result<i64> {
+    pub async fn get_total_logical_bytes(&self, bucket: &str) -> Result<i64> {
         match self {
             KVStorage::Postgres(storage) => storage.get_total_logical_bytes(bucket).await,
             KVStorage::SQLite(storage) => storage.get_total_logical_bytes(bucket).await,
         }
     }
 
-    pub async fn get_deduplicated_bytes_saved(&mut self, bucket: &str) -> Result<i64> {
+    pub async fn get_deduplicated_bytes_saved(&self, bucket: &str) -> Result<i64> {
         match self {
             KVStorage::Postgres(storage) => storage.get_deduplicated_bytes_saved(bucket).await,
             KVStorage::SQLite(storage) => storage.get_deduplicated_bytes_saved(bucket).await,
         }
     }
 
-    pub async fn get_total_compressed_bytes_no_dedup(&mut self, bucket: &str) -> Result<i64> {
+    pub async fn get_total_compressed_bytes_no_dedup(&self, bucket: &str) -> Result<i64> {
         match self {
             KVStorage::Postgres(storage) => {
                 storage.get_total_compressed_bytes_no_dedup(bucket).await
@@ -476,14 +471,14 @@ impl KVStorage {
         }
     }
 
-    pub async fn get_version(&mut self) -> Result<Option<String>> {
+    pub async fn get_version(&self) -> Result<Option<String>> {
         match self {
             KVStorage::Postgres(storage) => storage.get_version().await,
             KVStorage::SQLite(storage) => storage.get_version().await,
         }
     }
 
-    pub async fn set_version(&mut self, version: &str) -> Result<()> {
+    pub async fn set_version(&self, version: &str) -> Result<()> {
         match self {
             KVStorage::Postgres(storage) => storage.set_version(version).await,
             KVStorage::SQLite(storage) => storage.set_version(version).await,
