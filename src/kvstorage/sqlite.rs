@@ -443,6 +443,48 @@ impl KVStorageTrait for SQLite {
         Ok(total.unwrap_or(0))
     }
 
+    async fn get_storage_stats(&self, bucket: &str) -> Result<crate::kvstorage::StorageStats> {
+        type Row = (
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+        );
+        let row: Row = sqlx::query_as(
+            "SELECT
+                (SELECT COUNT(*) FROM modified WHERE bucket = ?1),
+                agg.total_blobs,
+                agg.total_storage_bytes,
+                agg.total_logical_bytes,
+                agg.deduplicated_bytes_saved,
+                agg.total_compressed_bytes_no_dedup
+             FROM (
+                SELECT
+                    COUNT(*) AS total_blobs,
+                    SUM(l.compressed_size) AS total_storage_bytes,
+                    SUM(r.refcount * l.logical_size) AS total_logical_bytes,
+                    SUM(CASE WHEN r.refcount > 1 THEN (r.refcount - 1) * l.logical_size ELSE 0 END) AS deduplicated_bytes_saved,
+                    SUM(r.refcount * l.compressed_size) AS total_compressed_bytes_no_dedup
+                FROM refcount r
+                INNER JOIN logical_size l ON r.bucket = l.bucket AND r.hash = l.hash
+                WHERE r.bucket = ?1 AND r.refcount > 0
+             ) agg",
+        )
+        .bind(bucket)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(crate::kvstorage::StorageStats {
+            total_files: row.0.unwrap_or(0),
+            total_blobs: row.1.unwrap_or(0),
+            total_storage_bytes: row.2.unwrap_or(0),
+            total_logical_bytes: row.3.unwrap_or(0),
+            deduplicated_bytes_saved: row.4.unwrap_or(0),
+            total_compressed_bytes_no_dedup: row.5.unwrap_or(0),
+        })
+    }
+
     fn get_pool_stats(&self) -> (u32, u32) {
         let total_connections = self.pool.size();
         let idle_connections = self.pool.num_idle() as u32;
