@@ -115,12 +115,26 @@ pub(crate) trait KVStorageTrait {
     /// Get total compressed bytes without deduplication (sum of refcount * compressed_size)
     async fn get_total_compressed_bytes_no_dedup(&self, bucket: &str) -> Result<i64>;
 
+    /// Get all storage statistics in a single query (avoids repeated expensive JOINs).
+    async fn get_storage_stats(&self, bucket: &str) -> Result<StorageStats>;
+
     /// Get connection pool statistics (active connections, idle connections)
     /// Returns (active, idle)
     fn get_pool_stats(&self) -> (u32, u32) {
         // Default implementation for non-database backends
         (0, 0)
     }
+}
+
+/// All aggregate storage metrics returned by a single combined query.
+#[derive(Debug, Default)]
+pub struct StorageStats {
+    pub total_files: i64,
+    pub total_blobs: i64,
+    pub total_storage_bytes: i64,
+    pub total_logical_bytes: i64,
+    pub deduplicated_bytes_saved: i64,
+    pub total_compressed_bytes_no_dedup: i64,
 }
 
 #[derive(Clone)]
@@ -482,6 +496,13 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.set_version(version).await,
             KVStorage::SQLite(storage) => storage.set_version(version).await,
+        }
+    }
+
+    pub async fn get_storage_stats(&self, bucket: &str) -> Result<StorageStats> {
+        match self {
+            KVStorage::Postgres(storage) => storage.get_storage_stats(bucket).await,
+            KVStorage::SQLite(storage) => storage.get_storage_stats(bucket).await,
         }
     }
 }

@@ -575,6 +575,48 @@ impl KVStorageTrait for Postgres {
         Ok(total)
     }
 
+    async fn get_storage_stats(&self, bucket: &str) -> Result<crate::kvstorage::StorageStats> {
+        let modified_table = self.table_name("modified");
+        let refcount_table = self.table_name("refcount");
+        let logical_size_table = self.table_name("logical_size");
+
+        let query = format!(
+            "SELECT
+                (SELECT COUNT(*) FROM {modified} WHERE bucket = $1),
+                COALESCE(agg.total_blobs, 0),
+                COALESCE(agg.total_storage_bytes, 0),
+                COALESCE(agg.total_logical_bytes, 0),
+                COALESCE(agg.deduplicated_bytes_saved, 0),
+                COALESCE(agg.total_compressed_bytes_no_dedup, 0)
+             FROM (
+                SELECT
+                    COUNT(*)::BIGINT AS total_blobs,
+                    SUM(l.compressed_size)::BIGINT AS total_storage_bytes,
+                    SUM(r.refcount * l.logical_size)::BIGINT AS total_logical_bytes,
+                    SUM(CASE WHEN r.refcount > 1 THEN (r.refcount - 1) * l.logical_size ELSE 0 END)::BIGINT AS deduplicated_bytes_saved,
+                    SUM(r.refcount * l.compressed_size)::BIGINT AS total_compressed_bytes_no_dedup
+                FROM {refcount} r
+                INNER JOIN {logical_size} l ON r.bucket = l.bucket AND r.hash = l.hash
+                WHERE r.bucket = $1 AND r.refcount > 0
+             ) agg",
+            modified = modified_table,
+            refcount = refcount_table,
+            logical_size = logical_size_table,
+        );
+        let row: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(&query)
+            .bind(bucket)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(crate::kvstorage::StorageStats {
+            total_files: row.0,
+            total_blobs: row.1,
+            total_storage_bytes: row.2,
+            total_logical_bytes: row.3,
+            deduplicated_bytes_saved: row.4,
+            total_compressed_bytes_no_dedup: row.5,
+        })
+    }
+
     fn get_pool_stats(&self) -> (u32, u32) {
         let total_connections = self.pool.size();
         let idle_connections = self.pool.num_idle() as u32;

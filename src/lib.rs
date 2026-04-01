@@ -81,49 +81,31 @@ impl AppState {
         metrics::DB_CONNECTIONS_ACTIVE.set(active_conns as i64);
         metrics::DB_CONNECTIONS_IDLE.set(idle_conns as i64);
 
-        // Get all stats
-        let total_files = self.kvstorage.get_total_files(&self.bucket_name).await?;
-        let total_blobs = self.kvstorage.get_total_blobs(&self.bucket_name).await?;
-        let total_storage_bytes = self
-            .kvstorage
-            .get_total_storage_bytes(&self.bucket_name)
-            .await?;
-        let total_logical_bytes = self
-            .kvstorage
-            .get_total_logical_bytes(&self.bucket_name)
-            .await?;
-        let deduplicated_bytes_saved = self
-            .kvstorage
-            .get_deduplicated_bytes_saved(&self.bucket_name)
-            .await?;
-        let total_compressed_no_dedup = self
-            .kvstorage
-            .get_total_compressed_bytes_no_dedup(&self.bucket_name)
-            .await?;
+        // Get all stats in a single combined query (avoids 4 separate expensive JOINs)
+        let stats = self.kvstorage.get_storage_stats(&self.bucket_name).await?;
 
         // Update gauges
-        metrics::TOTAL_FILES.set(total_files);
-        metrics::TOTAL_BLOBS.set(total_blobs);
-        metrics::TOTAL_STORAGE_BYTES.set(total_storage_bytes);
-        metrics::TOTAL_LOGICAL_SIZE_BYTES.set(total_logical_bytes);
-        metrics::DEDUPLICATED_BYTES_SAVED.set(deduplicated_bytes_saved);
-        metrics::TOTAL_COMPRESSED_BYTES_NO_DEDUP.set(total_compressed_no_dedup);
+        metrics::TOTAL_FILES.set(stats.total_files);
+        metrics::TOTAL_BLOBS.set(stats.total_blobs);
+        metrics::TOTAL_STORAGE_BYTES.set(stats.total_storage_bytes);
+        metrics::TOTAL_LOGICAL_SIZE_BYTES.set(stats.total_logical_bytes);
+        metrics::DEDUPLICATED_BYTES_SAVED.set(stats.deduplicated_bytes_saved);
+        metrics::TOTAL_COMPRESSED_BYTES_NO_DEDUP.set(stats.total_compressed_bytes_no_dedup);
 
         // Calculate derived metrics
-        if total_files > 0 && total_blobs > 0 {
-            // Deduplication ratio: percentage of files that are deduplicated
-            // 0.0 (0%) = no dedup (all files unique), 0.5 (50%) = half the files share blobs
-            let dedup_ratio = (total_files - total_blobs) as f64 / total_files as f64;
+        if stats.total_files > 0 && stats.total_blobs > 0 {
+            let dedup_ratio =
+                (stats.total_files - stats.total_blobs) as f64 / stats.total_files as f64;
             metrics::DEDUPLICATION_RATIO.set(dedup_ratio);
-            // Average reference count: how many files point to each blob on average
-            metrics::AVERAGE_REFERENCE_COUNT.set(total_files as f64 / total_blobs as f64);
+            metrics::AVERAGE_REFERENCE_COUNT
+                .set(stats.total_files as f64 / stats.total_blobs as f64);
         }
 
-        if total_logical_bytes > 0 {
+        if stats.total_logical_bytes > 0 {
             // Clamp to 0 minimum - negative "savings" can happen when compression
             // overhead exceeds gains (tiny files), but we report 0% not negative
-            let savings_ratio = ((total_logical_bytes - total_storage_bytes) as f64
-                / total_logical_bytes as f64)
+            let savings_ratio = ((stats.total_logical_bytes - stats.total_storage_bytes) as f64
+                / stats.total_logical_bytes as f64)
                 .max(0.0);
             metrics::STORAGE_SAVINGS_RATIO.set(savings_ratio);
         }
