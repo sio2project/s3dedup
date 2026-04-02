@@ -95,6 +95,37 @@ pub struct FileMetadata {
     pub is_compressed: bool,
 }
 
+/// Check HTTP response status and return an appropriate error for non-success responses.
+/// Returns Ok(()) if the response is successful.
+/// Returns FileNotFoundError for 404, TransientError for 5xx, and a generic error otherwise.
+async fn check_error_response(response: Response, path: &str) -> Result<Response> {
+    if response.status() == StatusCode::NOT_FOUND {
+        return Err(FileNotFoundError(path.to_string()).into());
+    }
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let x_exception = response
+            .headers()
+            .get("X-Exception")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown")
+            .to_string();
+        let body = response.text().await.unwrap_or_default();
+        error!(
+            "Filetracker error for '{}': HTTP {} - X-Exception: {} - Body: {}",
+            path, status, x_exception, body
+        );
+        let msg = format!("HTTP {} - {}", status, x_exception);
+        if status.is_server_error() {
+            return Err(TransientError(msg).into());
+        }
+        bail!("{}", msg)
+    }
+
+    Ok(response)
+}
+
 impl FiletrackerClient {
     pub fn new(base_url: String) -> Self {
         let client = Client::builder()
@@ -141,7 +172,7 @@ impl FiletrackerClient {
                 "Failed to list files: HTTP {} - X-Exception: {} - Body: {}",
                 status, x_exception, body
             );
-            bail!("HTTP {} - {}", status, x_exception)
+            bail!("HTTP {} - {}", status, x_exception);
         }
 
         let body = response.text().await?;
@@ -167,19 +198,7 @@ impl FiletrackerClient {
             .send()
             .await
             .map_err(|e| TransientError(e.to_string()))?;
-
-        if response.status() == StatusCode::NOT_FOUND {
-            return Err(FileNotFoundError(path.to_string()).into());
-        }
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let msg = format!("HTTP {}", status);
-            if status.is_server_error() {
-                return Err(TransientError(msg).into());
-            }
-            bail!("{}", msg)
-        }
+        let response = check_error_response(response, path).await?;
 
         let (last_modified, logical_size, is_compressed) = parse_ft_headers(&response)?;
         let content_length = response
@@ -217,30 +236,7 @@ impl FiletrackerClient {
             .send()
             .await
             .map_err(|e| TransientError(e.to_string()))?;
-
-        if response.status() == StatusCode::NOT_FOUND {
-            return Err(FileNotFoundError(path.to_string()).into());
-        }
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let x_exception = response
-                .headers()
-                .get("X-Exception")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("unknown")
-                .to_string();
-            let body = response.text().await.unwrap_or_default();
-            error!(
-                "Failed to get file: HTTP {} - X-Exception: {} - Body: {}",
-                status, x_exception, body
-            );
-            let msg = format!("HTTP {} - {}", status, x_exception);
-            if status.is_server_error() {
-                return Err(TransientError(msg).into());
-            }
-            bail!("{}", msg)
-        }
+        let response = check_error_response(response, path).await?;
 
         let (last_modified, logical_size, is_compressed) = parse_ft_headers(&response)?;
         let content_length = response.content_length().unwrap_or(0);
@@ -342,22 +338,7 @@ impl FiletrackerClient {
             .header("SHA256-Checksum", sha256_checksum);
 
         let response = request.send().await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let x_exception = response
-                .headers()
-                .get("X-Exception")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("unknown")
-                .to_string();
-            let body = response.text().await.unwrap_or_default();
-            error!(
-                "Failed to put file: HTTP {} - X-Exception: {} - Body: {}",
-                status, x_exception, body
-            );
-            bail!("HTTP {} - {}", status, x_exception)
-        }
+        check_error_response(response, path).await?;
 
         debug!("Put file to filetracker successfully");
         Ok(())
@@ -385,21 +366,7 @@ impl FiletrackerClient {
             return Ok(());
         }
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let x_exception = response
-                .headers()
-                .get("X-Exception")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("unknown")
-                .to_string();
-            let body = response.text().await.unwrap_or_default();
-            error!(
-                "Failed to delete file: HTTP {} - X-Exception: {} - Body: {}",
-                status, x_exception, body
-            );
-            bail!("HTTP {} - {}", status, x_exception)
-        }
+        check_error_response(response, path).await?;
 
         debug!("Deleted file from filetracker successfully");
         Ok(())

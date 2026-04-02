@@ -1,21 +1,10 @@
 use crate::config::Config;
+use crate::db;
 use crate::kvstorage::KVStorageTrait;
-use anyhow::{Context, Result};
-use serde::Deserialize;
+use anyhow::Result;
 use sqlx::PgPool;
-use sqlx::postgres::PgPoolOptions;
-use std::time::Duration;
-use tracing::debug;
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct PostgresConfig {
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub password: String,
-    pub dbname: String,
-    pub pool_size: u32,
-}
+pub use crate::db::PostgresConfig;
 
 #[derive(Clone)]
 pub struct Postgres {
@@ -34,31 +23,7 @@ impl Postgres {
 impl KVStorageTrait for Postgres {
     async fn new(config: &Config) -> Result<Box<Self>> {
         let pg_config = config.postgres.as_ref().unwrap();
-        let db_url = format!(
-            "postgres://{}:{}@{}:{}/{}?connect_timeout=10",
-            pg_config.user, pg_config.password, pg_config.host, pg_config.port, pg_config.dbname
-        );
-        debug!(
-            "Connecting to Postgres: postgres://{}:****@{}:{}/{}",
-            pg_config.user, pg_config.host, pg_config.port, pg_config.dbname
-        );
-
-        let pool = PgPoolOptions::new()
-            .max_connections(pg_config.pool_size)
-            .acquire_timeout(Duration::from_secs(30))
-            .idle_timeout(Some(Duration::from_secs(600)))
-            .max_lifetime(Some(Duration::from_secs(1800)))
-            .connect(&db_url)
-            .await
-            .context("Failed to connect to PostgreSQL")?;
-
-        // Validate connection works
-        sqlx::query("SELECT 1")
-            .execute(&pool)
-            .await
-            .context("PostgreSQL connection validation failed")?;
-
-        debug!("Successfully validated PostgreSQL connection");
+        let pool = db::create_pg_pool(pg_config, "kvstorage").await?;
 
         Ok(Box::new(Postgres {
             pool,

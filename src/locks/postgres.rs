@@ -1,23 +1,12 @@
 use crate::config::Config;
+use crate::db;
 use crate::locks::{ExclusiveLockGuard, Lock, LockStorage, SharedLockGuard};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use rand::Rng;
-use serde::Deserialize;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::debug;
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PostgresConfig {
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub password: String,
-    pub dbname: String,
-    pub pool_size: u32,
-}
 
 /// PostgreSQL-based distributed locks using advisory locks.
 /// Uses separate connection pools for file locks and hash locks to prevent
@@ -54,51 +43,8 @@ impl PostgresLocks {
             )
         })?;
 
-        let db_url = format!(
-            "postgres://{}:{}@{}:{}/{}?connect_timeout=10",
-            pg_config.user, pg_config.password, pg_config.host, pg_config.port, pg_config.dbname
-        );
-
-        debug!(
-            "Connecting to Postgres for locks: postgres://{}:****@{}:{}/{}",
-            pg_config.user, pg_config.host, pg_config.port, pg_config.dbname
-        );
-
-        // Create file locks pool
-        let file_pool = PgPoolOptions::new()
-            .max_connections(pg_config.pool_size)
-            .acquire_timeout(Duration::from_secs(30))
-            .idle_timeout(Some(Duration::from_secs(600)))
-            .max_lifetime(Some(Duration::from_secs(1800)))
-            .connect(&db_url)
-            .await
-            .context("Failed to connect to PostgreSQL for file locks pool")?;
-
-        // Validate file pool connection
-        sqlx::query("SELECT 1")
-            .execute(&file_pool)
-            .await
-            .context("PostgreSQL file locks pool validation failed")?;
-
-        debug!("Successfully validated PostgreSQL file locks pool");
-
-        // Create hash locks pool (separate pool to prevent deadlock)
-        let hash_pool = PgPoolOptions::new()
-            .max_connections(pg_config.pool_size)
-            .acquire_timeout(Duration::from_secs(30))
-            .idle_timeout(Some(Duration::from_secs(600)))
-            .max_lifetime(Some(Duration::from_secs(1800)))
-            .connect(&db_url)
-            .await
-            .context("Failed to connect to PostgreSQL for hash locks pool")?;
-
-        // Validate hash pool connection
-        sqlx::query("SELECT 1")
-            .execute(&hash_pool)
-            .await
-            .context("PostgreSQL hash locks pool validation failed")?;
-
-        debug!("Successfully validated PostgreSQL hash locks pool");
+        let file_pool = db::create_pg_pool(pg_config, "file locks").await?;
+        let hash_pool = db::create_pg_pool(pg_config, "hash locks").await?;
 
         Ok(Box::new(PostgresLocks {
             file_pool: Arc::new(file_pool),
@@ -189,12 +135,7 @@ impl Lock for PostgresLock {
 
             if attempt < MAX_LOCK_RETRIES - 1 {
                 tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                // Exponential backoff with jitter
-                backoff_ms = std::cmp::min(backoff_ms * 2, MAX_BACKOFF_MS);
-                // Add some jitter (±25%)
-                let jitter =
-                    (backoff_ms as f64 * 0.25 * (rand::rng().random::<f64>() - 0.5)) as i64;
-                backoff_ms = (backoff_ms as i64 + jitter).max(1) as u64;
+                backoff_ms = db::next_backoff(backoff_ms, MAX_BACKOFF_MS);
             }
         }
 
@@ -247,12 +188,7 @@ impl Lock for PostgresLock {
 
             if attempt < MAX_LOCK_RETRIES - 1 {
                 tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                // Exponential backoff with jitter
-                backoff_ms = std::cmp::min(backoff_ms * 2, MAX_BACKOFF_MS);
-                // Add some jitter (±25%)
-                let jitter =
-                    (backoff_ms as f64 * 0.25 * (rand::rng().random::<f64>() - 0.5)) as i64;
-                backoff_ms = (backoff_ms as i64 + jitter).max(1) as u64;
+                backoff_ms = db::next_backoff(backoff_ms, MAX_BACKOFF_MS);
             }
         }
 

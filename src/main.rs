@@ -171,18 +171,17 @@ fn start_background_tasks(app_state: Arc<AppState>, bucket_config: &config::Buck
     });
 }
 
-async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) -> anyhow::Result<()> {
-    let config = if use_env {
-        config::Config::from_env().context("Failed to load configuration from environment")?
+fn load_config(config_path: Option<&str>, use_env: bool) -> anyhow::Result<config::Config> {
+    if use_env {
+        config::Config::from_env().context("Failed to load configuration from environment")
     } else {
         config::Config::new(config_path.unwrap_or("config.json"))
-            .context("Failed to load configuration from file")?
-    };
-    let _log_guard = s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
+            .context("Failed to load configuration from file")
+    }
+}
 
-    info!("Starting server for bucket: {}", config.bucket.name);
-
-    let app_state = AppState::new(&config)
+async fn init_app_state(config: &config::Config) -> anyhow::Result<Arc<AppState>> {
+    let app_state = AppState::new(config)
         .await
         .context("Failed to initialize app state")?;
     app_state
@@ -190,6 +189,16 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) -> anyhow:
         .setup()
         .await
         .context("Failed to setup KV storage")?;
+    Ok(app_state)
+}
+
+async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) -> anyhow::Result<()> {
+    let config = load_config(config_path, use_env)?;
+    let _log_guard = s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
+
+    info!("Starting server for bucket: {}", config.bucket.name);
+
+    let app_state = init_app_state(&config).await?;
 
     // Store instance version
     app_state
@@ -217,35 +226,15 @@ async fn run_migrate(
     filetracker_url: &str,
     max_concurrency: usize,
 ) -> anyhow::Result<()> {
-    let config = if use_env {
-        config::Config::from_env().context("Failed to load configuration from environment")?
-    } else {
-        config::Config::new(config_path.unwrap_or("config.json"))
-            .context("Failed to load configuration from file")?
-    };
+    let config = load_config(config_path, use_env)?;
     let _log_guard = s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting offline migration from old filetracker to s3dedup");
-    if use_env {
-        info!("Using environment variables for configuration");
-    } else {
-        info!("Config file: {}", config_path.unwrap_or("config.json"));
-    }
     info!("Filetracker URL: {}", filetracker_url);
     info!("Bucket: {}", config.bucket.name);
     info!("Max concurrency: {}", max_concurrency);
 
-    // Initialize AppState
-    let app_state = AppState::new(&config)
-        .await
-        .context("Failed to initialize app state")?;
-
-    // Setup KV storage
-    app_state
-        .kvstorage
-        .setup()
-        .await
-        .context("Failed to setup KV storage")?;
+    let app_state = init_app_state(&config).await?;
 
     // Initialize filetracker client
     let filetracker_client = Arc::new(s3dedup::filetracker_client::FiletrackerClient::new(
@@ -278,35 +267,15 @@ async fn run_migrate_v1(
     v1_directory: &str,
     max_concurrency: usize,
 ) -> anyhow::Result<()> {
-    let config = if use_env {
-        config::Config::from_env().context("Failed to load configuration from environment")?
-    } else {
-        config::Config::new(config_path.unwrap_or("config.json"))
-            .context("Failed to load configuration from file")?
-    };
+    let config = load_config(config_path, use_env)?;
     let _log_guard = s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting offline V1 filesystem migration to s3dedup");
-    if use_env {
-        info!("Using environment variables for configuration");
-    } else {
-        info!("Config file: {}", config_path.unwrap_or("config.json"));
-    }
     info!("V1 directory: {}", v1_directory);
     info!("Bucket: {}", config.bucket.name);
     info!("Max concurrency: {}", max_concurrency);
 
-    // Initialize AppState
-    let app_state = AppState::new(&config)
-        .await
-        .context("Failed to initialize app state")?;
-
-    // Setup KV storage
-    app_state
-        .kvstorage
-        .setup()
-        .await
-        .context("Failed to setup KV storage")?;
+    let app_state = init_app_state(&config).await?;
 
     // Run V1 filesystem migration
     let stats =
@@ -335,20 +304,10 @@ async fn run_live_migrate(
     proxy_only: bool,
     file_list: Option<&str>,
 ) -> anyhow::Result<()> {
-    let config = if use_env {
-        config::Config::from_env().context("Failed to load configuration from environment")?
-    } else {
-        config::Config::new(config_path.unwrap_or("config.json"))
-            .context("Failed to load configuration from file")?
-    };
+    let config = load_config(config_path, use_env)?;
     let _log_guard = s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting live migration from old filetracker to s3dedup");
-    if use_env {
-        info!("Using environment variables for configuration");
-    } else {
-        info!("Config file: {}", config_path.unwrap_or("config.json"));
-    }
     info!("Bucket: {}", config.bucket.name);
     info!("Max concurrency: {}", max_concurrency);
 
@@ -382,22 +341,20 @@ async fn run_live_migrate(
         );
     }
 
-    // Initialize AppState
+    // Initialize AppState (with filetracker client if configured)
     let app_state = if let Some(url) = filetracker_url {
-        AppState::new_with_filetracker(&config, url.clone())
+        let app_state = AppState::new_with_filetracker(&config, url.clone())
             .await
-            .context("Failed to initialize app state with filetracker")?
+            .context("Failed to initialize app state with filetracker")?;
+        app_state
+            .kvstorage
+            .setup()
+            .await
+            .context("Failed to setup KV storage")?;
+        app_state
     } else {
-        AppState::new(&config)
-            .await
-            .context("Failed to initialize app state")?
+        init_app_state(&config).await?
     };
-
-    app_state
-        .kvstorage
-        .setup()
-        .await
-        .context("Failed to setup KV storage")?;
 
     start_background_tasks(app_state.clone(), &config.bucket);
 
@@ -456,20 +413,10 @@ async fn run_live_migrate_v1(
     filetracker_url: Option<&str>,
     max_concurrency: usize,
 ) -> anyhow::Result<()> {
-    let config = if use_env {
-        config::Config::from_env().context("Failed to load configuration from environment")?
-    } else {
-        config::Config::new(config_path.unwrap_or("config.json"))
-            .context("Failed to load configuration from file")?
-    };
+    let config = load_config(config_path, use_env)?;
     let _log_guard = s3dedup::logging::setup(&config.logging).context("Failed to setup logging")?;
 
     info!("Starting live migration from V1 filetracker to s3dedup");
-    if use_env {
-        info!("Using environment variables for configuration");
-    } else {
-        info!("Config file: {}", config_path.unwrap_or("config.json"));
-    }
     info!("Bucket: {}", config.bucket.name);
     info!("Max concurrency: {}", max_concurrency);
 
@@ -491,19 +438,18 @@ async fn run_live_migrate_v1(
     // Initialize AppState with filetracker client if URL is provided
     let app_state = if let Some(ref ft_url) = effective_ft_url {
         info!("Creating app state with V1 filetracker client for HTTP fallback");
-        AppState::new_with_filetracker(&config, ft_url.clone())
+        let app_state = AppState::new_with_filetracker(&config, ft_url.clone())
             .await
-            .context("Failed to initialize app state with filetracker")?
+            .context("Failed to initialize app state with filetracker")?;
+        app_state
+            .kvstorage
+            .setup()
+            .await
+            .context("Failed to setup KV storage")?;
+        app_state
     } else {
-        AppState::new(&config)
-            .await
-            .context("Failed to initialize app state")?
+        init_app_state(&config).await?
     };
-    app_state
-        .kvstorage
-        .setup()
-        .await
-        .context("Failed to setup KV storage")?;
 
     start_background_tasks(app_state.clone(), &config.bucket);
 
