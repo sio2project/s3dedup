@@ -4,7 +4,7 @@ use anyhow::Result;
 use anyhow::bail;
 
 pub use crate::kvstorage::KVStorageType;
-pub use crate::kvstorage::postgres::PostgresConfig;
+pub use crate::db::PostgresConfig;
 pub use crate::kvstorage::sqlite::SQLiteConfig;
 pub use crate::locks::LocksType;
 pub use crate::s3storage::KeyShardingConfig;

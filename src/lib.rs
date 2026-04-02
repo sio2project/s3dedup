@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 pub mod cleaner;
 pub mod config;
+pub mod db;
 pub mod filetracker_client;
 pub mod kvstorage;
 pub mod locks;
