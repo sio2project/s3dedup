@@ -344,14 +344,21 @@ impl S3CompatClient {
         key.rsplit('/').next().unwrap_or(key).to_string()
     }
 
+    /// Check if an S3 error string/debug representation contains any of the given patterns
+    fn error_contains(err: &aws_sdk_s3::error::SdkError<impl std::fmt::Debug>, patterns: &[&str]) -> bool {
+        let err_string = err.to_string();
+        let err_debug = format!("{:?}", err);
+        patterns.iter().any(|p| err_string.contains(p) || err_debug.contains(p))
+    }
+
     /// Check if an error indicates object not found
     fn is_not_found_error(err: &aws_sdk_s3::error::SdkError<impl std::fmt::Debug>) -> bool {
-        let err_string = err.to_string();
-        err_string.contains("NotFound")
-            || err_string.contains("404")
-            || err_string.contains("NoSuchKey")
-            || format!("{:?}", err).contains("NotFound")
-            || format!("{:?}", err).contains("NoSuchKey")
+        Self::error_contains(err, &["NotFound", "404", "NoSuchKey"])
+    }
+
+    /// Check if an error indicates bucket not found
+    fn is_bucket_not_found_error(err: &aws_sdk_s3::error::SdkError<impl std::fmt::Debug>) -> bool {
+        Self::error_contains(err, &["NotFound", "404", "NoSuchBucket"])
     }
 
     /// Ensures the bucket exists, creating it if necessary
@@ -370,12 +377,7 @@ impl S3CompatClient {
                 debug!("Head bucket error: {}", err_string);
                 debug!("Head bucket error debug: {:?}", err);
 
-                if err_string.contains("NotFound")
-                    || err_string.contains("404")
-                    || err_string.contains("NoSuchBucket")
-                    || format!("{:?}", err).contains("NotFound")
-                    || format!("{:?}", err).contains("NoSuchBucket")
-                {
+                if Self::is_bucket_not_found_error(&err) {
                     debug!("Bucket does not exist, creating: {}", self.bucket);
 
                     // Create the bucket
