@@ -241,6 +241,76 @@ impl S3StorageTrait for S3CompatClient {
         debug!("Health check passed for bucket {}", self.bucket);
         Ok(())
     }
+
+    async fn put_object_stream(
+        &self,
+        key: &str,
+        body: ByteStream,
+        content_length: Option<i64>,
+    ) -> Result<()> {
+        let s3_key = self.hash_to_s3_key(key);
+        debug!("Putting object stream: {} -> {}", key, s3_key);
+
+        let mut req = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&s3_key)
+            .body(body)
+            .content_type("application/octet-stream");
+
+        if let Some(len) = content_length {
+            req = req.content_length(len);
+        }
+
+        req.send().await?;
+
+        debug!("Successfully put object stream: {}", s3_key);
+        Ok(())
+    }
+
+    async fn get_object_stream(&self, key: &str) -> Result<(ByteStream, Option<i64>)> {
+        let s3_key = self.hash_to_s3_key(key);
+        debug!("Getting object stream: {} -> {}", key, s3_key);
+
+        let resp = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(&s3_key)
+            .send()
+            .await?;
+
+        let content_length = resp.content_length;
+        debug!(
+            "Got object stream: {} (content_length: {:?})",
+            s3_key, content_length
+        );
+        Ok((resp.body, content_length))
+    }
+
+    async fn object_exists_with_size(&self, key: &str) -> Result<Option<i64>> {
+        let s3_key = self.hash_to_s3_key(key);
+        debug!("HEAD object for size: {} -> {}", key, s3_key);
+
+        match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(&s3_key)
+            .send()
+            .await
+        {
+            Ok(resp) => Ok(resp.content_length),
+            Err(err) => {
+                if Self::is_not_found_error(&err) {
+                    Ok(None)
+                } else {
+                    bail!(err)
+                }
+            }
+        }
+    }
 }
 
 impl S3CompatClient {

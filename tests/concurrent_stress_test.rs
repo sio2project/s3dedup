@@ -33,6 +33,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         s3storage: Arc::new(*s3storage),
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 64 * 1024 * 1024,
     });
 
     app_state.kvstorage.setup().await.unwrap();
@@ -41,7 +42,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         .route(
             "/ft/files/{*path}",
             get(s3dedup::routes::ft::get_file::ft_get_file)
-                .head(s3dedup::routes::ft::get_file::ft_get_file)
+                .head(s3dedup::routes::ft::head_file::ft_head_file)
                 .put(s3dedup::routes::ft::put_file::ft_put_file)
                 .delete(s3dedup::routes::ft::delete_file::ft_delete_file),
         )

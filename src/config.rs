@@ -42,6 +42,12 @@ pub struct BucketConfig {
     #[serde(default)]
     pub cleaner: CleanerConfig,
 
+    /// Maximum file size (in bytes) to process in memory during PUT slow path.
+    /// Files larger than this are spilled to temp files.
+    /// Default: 64MB. Set to 0 to always use temp files.
+    #[serde(default = "default_max_inmemory_size")]
+    pub max_inmemory_size: usize,
+
     /// Optional filetracker URL for live migration mode
     #[serde(default)]
     pub filetracker_url: Option<String>,
@@ -49,6 +55,10 @@ pub struct BucketConfig {
     /// Optional V1 filetracker directory for filesystem-based migration
     #[serde(default)]
     pub filetracker_v1_dir: Option<String>,
+}
+
+fn default_max_inmemory_size() -> usize {
+    64 * 1024 * 1024 // 64MB
 }
 
 impl Config {
@@ -221,6 +231,12 @@ impl BucketConfig {
         if let Ok(val) = std::env::var("FILETRACKER_URL") {
             self.filetracker_url = Some(val);
         }
+
+        if let Ok(val) = std::env::var("MAX_INMEMORY_SIZE")
+            && let Ok(size) = val.parse()
+        {
+            self.max_inmemory_size = size;
+        }
     }
 
     /// Create a bucket config from environment variables only
@@ -273,6 +289,10 @@ impl BucketConfig {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(10000),
             },
+            max_inmemory_size: std::env::var("MAX_INMEMORY_SIZE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_else(default_max_inmemory_size),
             filetracker_url: std::env::var("FILETRACKER_URL").ok(),
             filetracker_v1_dir: std::env::var("FILETRACKER_V1_DIR").ok(),
         })

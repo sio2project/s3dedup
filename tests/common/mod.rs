@@ -44,6 +44,7 @@ pub fn create_test_bucket_config(prefix: &str) -> (BucketConfig, String) {
         s3storage_type: s3dedup::s3storage::S3StorageType::S3Compat,
         s3: Some(s3_config_from_env()),
         cleaner: Default::default(),
+        max_inmemory_size: 64 * 1024 * 1024,
         filetracker_url: None,
         filetracker_v1_dir: None,
     };
