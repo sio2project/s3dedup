@@ -1,10 +1,11 @@
-use crate::{AppState, metrics};
+use crate::routes::ft::MetricsRecorder;
+use crate::AppState;
+use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use std::sync::Arc;
-use std::time::Instant;
 use tracing::{debug, error};
 
 #[derive(Debug, Deserialize)]
@@ -23,25 +24,11 @@ pub async fn ft_list_files(
     Query(query): Query<ListQuery>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
-    let start = Instant::now();
-
-    // Helper to record metrics before returning
-    let record_metrics = |status: &str| {
-        metrics::HTTP_REQUESTS_TOTAL
-            .with_label_values(&["GET", "/ft/list", status])
-            .inc();
-        metrics::HTTP_REQUEST_DURATION_SECONDS
-            .with_label_values(&["GET", "/ft/list"])
-            .observe(start.elapsed().as_secs_f64());
-    };
+    let record_metrics = MetricsRecorder::new("GET", "/ft/list");
 
     // Extract path or use empty string for root
     let path_str = path.map(|Path(p)| p).unwrap_or_default();
     let path = path_str.strip_prefix('/').unwrap_or(&path_str);
-
-    debug!("LIST request for path: {}", path);
-    debug!("Query params: last_modified={}", query.last_modified);
-    debug!("Headers: last-modified={:?}", headers.get("last-modified"));
 
     // Parse the timestamp (optional for LIST - defaults to current time if not provided)
     let timestamp = match crate::routes::ft::utils::extract_timestamp(
@@ -57,38 +44,48 @@ pub async fn ft_list_files(
         }
     };
 
+    match ft_list_files_inner(&state, path, timestamp).await {
+        Ok(response) => {
+            let status = response.status().as_u16().to_string();
+            record_metrics.record(&status);
+            response
+        }
+        Err(e) => {
+            error!("LIST {} failed: {}", path, e);
+            record_metrics.record("500");
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(e.to_string())
+                .unwrap()
+        }
+    }
+}
+
+async fn ft_list_files_inner(
+    state: &AppState,
+    path: &str,
+    timestamp: i64,
+) -> Result<Response<String>> {
     debug!("Handling GET /list/{} (@{})", path, timestamp);
 
     // Get all files under this path prefix
-    let files_result = state
+    let files = state
         .kvstorage
         .list_files(&state.bucket_name, path, timestamp)
-        .await;
+        .await
+        .context("Failed to list files")?;
 
-    match files_result {
-        Ok(files) => {
-            // Return files as newline-separated list
-            let response_body = files.join("\n");
-            record_metrics("200");
-            if !response_body.is_empty() {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(response_body + "\n")
-                    .unwrap()
-            } else {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body("".to_string())
-                    .unwrap()
-            }
-        }
-        Err(e) => {
-            error!("Failed to list files: {}", e);
-            record_metrics("500");
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to list files".to_string())
-                .unwrap()
-        }
+    // Return files as newline-separated list
+    let response_body = files.join("\n");
+    if !response_body.is_empty() {
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(response_body + "\n")
+            .unwrap())
+    } else {
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body("".to_string())
+            .unwrap())
     }
 }

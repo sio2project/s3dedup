@@ -1,11 +1,11 @@
-use crate::routes::ft::{LastModifiedQuery, storage_helpers, utils};
+use crate::routes::ft::{LastModifiedQuery, MetricsRecorder, storage_helpers, utils};
 use crate::{AppState, locks, metrics};
+use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, Response, StatusCode};
 use axum::response::IntoResponse;
 use std::sync::Arc;
-use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
 pub async fn ft_put_file(
@@ -15,9 +15,7 @@ pub async fn ft_put_file(
     headers: HeaderMap,
     body: Body,
 ) -> impl IntoResponse {
-    let start = Instant::now();
-
-    // Remove leading slash from wildcard path
+    let record_metrics = MetricsRecorder::new("PUT", "/ft/files");
     let path = path.strip_prefix('/').unwrap_or(&path);
     debug!("PUT request for path: {}", path);
     debug!("Query params: last_modified={:?}", query.last_modified);
@@ -30,35 +28,11 @@ pub async fn ft_put_file(
         headers.get("last-modified")
     );
 
-    // Helper to record metrics before returning
-    let record_metrics = |status: &str| {
-        metrics::HTTP_REQUESTS_TOTAL
-            .with_label_values(&["PUT", "/ft/files", status])
-            .inc();
-        metrics::HTTP_REQUEST_DURATION_SECONDS
-            .with_label_values(&["PUT", "/ft/files"])
-            .observe(start.elapsed().as_secs_f64());
-    };
-
-    // 1. Parse and validate timestamp (required for PUT)
-    let raw_timestamp = headers
-        .get("last-modified")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| query.last_modified.clone());
     let timestamp = match utils::extract_timestamp(&headers, query.last_modified.as_ref(), true) {
-        Ok(ts) => {
-            debug!(
-                "PUT {} timestamp: raw='{}' -> parsed={}",
-                path,
-                raw_timestamp.as_deref().unwrap_or("none"),
-                ts
-            );
-            ts
-        }
+        Ok(ts) => ts,
         Err(e) => {
             error!("Failed to extract timestamp: {}", e);
-            record_metrics("400");
+            record_metrics.record("400");
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(e)
@@ -66,7 +40,31 @@ pub async fn ft_put_file(
         }
     };
 
-    // 2. Extract headers (matching original filetracker behavior)
+    match ft_put_file_inner(&state, path, timestamp, &headers, body).await {
+        Ok(response) => {
+            let status = response.status().as_u16().to_string();
+            record_metrics.record(&status);
+            response
+        }
+        Err(e) => {
+            error!("PUT {} failed: {}", path, e);
+            record_metrics.record("500");
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(e.to_string())
+                .unwrap()
+        }
+    }
+}
+
+async fn ft_put_file_inner(
+    state: &AppState,
+    path: &str,
+    timestamp: i64,
+    headers: &HeaderMap,
+    body: Body,
+) -> Result<Response<String>> {
+    // Extract headers (matching original filetracker behavior)
     let compressed = headers
         .get("content-encoding")
         .map(|v| v.to_str().unwrap_or("") == "gzip")
@@ -108,33 +106,17 @@ pub async fn ft_put_file(
         let lock_key = locks::file_lock(&state.bucket_name, path);
         let locks_storage = &state.locks;
         let lock = locks_storage.prepare_lock(lock_key).await;
-        let guard = match lock.acquire_exclusive().await {
-            Ok(g) => g,
-            Err(e) => {
-                error!("Failed to acquire exclusive lock: {}", e);
-                record_metrics("500");
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body("Failed to acquire lock".to_string())
-                    .unwrap();
-            }
-        };
+        let guard = lock
+            .acquire_exclusive()
+            .await
+            .context("Failed to acquire exclusive lock")?;
 
         // Check existing version
-        let current_modified = match state.kvstorage.get_modified(&state.bucket_name, path).await {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to get current modified: {}", e);
-                record_metrics("500");
-                if let Err(e) = guard.release().await {
-                    warn!("Failed to release file lock: {}", e);
-                }
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body("Failed to get current modified".to_string())
-                    .unwrap();
-            }
-        };
+        let current_modified = state
+            .kvstorage
+            .get_modified(&state.bucket_name, path)
+            .await
+            .context("Failed to get current modified")?;
 
         // If trying to store older version, return early — body never read
         if current_modified > timestamp {
@@ -142,11 +124,7 @@ pub async fn ft_put_file(
                 "Tried to store older version of {} ({} < {}), ignoring.",
                 path, timestamp, current_modified
             );
-            record_metrics("200");
-            if let Err(e) = guard.release().await {
-                warn!("Failed to release file lock: {}", e);
-            }
-            return Response::builder()
+            return Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/plain")
                 .header(
@@ -154,45 +132,23 @@ pub async fn ft_put_file(
                     utils::format_rfc2822_timestamp(current_modified),
                 )
                 .body("".to_string())
-                .unwrap();
+                .unwrap());
         }
 
         // Acquire hash lock
         let hash_lock_key = locks::hash_lock(&state.bucket_name, &digest);
         let hash_lock = locks_storage.prepare_lock(hash_lock_key).await;
-        let hash_guard = match hash_lock.acquire_exclusive().await {
-            Ok(g) => g,
-            Err(e) => {
-                error!("Failed to acquire hash lock: {}", e);
-                record_metrics("500");
-                if let Err(e) = guard.release().await {
-                    warn!("Failed to release file lock: {}", e);
-                }
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body("Failed to acquire hash lock".to_string())
-                    .unwrap();
-            }
-        };
+        let hash_guard = hash_lock
+            .acquire_exclusive()
+            .await
+            .context("Failed to acquire hash lock")?;
 
         // Check dedup
-        let blob_exists = match state.s3storage.object_exists(&digest).await {
-            Ok(exists) => exists,
-            Err(e) => {
-                error!("Failed to check object existence: {}", e);
-                record_metrics("500");
-                if let Err(e) = hash_guard.release().await {
-                    warn!("Failed to release hash lock: {}", e);
-                }
-                if let Err(e) = guard.release().await {
-                    warn!("Failed to release file lock: {}", e);
-                }
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body("Failed to check object existence".to_string())
-                    .unwrap();
-            }
-        };
+        let blob_exists = state
+            .s3storage
+            .object_exists(&digest)
+            .await
+            .context("Failed to check object existence")?;
 
         if blob_exists {
             metrics::DEDUP_HITS_TOTAL
@@ -205,7 +161,7 @@ pub async fn ft_put_file(
         }
 
         // Upload to S3 if needed. On dedup hit, body is dropped unread.
-        if !blob_exists {
+        let compressed_size: Option<usize> = if !blob_exists {
             // Check Content-Length to decide: buffer in memory or stream via temp file
             let fast_content_length: Option<usize> = headers
                 .get("content-length")
@@ -220,47 +176,24 @@ pub async fn ft_put_file(
                     Ok(r) => r,
                     Err(e) => {
                         error!("Failed to stream request body: {}", e);
-                        record_metrics("400");
-                        if let Err(e) = hash_guard.release().await {
-                            warn!("Failed to release hash lock: {}", e);
-                        }
-                        if let Err(e) = guard.release().await {
-                            warn!("Failed to release file lock: {}", e);
-                        }
-                        return Response::builder()
+                        return Ok(Response::builder()
                             .status(StatusCode::BAD_REQUEST)
                             .body("Failed to stream request body".to_string())
-                            .unwrap();
+                            .unwrap());
                     }
                 };
                 let compressed_size = raw.data_size;
-                let upload_result =
-                    match aws_sdk_s3::primitives::ByteStream::from_path(&raw.temp_path).await {
-                        Ok(bs) => {
-                            state
-                                .s3storage
-                                .put_object_stream(&digest, bs, Some(compressed_size as i64))
-                                .await
-                        }
-                        Err(e) => Err(anyhow::anyhow!(
-                            "Failed to open temp file for S3 upload: {}",
-                            e
-                        )),
-                    };
-                if let Err(e) = upload_result {
-                    error!("Failed to store object in S3: {}", e);
-                    record_metrics("500");
-                    if let Err(e) = hash_guard.release().await {
-                        warn!("Failed to release hash lock: {}", e);
-                    }
-                    if let Err(e) = guard.release().await {
-                        warn!("Failed to release file lock: {}", e);
-                    }
-                    return Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body("Failed to store object".to_string())
-                        .unwrap();
-                }
+                let byte_stream =
+                    aws_sdk_s3::primitives::ByteStream::from_path(&raw.temp_path)
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to open temp file for S3 upload: {}", e)
+                        })?;
+                state
+                    .s3storage
+                    .put_object_stream(&digest, byte_stream, Some(compressed_size as i64))
+                    .await
+                    .context("Failed to store object in S3")?;
                 (compressed_size, Some(raw))
             } else {
                 // Small file: buffer in memory and upload directly
@@ -269,89 +202,31 @@ pub async fn ft_put_file(
                         Ok(b) => b,
                         Err(e) => {
                             error!("Failed to read request body: {}", e);
-                            record_metrics("400");
-                            if let Err(e) = hash_guard.release().await {
-                                warn!("Failed to release hash lock: {}", e);
-                            }
-                            if let Err(e) = guard.release().await {
-                                warn!("Failed to release file lock: {}", e);
-                            }
-                            return Response::builder()
+                            return Ok(Response::builder()
                                 .status(StatusCode::BAD_REQUEST)
                                 .body("Failed to read request body".to_string())
-                                .unwrap();
+                                .unwrap());
                         }
                     };
                 let compressed_size = body_bytes.len();
                 let byte_stream = aws_sdk_s3::primitives::ByteStream::from(body_bytes);
-                if let Err(e) = state
+                state
                     .s3storage
                     .put_object_stream(&digest, byte_stream, Some(compressed_size as i64))
                     .await
-                {
-                    error!("Failed to store object in S3: {}", e);
-                    record_metrics("500");
-                    if let Err(e) = hash_guard.release().await {
-                        warn!("Failed to release hash lock: {}", e);
-                    }
-                    if let Err(e) = guard.release().await {
-                        warn!("Failed to release file lock: {}", e);
-                    }
-                    return Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body("Failed to store object".to_string())
-                        .unwrap();
-                }
+                    .context("Failed to store object in S3")?;
                 (compressed_size, None)
             };
 
-            // Set compressed size (only on dedup miss — on hit, it's already set)
-            if let Err(e) = state
-                .kvstorage
-                .set_compressed_size(&state.bucket_name, &digest, compressed_size)
-                .await
-            {
-                error!("Failed to store compressed size: {}", e);
-                record_metrics("500");
-                if let Err(e) = hash_guard.release().await {
-                    warn!("Failed to release hash lock: {}", e);
-                }
-                if let Err(e) = guard.release().await {
-                    warn!("Failed to release file lock: {}", e);
-                }
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body("Failed to store compressed size".to_string())
-                    .unwrap();
-            }
+            Some(compressed_size)
         } else {
-            // Dedup hit — body dropped unread (key memory optimization)
+            // Dedup hit — body dropped unread (key memory optimization).
+            // Don't update compressed_size — it's already set from the first upload.
             drop(body);
-        }
+            None
+        };
 
-        // Always set logical_size (idempotent, cheap — repairs metadata if KV was lost).
-        // compressed_size is only set on dedup miss above, since it already exists from
-        // the first upload and we don't have the body to measure on dedup hit.
-        if let Err(e) = state
-            .kvstorage
-            .set_logical_size(&state.bucket_name, &digest, logical_size)
-            .await
-        {
-            error!("Failed to store logical size: {}", e);
-            record_metrics("500");
-            if let Err(e) = hash_guard.release().await {
-                warn!("Failed to release hash lock: {}", e);
-            }
-            if let Err(e) = guard.release().await {
-                warn!("Failed to release file lock: {}", e);
-            }
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to store logical size".to_string())
-                .unwrap();
-        }
-
-        // Handle refcount
+        // Handle refcount — get old_hash before updating metadata
         let old_hash = if current_modified > 0 {
             state
                 .kvstorage
@@ -362,120 +237,40 @@ pub async fn ft_put_file(
             None
         };
 
-        let should_increment = match &old_hash {
-            Some(old) if !old.is_empty() && old == &digest => {
-                debug!("Overwriting {} with same content, keeping refcount", path);
-                false
-            }
-            _ => true,
-        };
+        // Record blob metadata: logical size, compressed size, and conditionally increment refcount
+        state
+            .record_blob_metadata(&digest, logical_size, compressed_size, old_hash.as_deref())
+            .await
+            .context("Failed to record blob metadata")?;
 
-        if should_increment
-            && let Err(e) = state
-                .kvstorage
-                .atomic_increment_ref_count(&state.bucket_name, &digest)
-                .await
-        {
-            error!("Failed to increment ref count: {}", e);
-            record_metrics("500");
-            if let Err(e) = hash_guard.release().await {
-                warn!("Failed to release hash lock: {}", e);
-            }
-            if let Err(e) = guard.release().await {
-                warn!("Failed to release file lock: {}", e);
-            }
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to increment ref count".to_string())
-                .unwrap();
-        }
-
-        if let Err(e) = hash_guard.release().await {
-            warn!("Failed to release hash lock: {}", e);
-        }
+        // Release hash lock — done with S3/refcount operations for new hash
+        let _ = hash_guard.release().await;
 
         // Handle old hash decrement
         if let Some(old_hash) = old_hash
-            && !old_hash.is_empty()
-            && old_hash != digest
+            && let Err(e) = state.decrement_old_ref(&old_hash, &digest).await
         {
-            info!(
-                "Overwriting existing link {}. Old hash: {}, new hash: {}",
-                path, old_hash, digest
-            );
-            let old_hash_lock_key = locks::hash_lock(&state.bucket_name, &old_hash);
-            let old_hash_lock = locks_storage.prepare_lock(old_hash_lock_key).await;
-            match old_hash_lock.acquire_exclusive().await {
-                Ok(old_hash_guard) => {
-                    let old_ref_count_result = state
-                        .kvstorage
-                        .atomic_decrement_ref_count(&state.bucket_name, &old_hash)
-                        .await;
-                    if let Ok(old_ref_count) = old_ref_count_result
-                        && old_ref_count <= 0
-                    {
-                        debug!("Deleting unused blob: {}", old_hash);
-                        let _ = state.s3storage.delete_object(&old_hash).await;
-                    }
-                    if let Err(e) = old_hash_guard.release().await {
-                        warn!("Failed to release old hash lock: {}", e);
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to acquire old hash lock for {}, refcount may be leaked (cleaner will reclaim): {}",
-                        old_hash, e
-                    );
-                }
-            }
+            warn!("Failed to decrement old ref for {}, refcount may be leaked (cleaner will reclaim): {}", old_hash, e);
         }
 
         // Update file metadata
-        if let Err(e) = state
-            .kvstorage
-            .set_ref_file(&state.bucket_name, path, &digest)
+        state
+            .update_file_ref(path, &digest, timestamp)
             .await
-        {
-            error!("Failed to set ref file: {}", e);
-            record_metrics("500");
-            if let Err(e) = guard.release().await {
-                warn!("Failed to release file lock: {}", e);
-            }
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to set ref file".to_string())
-                .unwrap();
-        }
-
-        if let Err(e) = state
-            .kvstorage
-            .set_modified(&state.bucket_name, path, timestamp)
-            .await
-        {
-            error!("Failed to set modified time: {}", e);
-            record_metrics("500");
-            if let Err(e) = guard.release().await {
-                warn!("Failed to release file lock: {}", e);
-            }
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to set modified time".to_string())
-                .unwrap();
-        }
+            .context("Failed to update file reference")?;
 
         debug!("Created link {} (fast path).", path);
-        if let Err(e) = guard.release().await {
-            warn!("Failed to release file lock: {}", e);
-        }
 
-        record_metrics("200");
+        // Release file lock — all critical metadata operations complete
+        let _ = guard.release().await;
+
         let last_modified_header = utils::format_rfc2822_timestamp(timestamp);
-        return Response::builder()
+        return Ok(Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "text/plain")
             .header("Last-Modified", last_modified_header)
             .body("".to_string())
-            .unwrap();
+            .unwrap());
     }
 
     // ====================================================================
@@ -505,11 +300,10 @@ pub async fn ft_put_file(
                     Ok(b) => b,
                     Err(e) => {
                         error!("Failed to read request body: {}", e);
-                        record_metrics("400");
-                        return Response::builder()
+                        return Ok(Response::builder()
                             .status(StatusCode::BAD_REQUEST)
                             .body("Failed to read request body".to_string())
-                            .unwrap();
+                            .unwrap());
                     }
                 };
             let final_data = body_bytes.to_vec();
@@ -543,11 +337,10 @@ pub async fn ft_put_file(
                 }
                 Err(e) => {
                     error!("Failed to stream request body: {}", e);
-                    record_metrics("400");
-                    return Response::builder()
+                    return Ok(Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body("Failed to stream request body".to_string())
-                        .unwrap();
+                        .unwrap());
                 }
             }
         } else if use_tempfile {
@@ -561,11 +354,10 @@ pub async fn ft_put_file(
                 }
                 Err(e) => {
                     error!("Failed to process request body: {}", e);
-                    record_metrics("400");
-                    return Response::builder()
+                    return Ok(Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .body("Failed to process request body".to_string())
-                        .unwrap();
+                        .unwrap());
                 }
             }
         } else {
@@ -575,11 +367,10 @@ pub async fn ft_put_file(
                     Ok(b) => b,
                     Err(e) => {
                         error!("Failed to read request body: {}", e);
-                        record_metrics("400");
-                        return Response::builder()
+                        return Ok(Response::builder()
                             .status(StatusCode::BAD_REQUEST)
                             .body("Failed to read request body".to_string())
-                            .unwrap();
+                            .unwrap());
                     }
                 };
 
@@ -588,11 +379,10 @@ pub async fn ft_put_file(
                     Ok(data) => data,
                     Err(e) => {
                         error!("Failed to decompress gzip data: {}", e);
-                        record_metrics("400");
-                        return Response::builder()
+                        return Ok(Response::builder()
                             .status(StatusCode::BAD_REQUEST)
                             .body("Failed to decompress gzip data".to_string())
-                            .unwrap();
+                            .unwrap());
                     }
                 }
             } else {
@@ -605,17 +395,8 @@ pub async fn ft_put_file(
             let final_data = if compressed {
                 body_bytes.to_vec()
             } else {
-                match storage_helpers::compress_gzip(&uncompressed_data) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        error!("Failed to compress data: {}", e);
-                        record_metrics("500");
-                        return Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body("Failed to compress data".to_string())
-                            .unwrap();
-                    }
-                }
+                storage_helpers::compress_gzip(&uncompressed_data)
+                    .context("Failed to compress data")?
             };
 
             let compressed_size = final_data.len();
@@ -632,32 +413,17 @@ pub async fn ft_put_file(
     let lock_key = locks::file_lock(&state.bucket_name, path);
     let locks_storage = &state.locks;
     let lock = locks_storage.prepare_lock(lock_key).await;
-    let guard = match lock.acquire_exclusive().await {
-        Ok(g) => g,
-        Err(e) => {
-            error!("Failed to acquire exclusive lock: {}", e);
-            record_metrics("500");
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to acquire lock".to_string())
-                .unwrap();
-        }
-    };
+    let guard = lock
+        .acquire_exclusive()
+        .await
+        .context("Failed to acquire exclusive lock")?;
 
     // 5. Check existing version (matching original logic)
-    let current_modified = state.kvstorage.get_modified(&state.bucket_name, path).await;
-    if current_modified.is_err() {
-        error!("Failed to get current modified");
-        record_metrics("500");
-        if let Err(e) = guard.release().await {
-            warn!("Failed to release file lock: {}", e);
-        }
-        return Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body("Failed to get current modified".to_string())
-            .unwrap();
-    }
-    let current_modified = current_modified.unwrap();
+    let current_modified = state
+        .kvstorage
+        .get_modified(&state.bucket_name, path)
+        .await
+        .context("Failed to get current modified")?;
 
     // If trying to store older version, ignore (return current version)
     if current_modified > timestamp {
@@ -665,11 +431,7 @@ pub async fn ft_put_file(
             "Tried to store older version of {} ({} < {}), ignoring.",
             path, timestamp, current_modified
         );
-        record_metrics("200");
-        if let Err(e) = guard.release().await {
-            warn!("Failed to release file lock: {}", e);
-        }
-        return Response::builder()
+        return Ok(Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "text/plain")
             .header(
@@ -677,51 +439,26 @@ pub async fn ft_put_file(
                 utils::format_rfc2822_timestamp(current_modified),
             )
             .body("".to_string())
-            .unwrap();
+            .unwrap());
     }
 
     // 7. Acquire hash lock for refcount/S3 operations
     let hash_lock_key = locks::hash_lock(&state.bucket_name, &digest);
     let hash_lock = locks_storage.prepare_lock(hash_lock_key).await;
-    let hash_guard = match hash_lock.acquire_exclusive().await {
-        Ok(g) => g,
-        Err(e) => {
-            error!("Failed to acquire hash lock: {}", e);
-            record_metrics("500");
-            if let Err(e) = guard.release().await {
-                warn!("Failed to release file lock: {}", e);
-            }
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to acquire hash lock".to_string())
-                .unwrap();
-        }
-    };
+    let hash_guard = hash_lock
+        .acquire_exclusive()
+        .await
+        .context("Failed to acquire hash lock")?;
 
     // 8. Handle deduplication
     let s3_key = &digest;
 
     debug!("Checking if blob {} already exists", s3_key);
-    let blob_exists = match state.s3storage.object_exists(s3_key).await {
-        Ok(exists) => exists,
-        Err(e) => {
-            error!(
-                "Failed to check object existence for path '{}' (bucket={}, key={}): {}",
-                path, state.bucket_name, s3_key, e
-            );
-            record_metrics("500");
-            if let Err(e) = hash_guard.release().await {
-                warn!("Failed to release hash lock: {}", e);
-            }
-            if let Err(e) = guard.release().await {
-                warn!("Failed to release file lock: {}", e);
-            }
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to check object existence".to_string())
-                .unwrap();
-        }
-    };
+    let blob_exists = state
+        .s3storage
+        .object_exists(s3_key)
+        .await
+        .context("Failed to check object existence")?;
 
     // Record deduplication metrics
     if blob_exists {
@@ -760,66 +497,10 @@ pub async fn ft_put_file(
             Err(anyhow::anyhow!("No data available for S3 upload"))
         };
 
-        if let Err(e) = upload_result {
-            error!(
-                "Failed to store object in S3 for path '{}' (bucket={}, key={}): {}",
-                path, state.bucket_name, s3_key, e
-            );
-            record_metrics("500");
-            if let Err(e) = hash_guard.release().await {
-                warn!("Failed to release hash lock: {}", e);
-            }
-            if let Err(e) = guard.release().await {
-                warn!("Failed to release file lock: {}", e);
-            }
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Failed to store object".to_string())
-                .unwrap();
-        }
+        upload_result.context("Failed to store object in S3")?;
     }
 
-    // Store compressed size metadata (always, in case KV metadata was lost but S3 blob still exists)
-    if let Err(e) = state
-        .kvstorage
-        .set_compressed_size(&state.bucket_name, &digest, compressed_size)
-        .await
-    {
-        error!("Failed to store compressed size: {}", e);
-        record_metrics("500");
-        if let Err(e) = hash_guard.release().await {
-            warn!("Failed to release hash lock: {}", e);
-        }
-        if let Err(e) = guard.release().await {
-            warn!("Failed to release file lock: {}", e);
-        }
-        return Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body("Failed to store compressed size".to_string())
-            .unwrap();
-    }
-
-    // Store logical size metadata (always, in case KV metadata was lost but S3 blob still exists)
-    if let Err(e) = state
-        .kvstorage
-        .set_logical_size(&state.bucket_name, &digest, logical_size)
-        .await
-    {
-        error!("Failed to store logical size: {}", e);
-        record_metrics("500");
-        if let Err(e) = hash_guard.release().await {
-            warn!("Failed to release hash lock: {}", e);
-        }
-        if let Err(e) = guard.release().await {
-            warn!("Failed to release file lock: {}", e);
-        }
-        return Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body("Failed to store logical size".to_string())
-            .unwrap();
-    }
-
-    // If overwriting existing file, handle reference count updates
+    // If overwriting existing file, get old hash for reference count management
     let old_hash = if current_modified > 0 {
         state
             .kvstorage
@@ -830,127 +511,32 @@ pub async fn ft_put_file(
         None
     };
 
-    // Only increment reference count if we're creating a new link or changing to different content
-    let should_increment = match &old_hash {
-        Some(old) if !old.is_empty() && old == &digest => {
-            debug!("Overwriting {} with same content, keeping refcount", path);
-            false
-        }
-        _ => true,
-    };
+    // Record blob metadata: logical size, compressed size, and conditionally increment refcount
+    state
+        .record_blob_metadata(&digest, logical_size, Some(compressed_size), old_hash.as_deref())
+        .await
+        .context("Failed to record blob metadata")?;
 
-    if should_increment
-        && let Err(e) = state
-            .kvstorage
-            .atomic_increment_ref_count(&state.bucket_name, &digest)
-            .await
-    {
-        error!("Failed to increment ref count: {}", e);
-        record_metrics("500");
-        if let Err(e) = hash_guard.release().await {
-            warn!("Failed to release hash lock: {}", e);
-        }
-        if let Err(e) = guard.release().await {
-            warn!("Failed to release file lock: {}", e);
-        }
-        return Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body("Failed to increment ref count".to_string())
-            .unwrap();
-    }
-
-    // Release new hash lock - we're done with S3/refcount operations for new hash
-    if let Err(e) = hash_guard.release().await {
-        warn!("Failed to release hash lock: {}", e);
-    }
+    // Release hash lock — done with S3/refcount operations for new hash
+    let _ = hash_guard.release().await;
 
     // If overwriting with different content, decrement old blob reference
     if let Some(old_hash) = old_hash
-        && !old_hash.is_empty()
-        && old_hash != digest
+        && let Err(e) = state.decrement_old_ref(&old_hash, &digest).await
     {
-        info!(
-            "Overwriting existing link {}. Old hash: {}, new hash: {}",
-            path, old_hash, digest
-        );
-
-        // Acquire lock on old hash before decrement
-        let old_hash_lock_key = locks::hash_lock(&state.bucket_name, &old_hash);
-        let old_hash_lock = locks_storage.prepare_lock(old_hash_lock_key).await;
-        let old_hash_guard = match old_hash_lock.acquire_exclusive().await {
-            Ok(g) => g,
-            Err(e) => {
-                error!("Failed to acquire old hash lock: {}", e);
-                record_metrics("500");
-                if let Err(e) = guard.release().await {
-                    warn!("Failed to release file lock: {}", e);
-                }
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body("Failed to acquire old hash lock".to_string())
-                    .unwrap();
-            }
-        };
-
-        // Decrement old reference count atomically and get new count
-        let old_ref_count_result = state
-            .kvstorage
-            .atomic_decrement_ref_count(&state.bucket_name, &old_hash)
-            .await;
-
-        // Delete old blob if no longer referenced
-        if let Ok(old_ref_count) = old_ref_count_result
-            && old_ref_count <= 0
-        {
-            debug!("Deleting unused blob: {}", old_hash);
-            let _ = state.s3storage.delete_object(&old_hash).await;
-        }
-
-        // Release old hash lock
-        if let Err(e) = old_hash_guard.release().await {
-            warn!("Failed to release old hash lock: {}", e);
-        }
+        warn!("Failed to decrement old ref for {}, refcount may be leaked (cleaner will reclaim): {}", old_hash, e);
     }
 
     // 9. Update file metadata (path -> hash mapping and timestamp)
-    if let Err(e) = state
-        .kvstorage
-        .set_ref_file(&state.bucket_name, path, &digest)
+    state
+        .update_file_ref(path, &digest, timestamp)
         .await
-    {
-        error!("Failed to set ref file: {}", e);
-        record_metrics("500");
-        if let Err(e) = guard.release().await {
-            warn!("Failed to release file lock: {}", e);
-        }
-        return Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body("Failed to set ref file".to_string())
-            .unwrap();
-    }
-
-    if let Err(e) = state
-        .kvstorage
-        .set_modified(&state.bucket_name, path, timestamp)
-        .await
-    {
-        error!("Failed to set modified time: {}", e);
-        record_metrics("500");
-        if let Err(e) = guard.release().await {
-            warn!("Failed to release file lock: {}", e);
-        }
-        return Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body("Failed to set modified time".to_string())
-            .unwrap();
-    }
+        .context("Failed to update file reference")?;
 
     debug!("Created link {}.", path);
 
-    // Release lock early since all critical metadata operations are complete
-    if let Err(e) = guard.release().await {
-        warn!("Failed to release file lock: {}", e);
-    }
+    // Release file lock — all critical metadata operations complete
+    let _ = guard.release().await;
 
     // 10. Dual-write to filetracker if in live migration mode
     if let Some(filetracker_client) = &state.filetracker_client {
@@ -977,14 +563,13 @@ pub async fn ft_put_file(
                     );
                     // Don't send compressed bytes to V1 — it would store garbage.
                     // s3dedup write already succeeded, just skip the dual-write.
-                    record_metrics("200");
                     let last_modified_header = utils::format_rfc2822_timestamp(timestamp);
-                    return Response::builder()
+                    return Ok(Response::builder()
                         .status(StatusCode::OK)
                         .header("Content-Type", "text/plain")
                         .header("Last-Modified", last_modified_header)
                         .body("".to_string())
-                        .unwrap();
+                        .unwrap());
                 }
             };
 
@@ -1012,18 +597,17 @@ pub async fn ft_put_file(
         }
     }
 
-    record_metrics("200");
     let last_modified_header = utils::format_rfc2822_timestamp(timestamp);
     debug!(
         "PUT {} complete, returning Last-Modified: {} (unix: {})",
         path, last_modified_header, timestamp
     );
-    Response::builder()
+    Ok(Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "text/plain")
         .header("Last-Modified", last_modified_header)
         .body("".to_string())
-        .unwrap()
+        .unwrap())
 }
 
 #[cfg(test)]

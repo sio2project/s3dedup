@@ -1,11 +1,12 @@
-use crate::routes::ft::utils;
-use crate::{AppState, locks, metrics};
+use crate::routes::ft::{MetricsRecorder, build_ft_file_response, utils};
+use crate::{AppState, locks};
+use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use std::sync::Arc;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 /// HEAD handler — returns file metadata headers without fetching file content from S3.
 /// Uses a shared lock to ensure consistent metadata reads.
@@ -13,54 +14,45 @@ pub async fn ft_head_file(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
 ) -> impl IntoResponse {
-    let start = std::time::Instant::now();
+    let record_metrics = MetricsRecorder::new("HEAD", "/ft/files");
     let path = path.strip_prefix('/').unwrap_or(&path);
     debug!("Handling HEAD for path: {}", path);
 
+    match ft_head_file_inner(&state, path).await {
+        Ok(response) => {
+            let status = response.status().as_u16().to_string();
+            record_metrics.record(&status);
+            response
+        }
+        Err(e) => {
+            error!("HEAD {} failed: {}", path, e);
+            record_metrics.record("500");
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::empty())
+                .unwrap()
+        }
+    }
+}
+
+async fn ft_head_file_inner(state: &AppState, path: &str) -> Result<Response<Body>> {
     // Acquire shared lock for consistent metadata reads
     let lock_key = locks::file_lock(&state.bucket_name, path);
     let lock = state.locks.prepare_lock(lock_key).await;
-    let guard = match lock.acquire_shared().await {
-        Ok(g) => g,
-        Err(e) => {
-            error!("Failed to acquire shared lock for HEAD: {}", e);
-            metrics::HTTP_REQUESTS_TOTAL
-                .with_label_values(&["HEAD", "/ft/files", "500"])
-                .inc();
-            metrics::HTTP_REQUEST_DURATION_SECONDS
-                .with_label_values(&["HEAD", "/ft/files"])
-                .observe(start.elapsed().as_secs_f64());
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::empty())
-                .unwrap();
-        }
-    };
+    let guard = lock
+        .acquire_shared()
+        .await
+        .context("Failed to acquire shared lock")?;
 
-    let modified_time = match state.kvstorage.get_modified(&state.bucket_name, path).await {
-        Ok(v) => v,
-        Err(e) => {
-            error!("Failed to get modified time: {}", e);
-            metrics::HTTP_REQUESTS_TOTAL
-                .with_label_values(&["HEAD", "/ft/files", "500"])
-                .inc();
-            metrics::HTTP_REQUEST_DURATION_SECONDS
-                .with_label_values(&["HEAD", "/ft/files"])
-                .observe(start.elapsed().as_secs_f64());
-            if let Err(e) = guard.release().await {
-                warn!("Failed to release file lock: {}", e);
-            }
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::empty())
-                .unwrap();
-        }
-    };
+    let modified_time = state
+        .kvstorage
+        .get_modified(&state.bucket_name, path)
+        .await
+        .context("Failed to get modified time")?;
 
     if modified_time == 0 {
-        if let Err(e) = guard.release().await {
-            warn!("Failed to release file lock: {}", e);
-        }
+        // Drop guard before filetracker fallback (no longer need local lock)
+        let _ = guard.release().await;
 
         // Check filetracker in live migration mode using HEAD (no body download)
         if let Some(filetracker_client) = &state.filetracker_client {
@@ -69,13 +61,7 @@ pub async fn ft_head_file(
                     debug!("File {} not found in filetracker: {}", path, e);
                 }
                 Ok(file_headers) => {
-                    metrics::HTTP_REQUESTS_TOTAL
-                        .with_label_values(&["HEAD", "/ft/files", "200"])
-                        .inc();
-                    metrics::HTTP_REQUEST_DURATION_SECONDS
-                        .with_label_values(&["HEAD", "/ft/files"])
-                        .observe(start.elapsed().as_secs_f64());
-                    return Response::builder()
+                    return Ok(Response::builder()
                         .status(StatusCode::OK)
                         .header("Content-Type", "application/octet-stream")
                         .header("Content-Length", file_headers.content_length.to_string())
@@ -93,70 +79,39 @@ pub async fn ft_head_file(
                         )
                         .header("Logical-Size", file_headers.logical_size.to_string())
                         .body(Body::empty())
-                        .unwrap();
+                        .unwrap());
                 }
             }
         }
 
-        metrics::HTTP_REQUESTS_TOTAL
-            .with_label_values(&["HEAD", "/ft/files", "404"])
-            .inc();
-        metrics::HTTP_REQUEST_DURATION_SECONDS
-            .with_label_values(&["HEAD", "/ft/files"])
-            .observe(start.elapsed().as_secs_f64());
-        return Response::builder()
+        return Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(Body::empty())
-            .unwrap();
+            .unwrap());
     }
 
-    let hash = match state.kvstorage.get_ref_file(&state.bucket_name, path).await {
-        Ok(h) if !h.is_empty() => h,
-        _ => {
-            metrics::HTTP_REQUESTS_TOTAL
-                .with_label_values(&["HEAD", "/ft/files", "404"])
-                .inc();
-            metrics::HTTP_REQUEST_DURATION_SECONDS
-                .with_label_values(&["HEAD", "/ft/files"])
-                .observe(start.elapsed().as_secs_f64());
-            if let Err(e) = guard.release().await {
-                warn!("Failed to release file lock: {}", e);
-            }
-            return Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::empty())
-                .unwrap();
-        }
-    };
+    let hash = state
+        .kvstorage
+        .get_ref_file(&state.bucket_name, path)
+        .await
+        .context("Failed to get ref file")?;
+
+    if hash.is_empty() {
+        return Ok(Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .unwrap());
+    }
 
     let logical_size_fut = state.kvstorage.get_logical_size(&state.bucket_name, &hash);
     let compressed_size_fut = state
         .kvstorage
         .get_compressed_size(&state.bucket_name, &hash);
-    let (logical_size, compressed_size) =
-        match tokio::try_join!(logical_size_fut, compressed_size_fut) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Failed to get size metadata: {}", e);
-                metrics::HTTP_REQUESTS_TOTAL
-                    .with_label_values(&["HEAD", "/ft/files", "500"])
-                    .inc();
-                metrics::HTTP_REQUEST_DURATION_SECONDS
-                    .with_label_values(&["HEAD", "/ft/files"])
-                    .observe(start.elapsed().as_secs_f64());
-                if let Err(e) = guard.release().await {
-                    warn!("Failed to release file lock: {}", e);
-                }
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::empty())
-                    .unwrap();
-            }
-        };
+    let (logical_size, compressed_size) = tokio::try_join!(logical_size_fut, compressed_size_fut)
+        .context("Failed to get size metadata")?;
 
-    if let Err(e) = guard.release().await {
-        warn!("Failed to release file lock: {}", e);
-    }
+    // Release lock — all metadata reads complete
+    let _ = guard.release().await;
 
     // For legacy blobs without stored compressed_size, fall back to S3 head_object.
     // This runs after lock release — a concurrent DELETE could remove the object,
@@ -171,21 +126,10 @@ pub async fn ft_head_file(
         }
     };
 
-    metrics::HTTP_REQUESTS_TOTAL
-        .with_label_values(&["HEAD", "/ft/files", "200"])
-        .inc();
-    metrics::HTTP_REQUEST_DURATION_SECONDS
-        .with_label_values(&["HEAD", "/ft/files"])
-        .observe(start.elapsed().as_secs_f64());
-
-    let last_modified_header = utils::format_rfc2822_timestamp(modified_time);
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/octet-stream")
-        .header("Content-Length", content_length.to_string())
-        .header("Content-Encoding", "gzip")
-        .header("Last-Modified", last_modified_header)
-        .header("Logical-Size", logical_size.to_string())
-        .body(Body::empty())
-        .unwrap()
+    Ok(build_ft_file_response(
+        Body::empty(),
+        content_length,
+        logical_size,
+        modified_time,
+    ))
 }
