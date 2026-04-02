@@ -42,10 +42,7 @@ pub async fn create_pg_pool(config: &PostgresConfig, label: &str) -> Result<PgPo
         .max_lifetime(Some(Duration::from_secs(1800)))
         .connect(&db_url)
         .await
-        .context(format!(
-            "Failed to connect to PostgreSQL for {}",
-            label
-        ))?;
+        .context(format!("Failed to connect to PostgreSQL for {}", label))?;
 
     sqlx::query("SELECT 1")
         .execute(&pool)

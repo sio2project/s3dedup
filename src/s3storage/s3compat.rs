@@ -345,10 +345,15 @@ impl S3CompatClient {
     }
 
     /// Check if an S3 error string/debug representation contains any of the given patterns
-    fn error_contains(err: &aws_sdk_s3::error::SdkError<impl std::fmt::Debug>, patterns: &[&str]) -> bool {
+    fn error_contains(
+        err: &aws_sdk_s3::error::SdkError<impl std::fmt::Debug>,
+        patterns: &[&str],
+    ) -> bool {
         let err_string = err.to_string();
         let err_debug = format!("{:?}", err);
-        patterns.iter().any(|p| err_string.contains(p) || err_debug.contains(p))
+        patterns
+            .iter()
+            .any(|p| err_string.contains(p) || err_debug.contains(p))
     }
 
     /// Check if an error indicates object not found

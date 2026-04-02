@@ -122,12 +122,7 @@ impl AppState {
     // --- Shared helpers for PUT and migration ---
 
     /// Set ref_file and modified timestamp for a path.
-    pub async fn update_file_ref(
-        &self,
-        path: &str,
-        digest: &str,
-        timestamp: i64,
-    ) -> Result<()> {
+    pub async fn update_file_ref(&self, path: &str, digest: &str, timestamp: i64) -> Result<()> {
         self.kvstorage
             .set_ref_file(&self.bucket_name, path, digest)
             .await?;
@@ -168,11 +163,7 @@ impl AppState {
 
     /// Decrement the refcount for `old_hash` and delete the S3 blob if it reaches 0.
     /// Acquires hash lock internally. No-op if `old_hash` is empty or equals `new_digest`.
-    pub async fn decrement_old_ref(
-        &self,
-        old_hash: &str,
-        new_digest: &str,
-    ) -> Result<()> {
+    pub async fn decrement_old_ref(&self, old_hash: &str, new_digest: &str) -> Result<()> {
         if old_hash.is_empty() || old_hash == new_digest {
             return Ok(());
         }

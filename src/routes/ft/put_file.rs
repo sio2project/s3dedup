@@ -183,12 +183,11 @@ async fn ft_put_file_inner(
                     }
                 };
                 let compressed_size = raw.data_size;
-                let byte_stream =
-                    aws_sdk_s3::primitives::ByteStream::from_path(&raw.temp_path)
-                        .await
-                        .map_err(|e| {
-                            anyhow::anyhow!("Failed to open temp file for S3 upload: {}", e)
-                        })?;
+                let byte_stream = aws_sdk_s3::primitives::ByteStream::from_path(&raw.temp_path)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to open temp file for S3 upload: {}", e)
+                    })?;
                 state
                     .s3storage
                     .put_object_stream(&digest, byte_stream, Some(compressed_size as i64))
@@ -250,7 +249,10 @@ async fn ft_put_file_inner(
         if let Some(old_hash) = old_hash
             && let Err(e) = state.decrement_old_ref(&old_hash, &digest).await
         {
-            warn!("Failed to decrement old ref for {}, refcount may be leaked (cleaner will reclaim): {}", old_hash, e);
+            warn!(
+                "Failed to decrement old ref for {}, refcount may be leaked (cleaner will reclaim): {}",
+                old_hash, e
+            );
         }
 
         // Update file metadata
@@ -513,7 +515,12 @@ async fn ft_put_file_inner(
 
     // Record blob metadata: logical size, compressed size, and conditionally increment refcount
     state
-        .record_blob_metadata(&digest, logical_size, Some(compressed_size), old_hash.as_deref())
+        .record_blob_metadata(
+            &digest,
+            logical_size,
+            Some(compressed_size),
+            old_hash.as_deref(),
+        )
         .await
         .context("Failed to record blob metadata")?;
 
@@ -524,7 +531,10 @@ async fn ft_put_file_inner(
     if let Some(old_hash) = old_hash
         && let Err(e) = state.decrement_old_ref(&old_hash, &digest).await
     {
-        warn!("Failed to decrement old ref for {}, refcount may be leaked (cleaner will reclaim): {}", old_hash, e);
+        warn!(
+            "Failed to decrement old ref for {}, refcount may be leaked (cleaner will reclaim): {}",
+            old_hash, e
+        );
     }
 
     // 9. Update file metadata (path -> hash mapping and timestamp)

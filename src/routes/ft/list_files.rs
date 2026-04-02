@@ -1,5 +1,5 @@
-use crate::routes::ft::MetricsRecorder;
 use crate::AppState;
+use crate::routes::ft::MetricsRecorder;
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
 use axum::http::{Response, StatusCode};
