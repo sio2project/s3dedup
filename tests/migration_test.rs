@@ -1465,3 +1465,73 @@ async fn test_live_migration_get_streaming_tempfile() {
         s3dedup::routes::ft::storage_helpers::compute_sha256(test_data)
     );
 }
+
+/// Test on-the-fly migration via GET with in-memory path (high threshold, small file).
+/// Verifies that download_file dispatches to migrate_single_file_from_metadata.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_live_migration_get_inmemory_small() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    // 1MB threshold — small test data goes through in-memory path
+    let app_state = create_test_app_state_with_threshold(1024 * 1024).await;
+
+    let test_data = b"Small file for in-memory on-the-fly migration via GET";
+    mock_state
+        .add_file("inmem_get.txt", test_data.to_vec())
+        .await;
+
+    let app_state_with_ft = Arc::new(AppState {
+        bucket_name: app_state.bucket_name.clone(),
+        kvstorage: app_state.kvstorage.clone(),
+        locks: app_state.locks.clone(),
+        s3storage: app_state.s3storage.clone(),
+        filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 1024 * 1024,
+    });
+
+    let app = Router::new()
+        .route(
+            "/ft/files/{*path}",
+            get(s3dedup::routes::ft::get_file::ft_get_file),
+        )
+        .with_state(app_state_with_ft.clone());
+
+    // GET triggers on-the-fly migration via in-memory path
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/ft/files/inmem_get.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Verify response body
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let decompressed = s3dedup::routes::ft::storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_data);
+
+    // Verify file is migrated
+    let modified = app_state_with_ft
+        .kvstorage
+        .get_modified(&app_state_with_ft.bucket_name, "inmem_get.txt")
+        .await
+        .unwrap();
+    assert!(modified > 0);
+
+    let hash = app_state_with_ft
+        .kvstorage
+        .get_ref_file(&app_state_with_ft.bucket_name, "inmem_get.txt")
+        .await
+        .unwrap();
+    assert_eq!(
+        hash,
+        s3dedup::routes::ft::storage_helpers::compute_sha256(test_data)
+    );
+}
