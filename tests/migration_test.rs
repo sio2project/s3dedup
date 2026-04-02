@@ -187,6 +187,7 @@ async fn create_test_app_state() -> Arc<AppState> {
         s3storage: Arc::new(*s3storage),
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 64 * 1024 * 1024,
     });
 
     app_state.kvstorage.setup().await.unwrap();
@@ -376,6 +377,7 @@ async fn test_live_migration_get_fallback() {
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 64 * 1024 * 1024,
     });
 
     // Create router with live migration support
@@ -421,6 +423,7 @@ async fn test_live_migration_put_dual_write() {
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 64 * 1024 * 1024,
     });
 
     // Create router with live migration support
@@ -496,6 +499,7 @@ async fn test_live_migration_delete_dual_delete() {
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 64 * 1024 * 1024,
     });
 
     // Verify file exists in both before deletion
@@ -563,6 +567,7 @@ async fn test_live_migration_get_not_found_in_both() {
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 64 * 1024 * 1024,
     });
 
     // Create router with live migration support
@@ -606,6 +611,7 @@ async fn test_live_migration_get_fallback_response_data() {
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 64 * 1024 * 1024,
     });
 
     // Create router with live migration support
@@ -682,6 +688,7 @@ async fn test_live_migration_get_no_deadlock_on_fallback() {
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 64 * 1024 * 1024,
     });
 
     // Create router
@@ -744,6 +751,7 @@ async fn test_live_migration_subsequent_get_from_s3dedup() {
         s3storage: app_state.s3storage.clone(),
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 64 * 1024 * 1024,
     });
 
     // First GET - should fallback to filetracker and migrate

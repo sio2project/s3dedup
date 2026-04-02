@@ -37,6 +37,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         s3storage: Arc::new(*s3storage),
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 64 * 1024 * 1024,
     });
 
     app_state.kvstorage.setup().await.unwrap();
@@ -53,7 +54,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         .route(
             "/ft/files/{*path}",
             get(s3dedup::routes::ft::get_file::ft_get_file)
-                .head(s3dedup::routes::ft::get_file::ft_head_file)
+                .head(s3dedup::routes::ft::head_file::ft_head_file)
                 .put(s3dedup::routes::ft::put_file::ft_put_file)
                 .delete(s3dedup::routes::ft::delete_file::ft_delete_file),
         )
@@ -1815,7 +1816,10 @@ async fn test_streaming_get_large_file() {
     assert_eq!(body_bytes.len(), compressed_data.len());
 
     let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
-    assert_eq!(decompressed, test_content, "Large file content mismatch after streaming GET");
+    assert_eq!(
+        decompressed, test_content,
+        "Large file content mismatch after streaming GET"
+    );
 }
 
 /// Test PUT fast path: dedup hit skips body read entirely.
@@ -2041,7 +2045,12 @@ async fn test_streaming_put_fast_path_older_timestamp_skipped() {
     // Should return 200 with the current (newer) timestamp
     assert_eq!(put2.status(), StatusCode::OK);
 
-    let last_modified = put2.headers().get("Last-Modified").unwrap().to_str().unwrap();
+    let last_modified = put2
+        .headers()
+        .get("Last-Modified")
+        .unwrap()
+        .to_str()
+        .unwrap();
     // Should return the newer timestamp, not the old one
     assert_ne!(last_modified, timestamp_old);
 }
@@ -2081,7 +2090,10 @@ async fn test_streaming_put_slow_path_uncompressed() {
         .get_ref_file(&state.bucket_name, "stream/slowuncomp.txt")
         .await
         .unwrap();
-    assert_eq!(stored_hash, expected_sha256, "Hash should match expected SHA256");
+    assert_eq!(
+        stored_hash, expected_sha256,
+        "Hash should match expected SHA256"
+    );
 
     // Verify logical size
     let logical_size = state
@@ -2115,7 +2127,10 @@ async fn test_streaming_put_slow_path_uncompressed() {
     use axum::body::to_bytes;
     let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
     let decompressed = s3dedup::routes::ft::storage_helpers::decompress_gzip(&body_bytes).unwrap();
-    assert_eq!(decompressed, test_content, "GET should return original content");
+    assert_eq!(
+        decompressed, test_content,
+        "GET should return original content"
+    );
 }
 
 /// Test PUT slow path: compressed input without checksum header goes through temp file pipeline.
@@ -2244,7 +2259,10 @@ async fn test_streaming_put_slow_path_large_uncompressed() {
     use axum::body::to_bytes;
     let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
     let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
-    assert_eq!(decompressed, test_content, "Large file roundtrip should preserve content");
+    assert_eq!(
+        decompressed, test_content,
+        "Large file roundtrip should preserve content"
+    );
 }
 
 /// Test PUT + GET roundtrip with large compressed data (fast path + streaming GET).
@@ -2323,6 +2341,237 @@ async fn test_streaming_roundtrip_large_compressed() {
     let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
     assert_eq!(body_bytes.len(), compressed_data.len());
 
+    let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content);
+}
+
+// Helper to create test app with a custom max_inmemory_size
+async fn create_test_app_with_inmemory_size(
+    max_inmemory_size: usize,
+) -> (Router, Arc<s3dedup::AppState>) {
+    use s3dedup::AppState;
+    use s3dedup::kvstorage::KVStorage;
+    use s3dedup::locks::LocksStorage;
+    use s3dedup::s3storage::S3Storage;
+
+    let (config, _unique_id) = common::create_test_config("test");
+
+    let kvstorage = KVStorage::new(&config).await.unwrap();
+    let locks = LocksStorage::new_with_config(config.locks_type, &config)
+        .await
+        .unwrap();
+    let s3storage = S3Storage::new(&config.bucket).await.unwrap();
+
+    let app_state = Arc::new(AppState {
+        bucket_name: config.bucket.name.clone(),
+        kvstorage: Arc::new(*kvstorage),
+        locks: Arc::new(*locks),
+        s3storage: Arc::new(*s3storage),
+        filetracker_client: None,
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size,
+    });
+
+    app_state.kvstorage.setup().await.unwrap();
+
+    let router = Router::new()
+        .route(
+            "/ft/files/{*path}",
+            axum::routing::get(s3dedup::routes::ft::get_file::ft_get_file)
+                .head(s3dedup::routes::ft::head_file::ft_head_file)
+                .put(s3dedup::routes::ft::put_file::ft_put_file)
+                .delete(s3dedup::routes::ft::delete_file::ft_delete_file),
+        )
+        .with_state(app_state.clone());
+
+    (router, app_state)
+}
+
+/// Test slow path in-memory processing (data below max_inmemory_size threshold).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_slow_path_inmemory_below_threshold() {
+    use tower::Service;
+
+    let (mut app, state) = create_test_app_with_inmemory_size(1024 * 1024).await;
+
+    let test_content = b"Small file for in-memory slow path test";
+    let expected_sha256 = s3dedup::routes::ft::storage_helpers::compute_sha256(test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // PUT without compression headers — triggers slow path
+    // Data is small (< 1MB threshold) → in-memory processing
+    let put_resp = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/threshold/small.txt?last_modified={}",
+                    encoded_timestamp
+                ))
+                .method("PUT")
+                .body(Body::from(test_content.to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::OK);
+
+    let stored_hash = state
+        .kvstorage
+        .get_ref_file(&state.bucket_name, "threshold/small.txt")
+        .await
+        .unwrap();
+    assert_eq!(stored_hash, expected_sha256);
+
+    // GET and verify roundtrip
+    let get_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/threshold/small.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+    let decompressed = s3dedup::routes::ft::storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content);
+}
+
+/// Test slow path temp file processing (data above max_inmemory_size threshold).
+/// Uses a very low threshold (100 bytes) so our test data goes through the temp file path.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_slow_path_tempfile_above_threshold() {
+    use tower::Service;
+
+    let (mut app, state) = create_test_app_with_inmemory_size(100).await;
+
+    // 1KB of data — above the 100 byte threshold
+    let test_content: Vec<u8> = (0..1024).map(|i| (i % 251) as u8).collect();
+    let expected_sha256 = s3dedup::routes::ft::storage_helpers::compute_sha256(&test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // PUT without compression headers, with Content-Length > threshold → temp file
+    let put_resp = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/threshold/large.bin?last_modified={}",
+                    encoded_timestamp
+                ))
+                .method("PUT")
+                .header("Content-Length", test_content.len().to_string())
+                .body(Body::from(test_content.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::OK);
+
+    let stored_hash = state
+        .kvstorage
+        .get_ref_file(&state.bucket_name, "threshold/large.bin")
+        .await
+        .unwrap();
+    assert_eq!(stored_hash, expected_sha256);
+
+    let logical_size = state
+        .kvstorage
+        .get_logical_size(&state.bucket_name, &expected_sha256)
+        .await
+        .unwrap();
+    assert_eq!(logical_size, test_content.len());
+
+    let compressed_size = state
+        .kvstorage
+        .get_compressed_size(&state.bucket_name, &expected_sha256)
+        .await
+        .unwrap();
+    assert!(compressed_size > 0);
+
+    // GET and verify roundtrip
+    let get_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/threshold/large.bin")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+    let decompressed = s3dedup::routes::ft::storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content);
+}
+
+/// Test compressed slow path also respects the threshold.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_slow_path_tempfile_compressed_above_threshold() {
+    use tower::Service;
+
+    let (mut app, state) = create_test_app_with_inmemory_size(50).await;
+
+    let test_content = b"Compressed data for temp file threshold test - must be long enough";
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(test_content).unwrap();
+    let expected_sha256 = storage_helpers::compute_sha256(test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // PUT with gzip but WITHOUT SHA256-Checksum (slow path), Content-Length > 50 → temp file
+    let put_resp = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/threshold/comp.bin?last_modified={}",
+                    encoded_timestamp
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("Logical-Size", test_content.len().to_string())
+                .header("Content-Length", compressed_data.len().to_string())
+                .body(Body::from(compressed_data))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::OK);
+
+    let stored_hash = state
+        .kvstorage
+        .get_ref_file(&state.bucket_name, "threshold/comp.bin")
+        .await
+        .unwrap();
+    assert_eq!(stored_hash, expected_sha256);
+
+    // GET and verify
+    let get_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/threshold/comp.bin")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
     let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
     assert_eq!(decompressed, test_content);
 }

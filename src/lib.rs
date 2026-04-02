@@ -33,6 +33,8 @@ pub struct AppState {
     pub s3storage: Arc<s3storage::S3Storage>,
     pub filetracker_client: Option<Arc<filetracker_client::FiletrackerClient>>,
     pub metrics: Arc<metrics::Metrics>,
+    /// Max file size to process in memory during PUT slow path. Larger files use temp files.
+    pub max_inmemory_size: usize,
 }
 
 impl AppState {
@@ -48,6 +50,7 @@ impl AppState {
             s3storage: Arc::new(*s3storage),
             filetracker_client: None,
             metrics,
+            max_inmemory_size: config.bucket.max_inmemory_size,
         }))
     }
 
@@ -71,6 +74,7 @@ impl AppState {
             s3storage: Arc::new(*s3storage),
             filetracker_client: Some(Arc::new(filetracker_client)),
             metrics,
+            max_inmemory_size: config.bucket.max_inmemory_size,
         }))
     }
 

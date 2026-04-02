@@ -153,7 +153,10 @@ pub async fn ft_head_file(
         warn!("Failed to release file lock: {}", e);
     }
 
-    // For legacy blobs without stored compressed_size, fall back to S3 head_object
+    // For legacy blobs without stored compressed_size, fall back to S3 head_object.
+    // This runs after lock release — a concurrent DELETE could remove the object,
+    // causing us to return Content-Length: 0. This is acceptable: the file is being
+    // deleted anyway, and HEAD has no body to truncate.
     let content_length = if compressed_size > 0 {
         compressed_size as i64
     } else {

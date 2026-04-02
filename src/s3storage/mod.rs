@@ -1,7 +1,7 @@
-use aws_sdk_s3::primitives::ByteStream;
 use crate::config::BucketConfig;
 use anyhow::Result;
 use async_trait::async_trait;
+use aws_sdk_s3::primitives::ByteStream;
 use serde::Deserialize;
 use tracing::{debug, info};
 
@@ -53,6 +53,22 @@ pub(crate) trait S3StorageTrait {
     async fn get_object(&self, key: &str) -> Result<Vec<u8>>;
     async fn delete_object(&self, key: &str) -> Result<()>;
     async fn object_exists(&self, key: &str) -> Result<bool>;
+
+    /// Put an object from a ByteStream without buffering into memory.
+    async fn put_object_stream(
+        &self,
+        key: &str,
+        body: ByteStream,
+        content_length: Option<i64>,
+    ) -> Result<()>;
+
+    /// Get an object as a stream without buffering into memory.
+    /// Returns (ByteStream, content_length).
+    async fn get_object_stream(&self, key: &str) -> Result<(ByteStream, Option<i64>)>;
+
+    /// HEAD an object to check existence and get content length.
+    /// Returns None if the object does not exist.
+    async fn object_exists_with_size(&self, key: &str) -> Result<Option<i64>>;
 
     /// List objects in batches with continuation support
     /// Returns (keys, continuation_token)

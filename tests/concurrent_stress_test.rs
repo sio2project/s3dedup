@@ -33,6 +33,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         s3storage: Arc::new(*s3storage),
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 64 * 1024 * 1024,
     });
 
     app_state.kvstorage.setup().await.unwrap();

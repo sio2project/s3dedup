@@ -241,33 +241,8 @@ impl S3StorageTrait for S3CompatClient {
         debug!("Health check passed for bucket {}", self.bucket);
         Ok(())
     }
-}
 
-impl S3CompatClient {
-    /// Get an object from S3 as a stream without buffering into memory.
-    /// Returns (ByteStream, content_length).
-    pub async fn get_object_stream(&self, key: &str) -> Result<(ByteStream, Option<i64>)> {
-        let s3_key = self.hash_to_s3_key(key);
-        debug!("Getting object stream: {} -> {}", key, s3_key);
-
-        let resp = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(&s3_key)
-            .send()
-            .await?;
-
-        let content_length = resp.content_length;
-        debug!(
-            "Got object stream: {} (content_length: {:?})",
-            s3_key, content_length
-        );
-        Ok((resp.body, content_length))
-    }
-
-    /// Put an object to S3 from a ByteStream without buffering into memory.
-    pub async fn put_object_stream(
+    async fn put_object_stream(
         &self,
         key: &str,
         body: ByteStream,
@@ -294,8 +269,27 @@ impl S3CompatClient {
         Ok(())
     }
 
-    /// Head an object to get its content length. Returns None if not found.
-    pub async fn object_exists_with_size(&self, key: &str) -> Result<Option<i64>> {
+    async fn get_object_stream(&self, key: &str) -> Result<(ByteStream, Option<i64>)> {
+        let s3_key = self.hash_to_s3_key(key);
+        debug!("Getting object stream: {} -> {}", key, s3_key);
+
+        let resp = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(&s3_key)
+            .send()
+            .await?;
+
+        let content_length = resp.content_length;
+        debug!(
+            "Got object stream: {} (content_length: {:?})",
+            s3_key, content_length
+        );
+        Ok((resp.body, content_length))
+    }
+
+    async fn object_exists_with_size(&self, key: &str) -> Result<Option<i64>> {
         let s3_key = self.hash_to_s3_key(key);
         debug!("HEAD object for size: {} -> {}", key, s3_key);
 
@@ -317,7 +311,9 @@ impl S3CompatClient {
             }
         }
     }
+}
 
+impl S3CompatClient {
     /// Transform a raw hash to S3 key with sharding prefix
     /// "abcdef..." -> "ab/cd/abcdef..."
     fn hash_to_s3_key(&self, hash: &str) -> String {

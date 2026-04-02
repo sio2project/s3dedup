@@ -1,5 +1,6 @@
 pub mod delete_file;
 pub mod get_file;
+pub mod head_file;
 pub mod list_files;
 pub mod put_file;
 pub mod storage_helpers;

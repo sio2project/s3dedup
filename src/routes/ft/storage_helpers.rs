@@ -118,9 +118,7 @@ pub struct ProcessingResult {
 }
 
 /// Process a compressed temp file: decompress to compute hash, keep original for S3.
-pub fn process_compressed_temp_file(
-    input_path: &std::path::Path,
-) -> Result<ProcessingResult> {
+pub fn process_compressed_temp_file(input_path: &std::path::Path) -> Result<ProcessingResult> {
     use flate2::read::GzDecoder;
     use std::io::Read;
 
@@ -153,9 +151,7 @@ pub fn process_compressed_temp_file(
 }
 
 /// Process an uncompressed temp file: compute hash and compress to new temp file.
-pub fn process_uncompressed_temp_file(
-    input_path: &std::path::Path,
-) -> Result<ProcessingResult> {
+pub fn process_uncompressed_temp_file(input_path: &std::path::Path) -> Result<ProcessingResult> {
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use std::io::{Read, Write};
@@ -232,7 +228,11 @@ mod tests {
         let result = process_uncompressed_temp_file(input.path()).unwrap();
 
         assert_eq!(result.digest, expected_hash, "Hash should match");
-        assert_eq!(result.logical_size, data.len(), "Logical size should match input");
+        assert_eq!(
+            result.logical_size,
+            data.len(),
+            "Logical size should match input"
+        );
         assert_eq!(
             result.compressed_size,
             expected_compressed.len(),
@@ -242,7 +242,10 @@ mod tests {
         // Verify the compressed file can be decompressed back to original
         let compressed_bytes = std::fs::read(&result.compressed_path).unwrap();
         let decompressed = decompress_gzip(&compressed_bytes).unwrap();
-        assert_eq!(decompressed, data, "Decompressed output should match original");
+        assert_eq!(
+            decompressed, data,
+            "Decompressed output should match original"
+        );
     }
 
     #[test]
@@ -260,8 +263,15 @@ mod tests {
 
         let result = process_compressed_temp_file(input.path()).unwrap();
 
-        assert_eq!(result.digest, expected_hash, "Hash should match uncompressed content");
-        assert_eq!(result.logical_size, data.len(), "Logical size should match uncompressed");
+        assert_eq!(
+            result.digest, expected_hash,
+            "Hash should match uncompressed content"
+        );
+        assert_eq!(
+            result.logical_size,
+            data.len(),
+            "Logical size should match uncompressed"
+        );
         assert_eq!(
             result.compressed_size,
             compressed.len(),
