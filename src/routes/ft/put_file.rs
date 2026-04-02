@@ -206,23 +206,24 @@ pub async fn ft_put_file(
 
         // Upload to S3 if needed. On dedup hit, body is dropped unread.
         if !blob_exists {
-            let body_bytes = match storage_helpers::read_body_bytes(body).await {
-                Ok(b) => b,
-                Err(e) => {
-                    error!("Failed to read request body: {}", e);
-                    record_metrics("400");
-                    if let Err(e) = hash_guard.release().await {
-                        warn!("Failed to release hash lock: {}", e);
+            let body_bytes =
+                match storage_helpers::read_body_bytes(body, state.max_inmemory_size).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        error!("Failed to read request body: {}", e);
+                        record_metrics("400");
+                        if let Err(e) = hash_guard.release().await {
+                            warn!("Failed to release hash lock: {}", e);
+                        }
+                        if let Err(e) = guard.release().await {
+                            warn!("Failed to release file lock: {}", e);
+                        }
+                        return Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .body("Failed to read request body".to_string())
+                            .unwrap();
                     }
-                    if let Err(e) = guard.release().await {
-                        warn!("Failed to release file lock: {}", e);
-                    }
-                    return Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body("Failed to read request body".to_string())
-                        .unwrap();
-                }
-            };
+                };
             let compressed_size = body_bytes.len();
             let byte_stream = aws_sdk_s3::primitives::ByteStream::from(body_bytes);
             if let Err(e) = state
@@ -421,40 +422,36 @@ pub async fn ft_put_file(
     // SLOW PATH: used when headers are missing or dual-write is enabled.
     // Small files (below max_inmemory_size) are processed in memory.
     // Large files are spilled to temp files to bound memory usage.
-    //
-    // NOTE: When dual-write is enabled with headers (has_headers=true),
-    // the body is always buffered in memory regardless of max_inmemory_size.
-    // This is because dual-write needs the data for decompression before
-    // sending to V1 filetracker. Dual-write is a temporary migration feature.
+    // The threshold applies to ALL sub-paths (with headers, without headers).
     // ====================================================================
 
     // Determine if headers provide digest/size (dual-write slow path with headers)
     let has_headers = compressed && provided_digest.is_some() && provided_logical_size.is_some();
 
-    // Use Content-Length to decide in-memory vs temp file for the no-headers path.
-    // If Content-Length is absent or below threshold, process in memory (faster).
-    let content_length_hint = headers
+    // Use Content-Length to decide in-memory vs temp file.
+    // Unknown size (missing Content-Length) → use temp file (safe default for large uploads).
+    let content_length_hint: Option<usize> = headers
         .get("content-length")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0);
-    let use_tempfile = !has_headers && content_length_hint > state.max_inmemory_size;
+        .and_then(|v| v.parse().ok());
+    let use_tempfile = content_length_hint.is_none_or(|len| len > state.max_inmemory_size);
 
     // 3. Process body
     let (digest, logical_size, compressed_size, processed_file, final_data_for_dual_write) =
-        if has_headers {
-            // Headers provided but dual-write needed — buffer for dual-write
-            let body_bytes = match storage_helpers::read_body_bytes(body).await {
-                Ok(b) => b,
-                Err(e) => {
-                    error!("Failed to read request body: {}", e);
-                    record_metrics("400");
-                    return Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body("Failed to read request body".to_string())
-                        .unwrap();
-                }
-            };
+        if has_headers && !use_tempfile {
+            // Headers provided, small file — buffer in memory
+            let body_bytes =
+                match storage_helpers::read_body_bytes(body, state.max_inmemory_size).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        error!("Failed to read request body: {}", e);
+                        record_metrics("400");
+                        return Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .body("Failed to read request body".to_string())
+                            .unwrap();
+                    }
+                };
             let final_data = body_bytes.to_vec();
             let compressed_size = final_data.len();
             (
@@ -464,6 +461,35 @@ pub async fn ft_put_file(
                 None,
                 Some(final_data),
             )
+        } else if has_headers {
+            // Headers provided, large file — stream to temp file to bound memory
+            match storage_helpers::stream_body_to_temp_file(body).await {
+                Ok(raw) => {
+                    let compressed_size = raw.data_size;
+                    let pf = storage_helpers::ProcessedFile {
+                        digest: provided_digest.clone().unwrap(),
+                        logical_size: provided_logical_size.unwrap(),
+                        compressed_size,
+                        _temp_file: Some(raw._temp_file),
+                        compressed_path: raw.temp_path,
+                    };
+                    (
+                        provided_digest.unwrap(),
+                        provided_logical_size.unwrap(),
+                        compressed_size,
+                        Some(pf),
+                        None,
+                    )
+                }
+                Err(e) => {
+                    error!("Failed to stream request body: {}", e);
+                    record_metrics("400");
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body("Failed to stream request body".to_string())
+                        .unwrap();
+                }
+            }
         } else if use_tempfile {
             // Large file: stream body to temp file to bound memory usage
             match storage_helpers::process_body_to_temp_file(body, compressed).await {
@@ -483,18 +509,19 @@ pub async fn ft_put_file(
                 }
             }
         } else {
-            // Small file (or unknown size): process in memory (faster, no disk I/O)
-            let body_bytes = match storage_helpers::read_body_bytes(body).await {
-                Ok(b) => b,
-                Err(e) => {
-                    error!("Failed to read request body: {}", e);
-                    record_metrics("400");
-                    return Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body("Failed to read request body".to_string())
-                        .unwrap();
-                }
-            };
+            // Small file (Content-Length ≤ threshold): process in memory (faster, no disk I/O)
+            let body_bytes =
+                match storage_helpers::read_body_bytes(body, state.max_inmemory_size).await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        error!("Failed to read request body: {}", e);
+                        record_metrics("400");
+                        return Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .body("Failed to read request body".to_string())
+                            .unwrap();
+                    }
+                };
 
             let uncompressed_data = if compressed {
                 match storage_helpers::decompress_gzip(&body_bytes) {

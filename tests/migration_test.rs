@@ -1176,3 +1176,292 @@ async fn test_file_list_migration_skips_deleted_files() {
         .unwrap();
     assert_eq!(modified_deleted, 0);
 }
+
+// ====================================================================
+// Migration streaming / threshold tests
+// ====================================================================
+
+// Helper to create AppState with a custom max_inmemory_size
+async fn create_test_app_state_with_threshold(max_inmemory_size: usize) -> Arc<AppState> {
+    use s3dedup::kvstorage::KVStorage;
+    use s3dedup::locks::LocksStorage;
+    use s3dedup::s3storage::S3Storage;
+
+    let (config, _unique_id) = common::create_test_config("test-migration");
+
+    let kvstorage = KVStorage::new(&config).await.unwrap();
+    let locks = LocksStorage::new_with_config(config.locks_type, &config)
+        .await
+        .unwrap();
+    let s3storage = S3Storage::new(&config.bucket).await.unwrap();
+
+    let app_state = Arc::new(AppState {
+        bucket_name: config.bucket.name.clone(),
+        kvstorage: Arc::new(*kvstorage),
+        locks: Arc::new(*locks),
+        s3storage: Arc::new(*s3storage),
+        filetracker_client: None,
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size,
+    });
+
+    app_state.kvstorage.setup().await.unwrap();
+    app_state
+}
+
+/// Test offline migration with small files processed in memory (below threshold).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_migration_inmemory_small_files() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    // 1MB threshold — test data is small, will use in-memory path
+    let app_state = create_test_app_state_with_threshold(1024 * 1024).await;
+
+    let test_data = b"Small migration test file content";
+    mock_state
+        .add_file("small_inmem.txt", test_data.to_vec())
+        .await;
+
+    let client = Arc::new(FiletrackerClient::new(url));
+    let result = migrate_all_files(client, app_state.clone(), 5)
+        .await
+        .unwrap();
+
+    assert_eq!(result.migrated, 1);
+
+    // Verify file was migrated correctly
+    let modified = app_state
+        .kvstorage
+        .get_modified(&app_state.bucket_name, "small_inmem.txt")
+        .await
+        .unwrap();
+    assert!(modified > 0);
+
+    // Verify content via S3
+    let hash = app_state
+        .kvstorage
+        .get_ref_file(&app_state.bucket_name, "small_inmem.txt")
+        .await
+        .unwrap();
+    let expected_hash = s3dedup::routes::ft::storage_helpers::compute_sha256(test_data);
+    assert_eq!(hash, expected_hash);
+
+    // Verify sizes
+    let logical_size = app_state
+        .kvstorage
+        .get_logical_size(&app_state.bucket_name, &hash)
+        .await
+        .unwrap();
+    assert_eq!(logical_size, test_data.len());
+}
+
+/// Test offline migration with files above threshold, forcing temp file processing.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_migration_tempfile_large_files() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    // Set threshold to 10 bytes — forces temp file path for any real data
+    let app_state = create_test_app_state_with_threshold(10).await;
+
+    // 1KB of data — well above the 10-byte threshold
+    let test_data: Vec<u8> = (0..1024).map(|i| (i % 251) as u8).collect();
+    mock_state
+        .add_file("large_tempfile.bin", test_data.clone())
+        .await;
+
+    let client = Arc::new(FiletrackerClient::new(url));
+    let result = migrate_all_files(client, app_state.clone(), 5)
+        .await
+        .unwrap();
+
+    assert_eq!(result.migrated, 1);
+
+    // Verify hash
+    let hash = app_state
+        .kvstorage
+        .get_ref_file(&app_state.bucket_name, "large_tempfile.bin")
+        .await
+        .unwrap();
+    let expected_hash = s3dedup::routes::ft::storage_helpers::compute_sha256(&test_data);
+    assert_eq!(hash, expected_hash);
+
+    // Verify sizes
+    let logical_size = app_state
+        .kvstorage
+        .get_logical_size(&app_state.bucket_name, &hash)
+        .await
+        .unwrap();
+    assert_eq!(logical_size, test_data.len());
+
+    let compressed_size = app_state
+        .kvstorage
+        .get_compressed_size(&app_state.bucket_name, &hash)
+        .await
+        .unwrap();
+    assert!(compressed_size > 0);
+}
+
+/// Test migration with multiple files, mixed sizes relative to threshold.
+/// Some go through in-memory, some through temp file.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_migration_mixed_threshold() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    // 100-byte threshold
+    let app_state = create_test_app_state_with_threshold(100).await;
+
+    // Small file (50 bytes) → in-memory
+    let small_data = b"Small file under threshold for in-memory processing.";
+    mock_state
+        .add_file("mixed/small.txt", small_data.to_vec())
+        .await;
+
+    // Large file (500 bytes) → temp file
+    let large_data: Vec<u8> = (0..500).map(|i| (i % 251) as u8).collect();
+    mock_state
+        .add_file("mixed/large.bin", large_data.clone())
+        .await;
+
+    let client = Arc::new(FiletrackerClient::new(url));
+    let result = migrate_all_files(client, app_state.clone(), 5)
+        .await
+        .unwrap();
+
+    assert_eq!(result.migrated, 2);
+
+    // Verify both files have correct hashes
+    let small_hash = app_state
+        .kvstorage
+        .get_ref_file(&app_state.bucket_name, "mixed/small.txt")
+        .await
+        .unwrap();
+    assert_eq!(
+        small_hash,
+        s3dedup::routes::ft::storage_helpers::compute_sha256(small_data)
+    );
+
+    let large_hash = app_state
+        .kvstorage
+        .get_ref_file(&app_state.bucket_name, "mixed/large.bin")
+        .await
+        .unwrap();
+    assert_eq!(
+        large_hash,
+        s3dedup::routes::ft::storage_helpers::compute_sha256(&large_data)
+    );
+}
+
+/// Test deduplication works correctly across threshold boundaries.
+/// Same content uploaded via both in-memory and temp file paths should dedup.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_migration_dedup_across_threshold() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    // 100-byte threshold
+    let app_state = create_test_app_state_with_threshold(100).await;
+
+    // Same content in two files, but the content is >100 bytes so both go through temp file
+    let shared_data: Vec<u8> = (0..200).map(|i| (i % 251) as u8).collect();
+    mock_state
+        .add_file("dedup/file_a.bin", shared_data.clone())
+        .await;
+    mock_state
+        .add_file("dedup/file_b.bin", shared_data.clone())
+        .await;
+
+    let client = Arc::new(FiletrackerClient::new(url));
+    let result = migrate_all_files(client, app_state.clone(), 5)
+        .await
+        .unwrap();
+
+    assert_eq!(result.migrated, 2);
+
+    // Both should point to the same hash
+    let hash_a = app_state
+        .kvstorage
+        .get_ref_file(&app_state.bucket_name, "dedup/file_a.bin")
+        .await
+        .unwrap();
+    let hash_b = app_state
+        .kvstorage
+        .get_ref_file(&app_state.bucket_name, "dedup/file_b.bin")
+        .await
+        .unwrap();
+    assert_eq!(hash_a, hash_b, "Dedup should work across temp file path");
+
+    // Refcount should be 2
+    let refcount = app_state
+        .kvstorage
+        .get_ref_count(&app_state.bucket_name, &hash_a)
+        .await
+        .unwrap();
+    assert_eq!(refcount, 2);
+}
+
+/// Test on-the-fly migration via GET with streaming (temp file path).
+/// Uses low threshold to force temp file processing in migrate_single_file_from_streaming.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_live_migration_get_streaming_tempfile() {
+    let (mock_state, url) = create_mock_filetracker().await;
+    // 10-byte threshold — forces streaming/temp file for any real content
+    let app_state = create_test_app_state_with_threshold(10).await;
+
+    let test_data = b"Live migration GET streaming test - this data goes through temp file path";
+    mock_state
+        .add_file("stream_get.txt", test_data.to_vec())
+        .await;
+
+    // Create app state with filetracker client
+    let app_state_with_ft = Arc::new(AppState {
+        bucket_name: app_state.bucket_name.clone(),
+        kvstorage: app_state.kvstorage.clone(),
+        locks: app_state.locks.clone(),
+        s3storage: app_state.s3storage.clone(),
+        filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
+        metrics: Arc::new(s3dedup::metrics::Metrics::new()),
+        max_inmemory_size: 10,
+    });
+
+    let app = Router::new()
+        .route(
+            "/ft/files/{*path}",
+            get(s3dedup::routes::ft::get_file::ft_get_file),
+        )
+        .with_state(app_state_with_ft.clone());
+
+    // GET triggers on-the-fly migration via streaming path
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/ft/files/stream_get.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Verify response body is correct (served from S3 after migration)
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let decompressed = s3dedup::routes::ft::storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_data);
+
+    // Verify file is now in s3dedup
+    let modified = app_state_with_ft
+        .kvstorage
+        .get_modified(&app_state_with_ft.bucket_name, "stream_get.txt")
+        .await
+        .unwrap();
+    assert!(modified > 0, "File should be migrated to s3dedup");
+
+    // Verify hash
+    let hash = app_state_with_ft
+        .kvstorage
+        .get_ref_file(&app_state_with_ft.bucket_name, "stream_get.txt")
+        .await
+        .unwrap();
+    assert_eq!(
+        hash,
+        s3dedup::routes::ft::storage_helpers::compute_sha256(test_data)
+    );
+}

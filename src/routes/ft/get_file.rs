@@ -65,9 +65,9 @@ pub async fn ft_get_file(
         if let Some(filetracker_client) = &state.filetracker_client {
             debug!("File {} not found in s3dedup, checking filetracker", path);
 
-            // Try to get file from filetracker
-            match filetracker_client.get_file(path).await {
-                Ok(file_metadata) => {
+            // Stream file from filetracker to temp file (no full in-memory buffer)
+            match filetracker_client.get_file_streaming(path).await {
+                Ok(streaming_meta) => {
                     debug!("File {} found in filetracker, migrating on-the-fly", path);
 
                     // Track filetracker fallback
@@ -81,11 +81,11 @@ pub async fn ft_get_file(
                         warn!("Failed to release file lock: {}", e);
                     }
 
-                    // Migrate the file on-the-fly using migration logic
-                    let result = crate::migration::migrate_single_file_from_metadata(
+                    // Migrate directly from temp file — no in-memory buffering
+                    let result = crate::migration::migrate_single_file_from_streaming(
                         &state,
                         path,
-                        file_metadata.clone(),
+                        &streaming_meta,
                     )
                     .await;
 
@@ -104,6 +104,94 @@ pub async fn ft_get_file(
                             .unwrap();
                     }
 
+                    // File is now in s3dedup — serve from S3 via streaming GET.
+                    // Re-acquire shared lock for consistent metadata reads.
+                    let lock_key2 = locks::file_lock(&state.bucket_name, path);
+                    let lock2 = state.locks.prepare_lock(lock_key2).await;
+                    let guard2 = match lock2.acquire_shared().await {
+                        Ok(g) => g,
+                        Err(e) => {
+                            error!("Failed to re-acquire shared lock after migration: {}", e);
+                            metrics::HTTP_REQUESTS_TOTAL
+                                .with_label_values(&["GET", "/ft/files", "500"])
+                                .inc();
+                            metrics::HTTP_REQUEST_DURATION_SECONDS
+                                .with_label_values(&["GET", "/ft/files"])
+                                .observe(start.elapsed().as_secs_f64());
+                            return Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Body::empty())
+                                .unwrap();
+                        }
+                    };
+
+                    let hash = match state.kvstorage.get_ref_file(&state.bucket_name, path).await {
+                        Ok(h) => h,
+                        Err(e) => {
+                            error!("Failed to get ref file after migration: {}", e);
+                            metrics::HTTP_REQUESTS_TOTAL
+                                .with_label_values(&["GET", "/ft/files", "500"])
+                                .inc();
+                            metrics::HTTP_REQUEST_DURATION_SECONDS
+                                .with_label_values(&["GET", "/ft/files"])
+                                .observe(start.elapsed().as_secs_f64());
+                            if let Err(e) = guard2.release().await {
+                                warn!("Failed to release file lock: {}", e);
+                            }
+                            return Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Body::empty())
+                                .unwrap();
+                        }
+                    };
+
+                    let (byte_stream, s3_content_length) =
+                        match state.s3storage.get_object_stream(&hash).await {
+                            Ok(v) => v,
+                            Err(e) => {
+                                error!("Failed to get object from S3 after migration: {}", e);
+                                metrics::HTTP_REQUESTS_TOTAL
+                                    .with_label_values(&["GET", "/ft/files", "500"])
+                                    .inc();
+                                metrics::HTTP_REQUEST_DURATION_SECONDS
+                                    .with_label_values(&["GET", "/ft/files"])
+                                    .observe(start.elapsed().as_secs_f64());
+                                if let Err(e) = guard2.release().await {
+                                    warn!("Failed to release file lock: {}", e);
+                                }
+                                return Response::builder()
+                                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                    .body(Body::empty())
+                                    .unwrap();
+                            }
+                        };
+
+                    let compressed_size = state
+                        .kvstorage
+                        .get_compressed_size(&state.bucket_name, &hash)
+                        .await
+                        .unwrap_or(0);
+                    let content_length = if compressed_size > 0 {
+                        compressed_size as i64
+                    } else {
+                        s3_content_length.unwrap_or(0)
+                    };
+                    let logical_size = state
+                        .kvstorage
+                        .get_logical_size(&state.bucket_name, &hash)
+                        .await
+                        .unwrap_or(0);
+                    let modified_time_after = state
+                        .kvstorage
+                        .get_modified(&state.bucket_name, path)
+                        .await
+                        .unwrap_or(0);
+
+                    // Release lock — S3 stream already initiated
+                    if let Err(e) = guard2.release().await {
+                        warn!("Failed to release file lock: {}", e);
+                    }
+
                     metrics::HTTP_REQUESTS_TOTAL
                         .with_label_values(&["GET", "/ft/files", "200"])
                         .inc();
@@ -111,25 +199,18 @@ pub async fn ft_get_file(
                         .with_label_values(&["GET", "/ft/files"])
                         .observe(start.elapsed().as_secs_f64());
 
-                    // Serve the file directly from filetracker response
+                    let body = Body::new(byte_stream.into_inner());
                     return Response::builder()
                         .status(StatusCode::OK)
                         .header("Content-Type", "application/octet-stream")
-                        .header("Content-Length", file_metadata.data.len().to_string())
-                        .header(
-                            "Content-Encoding",
-                            if file_metadata.is_compressed {
-                                "gzip"
-                            } else {
-                                "identity"
-                            },
-                        )
+                        .header("Content-Length", content_length.to_string())
+                        .header("Content-Encoding", "gzip")
                         .header(
                             "Last-Modified",
-                            utils::format_rfc2822_timestamp(file_metadata.last_modified),
+                            utils::format_rfc2822_timestamp(modified_time_after),
                         )
-                        .header("Logical-Size", file_metadata.logical_size.to_string())
-                        .body(Body::from(file_metadata.data))
+                        .header("Logical-Size", logical_size.to_string())
+                        .body(body)
                         .unwrap();
                 }
                 Err(e) => {

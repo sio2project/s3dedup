@@ -2,8 +2,34 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use chrono::DateTime;
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, Response, StatusCode};
 use tracing::{debug, error, warn};
+
+/// Parse common filetracker response headers (Last-Modified, Logical-Size, Content-Encoding).
+fn parse_ft_headers(response: &Response) -> Result<(i64, usize, bool)> {
+    let last_modified_str = response
+        .headers()
+        .get("Last-Modified")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| anyhow!("Missing Last-Modified header"))?;
+    let last_modified = DateTime::parse_from_rfc2822(last_modified_str)?.timestamp();
+
+    let logical_size = response
+        .headers()
+        .get("Logical-Size")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    let is_compressed = response
+        .headers()
+        .get("Content-Encoding")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == "gzip")
+        .unwrap_or(false);
+
+    Ok((last_modified, logical_size, is_compressed))
+}
 
 /// Error indicating that the requested file was not found on the filetracker (HTTP 404).
 /// This is distinct from connection errors or server errors, which should be retried.
@@ -37,12 +63,28 @@ pub struct FiletrackerClient {
     client: Client,
 }
 
+/// Result of downloading a file — either buffered in memory or streamed to temp file.
+pub enum DownloadedFile {
+    InMemory(FileMetadata),
+    OnDisk(StreamingFileMetadata),
+}
+
 #[derive(Clone)]
 pub struct FileHeaders {
     pub last_modified: i64,
     pub logical_size: usize,
     pub content_length: usize,
     pub is_compressed: bool,
+}
+
+pub struct StreamingFileMetadata {
+    pub last_modified: i64,
+    pub logical_size: usize,
+    pub is_compressed: bool,
+    /// Temp file holding the downloaded data (kept alive to prevent cleanup)
+    pub temp_file: tempfile::NamedTempFile,
+    pub temp_path: std::path::PathBuf,
+    pub data_size: usize,
 }
 
 #[derive(Clone)]
@@ -139,20 +181,7 @@ impl FiletrackerClient {
             bail!("{}", msg)
         }
 
-        let last_modified_str = response
-            .headers()
-            .get("Last-Modified")
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| anyhow!("Missing Last-Modified header"))?;
-        let last_modified = DateTime::parse_from_rfc2822(last_modified_str)?.timestamp();
-
-        let logical_size = response
-            .headers()
-            .get("Logical-Size")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(0);
-
+        let (last_modified, logical_size, is_compressed) = parse_ft_headers(&response)?;
         let content_length = response
             .headers()
             .get("Content-Length")
@@ -160,18 +189,185 @@ impl FiletrackerClient {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(0);
 
-        let is_compressed = response
-            .headers()
-            .get("Content-Encoding")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v == "gzip")
-            .unwrap_or(false);
-
         Ok(FileHeaders {
             last_modified,
             logical_size,
             content_length,
             is_compressed,
+        })
+    }
+
+    /// Download a file from filetracker. Uses Content-Length to decide:
+    /// - Small files (≤ max_inmemory_size): buffer in memory (fast, no disk I/O)
+    /// - Large files (> max_inmemory_size) or unknown size: stream to temp file
+    pub async fn download_file(
+        &self,
+        path: &str,
+        max_inmemory_size: usize,
+    ) -> Result<DownloadedFile> {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+
+        let url = format!("{}/files/{}", self.base_url, path);
+        debug!("Downloading file from filetracker: {}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| TransientError(e.to_string()))?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Err(FileNotFoundError(path.to_string()).into());
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let x_exception = response
+                .headers()
+                .get("X-Exception")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+            let body = response.text().await.unwrap_or_default();
+            error!(
+                "Failed to get file: HTTP {} - X-Exception: {} - Body: {}",
+                status, x_exception, body
+            );
+            let msg = format!("HTTP {} - {}", status, x_exception);
+            if status.is_server_error() {
+                return Err(TransientError(msg).into());
+            }
+            bail!("{}", msg)
+        }
+
+        let (last_modified, logical_size, is_compressed) = parse_ft_headers(&response)?;
+        let content_length = response.content_length().unwrap_or(0);
+        let use_memory = content_length > 0 && content_length <= max_inmemory_size as u64;
+
+        if use_memory {
+            // Small file: buffer in memory
+            let data = response
+                .bytes()
+                .await
+                .map_err(|e| TransientError(e.to_string()))?
+                .to_vec();
+
+            debug!(
+                "Downloaded file to memory: {} bytes, compressed: {}",
+                data.len(),
+                is_compressed
+            );
+
+            Ok(DownloadedFile::InMemory(FileMetadata {
+                data,
+                last_modified,
+                logical_size,
+                is_compressed,
+            }))
+        } else {
+            // Large or unknown size: stream to temp file
+            let temp_file = tempfile::NamedTempFile::new()?;
+            let temp_path = temp_file.path().to_path_buf();
+            let std_file = temp_file.as_file().try_clone()?;
+            let mut async_file = tokio::fs::File::from_std(std_file);
+
+            let mut stream = response.bytes_stream();
+            let mut total_bytes: usize = 0;
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| TransientError(e.to_string()))?;
+                async_file
+                    .write_all(&chunk)
+                    .await
+                    .map_err(|e| anyhow!("Failed to write to temp file: {}", e))?;
+                total_bytes += chunk.len();
+            }
+            async_file
+                .flush()
+                .await
+                .map_err(|e| anyhow!("Failed to flush temp file: {}", e))?;
+
+            debug!(
+                "Downloaded file to disk: {} bytes, compressed: {}",
+                total_bytes, is_compressed
+            );
+
+            Ok(DownloadedFile::OnDisk(StreamingFileMetadata {
+                last_modified,
+                logical_size,
+                is_compressed,
+                temp_file,
+                temp_path,
+                data_size: total_bytes,
+            }))
+        }
+    }
+
+    /// Download a file from filetracker, streaming body to a temp file.
+    /// Avoids holding the entire file in memory. Returns headers + temp file path.
+    pub async fn get_file_streaming(&self, path: &str) -> Result<StreamingFileMetadata> {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+
+        let url = format!("{}/files/{}", self.base_url, path);
+        debug!("Getting file (streaming) from filetracker: {}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| TransientError(e.to_string()))?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Err(FileNotFoundError(path.to_string()).into());
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let msg = format!("HTTP {}", status);
+            if status.is_server_error() {
+                return Err(TransientError(msg).into());
+            }
+            bail!("{}", msg)
+        }
+
+        let (last_modified, logical_size, is_compressed) = parse_ft_headers(&response)?;
+
+        // Stream body to temp file
+        let temp_file = tempfile::NamedTempFile::new()?;
+        let temp_path = temp_file.path().to_path_buf();
+        let std_file = temp_file.as_file().try_clone()?;
+        let mut async_file = tokio::fs::File::from_std(std_file);
+
+        let mut stream = response.bytes_stream();
+        let mut total_bytes: usize = 0;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| TransientError(e.to_string()))?;
+            async_file
+                .write_all(&chunk)
+                .await
+                .map_err(|e| anyhow!("Failed to write to temp file: {}", e))?;
+            total_bytes += chunk.len();
+        }
+        async_file
+            .flush()
+            .await
+            .map_err(|e| anyhow!("Failed to flush temp file: {}", e))?;
+
+        debug!(
+            "Downloaded file from filetracker to temp file: {} bytes, compressed: {}",
+            total_bytes, is_compressed
+        );
+
+        Ok(StreamingFileMetadata {
+            last_modified,
+            logical_size,
+            is_compressed,
+            temp_file,
+            temp_path,
+            data_size: total_bytes,
         })
     }
 
@@ -211,28 +407,7 @@ impl FiletrackerClient {
             bail!("{}", msg)
         }
 
-        // Extract headers
-        let last_modified_str = response
-            .headers()
-            .get("Last-Modified")
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| anyhow!("Missing Last-Modified header"))?;
-
-        let last_modified = DateTime::parse_from_rfc2822(last_modified_str)?.timestamp();
-
-        let logical_size = response
-            .headers()
-            .get("Logical-Size")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(0);
-
-        let is_compressed = response
-            .headers()
-            .get("Content-Encoding")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v == "gzip")
-            .unwrap_or(false);
+        let (last_modified, logical_size, is_compressed) = parse_ft_headers(&response)?;
 
         // Get body (network failure during download is transient)
         let data = response

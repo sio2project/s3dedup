@@ -63,34 +63,39 @@ pub async fn ft_head_file(
         }
 
         // Check filetracker in live migration mode using HEAD (no body download)
-        if let Some(filetracker_client) = &state.filetracker_client
-            && let Ok(file_headers) = filetracker_client.head_file(path).await
-        {
-            metrics::HTTP_REQUESTS_TOTAL
-                .with_label_values(&["HEAD", "/ft/files", "200"])
-                .inc();
-            metrics::HTTP_REQUEST_DURATION_SECONDS
-                .with_label_values(&["HEAD", "/ft/files"])
-                .observe(start.elapsed().as_secs_f64());
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/octet-stream")
-                .header("Content-Length", file_headers.content_length.to_string())
-                .header(
-                    "Content-Encoding",
-                    if file_headers.is_compressed {
-                        "gzip"
-                    } else {
-                        "identity"
-                    },
-                )
-                .header(
-                    "Last-Modified",
-                    utils::format_rfc2822_timestamp(file_headers.last_modified),
-                )
-                .header("Logical-Size", file_headers.logical_size.to_string())
-                .body(Body::empty())
-                .unwrap();
+        if let Some(filetracker_client) = &state.filetracker_client {
+            match filetracker_client.head_file(path).await {
+                Err(e) => {
+                    debug!("File {} not found in filetracker: {}", path, e);
+                }
+                Ok(file_headers) => {
+                    metrics::HTTP_REQUESTS_TOTAL
+                        .with_label_values(&["HEAD", "/ft/files", "200"])
+                        .inc();
+                    metrics::HTTP_REQUEST_DURATION_SECONDS
+                        .with_label_values(&["HEAD", "/ft/files"])
+                        .observe(start.elapsed().as_secs_f64());
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/octet-stream")
+                        .header("Content-Length", file_headers.content_length.to_string())
+                        .header(
+                            "Content-Encoding",
+                            if file_headers.is_compressed {
+                                "gzip"
+                            } else {
+                                "identity"
+                            },
+                        )
+                        .header(
+                            "Last-Modified",
+                            utils::format_rfc2822_timestamp(file_headers.last_modified),
+                        )
+                        .header("Logical-Size", file_headers.logical_size.to_string())
+                        .body(Body::empty())
+                        .unwrap();
+                }
+            }
         }
 
         metrics::HTTP_REQUESTS_TOTAL

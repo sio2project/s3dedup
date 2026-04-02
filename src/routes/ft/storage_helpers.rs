@@ -29,11 +29,44 @@ pub fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>> {
     Ok(decompressed)
 }
 
-pub async fn read_body_bytes(body: axum::body::Body) -> Result<Bytes> {
+pub async fn read_body_bytes(body: axum::body::Body, max_size: usize) -> Result<Bytes> {
     use axum::body::to_bytes;
 
-    let bytes = to_bytes(body, usize::MAX).await?;
+    let bytes = to_bytes(body, max_size).await?;
     Ok(bytes)
+}
+
+/// Stream HTTP body to a temp file without processing.
+/// Used when headers already provide digest/sizes but the body is too large for memory.
+pub async fn stream_body_to_temp_file(body: axum::body::Body) -> Result<RawTempFile> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    let temp_file = tempfile::NamedTempFile::new()?;
+    let temp_path = temp_file.path().to_path_buf();
+
+    let std_file = temp_file.as_file().try_clone()?;
+    let mut async_file = tokio::fs::File::from_std(std_file);
+    let mut body_stream = body.into_data_stream();
+    let mut total_bytes: usize = 0;
+    while let Some(chunk) = body_stream.next().await {
+        let chunk = chunk.map_err(|e| anyhow::anyhow!("Failed to read body chunk: {}", e))?;
+        async_file.write_all(&chunk).await?;
+        total_bytes += chunk.len();
+    }
+    async_file.flush().await?;
+
+    Ok(RawTempFile {
+        _temp_file: temp_file,
+        temp_path,
+        data_size: total_bytes,
+    })
+}
+
+pub struct RawTempFile {
+    pub _temp_file: tempfile::NamedTempFile,
+    pub temp_path: std::path::PathBuf,
+    pub data_size: usize,
 }
 
 /// Stream HTTP body to a temp file, then process it to compute hash and compress.
@@ -105,7 +138,7 @@ pub struct ProcessedFile {
     pub logical_size: usize,
     pub compressed_size: usize,
     /// Keeps the temp file alive; dropped when ProcessedFile is dropped.
-    _temp_file: Option<tempfile::NamedTempFile>,
+    pub _temp_file: Option<tempfile::NamedTempFile>,
     pub compressed_path: std::path::PathBuf,
 }
 
