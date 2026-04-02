@@ -206,11 +206,20 @@ pub async fn ft_put_file(
 
         // Upload to S3 if needed. On dedup hit, body is dropped unread.
         if !blob_exists {
-            let body_bytes =
-                match storage_helpers::read_body_bytes(body, state.max_inmemory_size).await {
-                    Ok(b) => b,
+            // Check Content-Length to decide: buffer in memory or stream via temp file
+            let fast_content_length: Option<usize> = headers
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok());
+            let fast_use_tempfile =
+                fast_content_length.is_none_or(|len| len > state.max_inmemory_size);
+
+            let (compressed_size, _fast_temp_file) = if fast_use_tempfile {
+                // Large file: stream body to temp file, upload from disk
+                let raw = match storage_helpers::stream_body_to_temp_file(body).await {
+                    Ok(r) => r,
                     Err(e) => {
-                        error!("Failed to read request body: {}", e);
+                        error!("Failed to stream request body: {}", e);
                         record_metrics("400");
                         if let Err(e) = hash_guard.release().await {
                             warn!("Failed to release hash lock: {}", e);
@@ -220,30 +229,81 @@ pub async fn ft_put_file(
                         }
                         return Response::builder()
                             .status(StatusCode::BAD_REQUEST)
-                            .body("Failed to read request body".to_string())
+                            .body("Failed to stream request body".to_string())
                             .unwrap();
                     }
                 };
-            let compressed_size = body_bytes.len();
-            let byte_stream = aws_sdk_s3::primitives::ByteStream::from(body_bytes);
-            if let Err(e) = state
-                .s3storage
-                .put_object_stream(&digest, byte_stream, Some(compressed_size as i64))
-                .await
-            {
-                error!("Failed to store object in S3: {}", e);
-                record_metrics("500");
-                if let Err(e) = hash_guard.release().await {
-                    warn!("Failed to release hash lock: {}", e);
+                let compressed_size = raw.data_size;
+                let upload_result =
+                    match aws_sdk_s3::primitives::ByteStream::from_path(&raw.temp_path).await {
+                        Ok(bs) => {
+                            state
+                                .s3storage
+                                .put_object_stream(&digest, bs, Some(compressed_size as i64))
+                                .await
+                        }
+                        Err(e) => Err(anyhow::anyhow!(
+                            "Failed to open temp file for S3 upload: {}",
+                            e
+                        )),
+                    };
+                if let Err(e) = upload_result {
+                    error!("Failed to store object in S3: {}", e);
+                    record_metrics("500");
+                    if let Err(e) = hash_guard.release().await {
+                        warn!("Failed to release hash lock: {}", e);
+                    }
+                    if let Err(e) = guard.release().await {
+                        warn!("Failed to release file lock: {}", e);
+                    }
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body("Failed to store object".to_string())
+                        .unwrap();
                 }
-                if let Err(e) = guard.release().await {
-                    warn!("Failed to release file lock: {}", e);
+                (compressed_size, Some(raw))
+            } else {
+                // Small file: buffer in memory and upload directly
+                let body_bytes =
+                    match storage_helpers::read_body_bytes(body, state.max_inmemory_size).await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            error!("Failed to read request body: {}", e);
+                            record_metrics("400");
+                            if let Err(e) = hash_guard.release().await {
+                                warn!("Failed to release hash lock: {}", e);
+                            }
+                            if let Err(e) = guard.release().await {
+                                warn!("Failed to release file lock: {}", e);
+                            }
+                            return Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .body("Failed to read request body".to_string())
+                                .unwrap();
+                        }
+                    };
+                let compressed_size = body_bytes.len();
+                let byte_stream = aws_sdk_s3::primitives::ByteStream::from(body_bytes);
+                if let Err(e) = state
+                    .s3storage
+                    .put_object_stream(&digest, byte_stream, Some(compressed_size as i64))
+                    .await
+                {
+                    error!("Failed to store object in S3: {}", e);
+                    record_metrics("500");
+                    if let Err(e) = hash_guard.release().await {
+                        warn!("Failed to release hash lock: {}", e);
+                    }
+                    if let Err(e) = guard.release().await {
+                        warn!("Failed to release file lock: {}", e);
+                    }
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body("Failed to store object".to_string())
+                        .unwrap();
                 }
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body("Failed to store object".to_string())
-                    .unwrap();
-            }
+                (compressed_size, None)
+            };
 
             // Set compressed size (only on dedup miss — on hit, it's already set)
             if let Err(e) = state

@@ -65,9 +65,12 @@ pub async fn ft_get_file(
         if let Some(filetracker_client) = &state.filetracker_client {
             debug!("File {} not found in s3dedup, checking filetracker", path);
 
-            // Stream file from filetracker to temp file (no full in-memory buffer)
-            match filetracker_client.get_file_streaming(path).await {
-                Ok(streaming_meta) => {
+            // Download file from filetracker — small files in memory, large on disk
+            match filetracker_client
+                .download_file(path, state.max_inmemory_size)
+                .await
+            {
+                Ok(downloaded) => {
                     debug!("File {} found in filetracker, migrating on-the-fly", path);
 
                     // Track filetracker fallback
@@ -81,13 +84,25 @@ pub async fn ft_get_file(
                         warn!("Failed to release file lock: {}", e);
                     }
 
-                    // Migrate directly from temp file — no in-memory buffering
-                    let result = crate::migration::migrate_single_file_from_streaming(
-                        &state,
-                        path,
-                        &streaming_meta,
-                    )
-                    .await;
+                    // Migrate: in-memory for small files, temp file for large
+                    let result = match downloaded {
+                        crate::filetracker_client::DownloadedFile::InMemory(file_metadata) => {
+                            crate::migration::migrate_single_file_from_metadata(
+                                &state,
+                                path,
+                                file_metadata,
+                            )
+                            .await
+                        }
+                        crate::filetracker_client::DownloadedFile::OnDisk(ref streaming_meta) => {
+                            crate::migration::migrate_single_file_from_streaming(
+                                &state,
+                                path,
+                                streaming_meta,
+                            )
+                            .await
+                        }
+                    };
 
                     if let Err(e) = result {
                         error!("Failed to migrate file on-the-fly: {}", e);
