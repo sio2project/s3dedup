@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::sync::Arc;
+use tracing::{debug, warn};
 
 pub mod cleaner;
 pub mod config;
@@ -115,6 +116,87 @@ impl AppState {
             metrics::STORAGE_SAVINGS_RATIO.set(savings_ratio);
         }
 
+        Ok(())
+    }
+
+    // --- Shared helpers for PUT and migration ---
+
+    /// Set ref_file and modified timestamp for a path.
+    pub async fn update_file_ref(
+        &self,
+        path: &str,
+        digest: &str,
+        timestamp: i64,
+    ) -> Result<()> {
+        self.kvstorage
+            .set_ref_file(&self.bucket_name, path, digest)
+            .await?;
+        self.kvstorage
+            .set_modified(&self.bucket_name, path, timestamp)
+            .await?;
+        Ok(())
+    }
+
+    /// Record blob metadata: logical size, optionally compressed size, and conditionally increment refcount.
+    /// If `old_hash` is Some and equals `digest`, refcount is NOT incremented (same content).
+    /// Pass `None` for `old_hash` to always increment (migration path).
+    /// Pass `None` for `compressed_size` to skip updating it (e.g. dedup hit where body wasn't read).
+    pub async fn record_blob_metadata(
+        &self,
+        digest: &str,
+        logical_size: usize,
+        compressed_size: Option<usize>,
+        old_hash: Option<&str>,
+    ) -> Result<()> {
+        self.kvstorage
+            .set_logical_size(&self.bucket_name, digest, logical_size)
+            .await?;
+        if let Some(cs) = compressed_size {
+            self.kvstorage
+                .set_compressed_size(&self.bucket_name, digest, cs)
+                .await?;
+        }
+
+        let same_content = matches!(old_hash, Some(old) if !old.is_empty() && old == digest);
+        if !same_content {
+            self.kvstorage
+                .atomic_increment_ref_count(&self.bucket_name, digest)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Decrement the refcount for `old_hash` and delete the S3 blob if it reaches 0.
+    /// Acquires hash lock internally. No-op if `old_hash` is empty or equals `new_digest`.
+    pub async fn decrement_old_ref(
+        &self,
+        old_hash: &str,
+        new_digest: &str,
+    ) -> Result<()> {
+        if old_hash.is_empty() || old_hash == new_digest {
+            return Ok(());
+        }
+
+        let hash_lock_key = locks::hash_lock(&self.bucket_name, old_hash);
+        let lock = self.locks.prepare_lock(hash_lock_key).await;
+        let guard = lock
+            .acquire_exclusive()
+            .await
+            .context("Failed to acquire old hash lock for decrement")?;
+
+        let ref_count = self
+            .kvstorage
+            .atomic_decrement_ref_count(&self.bucket_name, old_hash)
+            .await?;
+
+        if ref_count <= 0 {
+            debug!("Deleting unused blob: {}", old_hash);
+            let _ = self.s3storage.delete_object(old_hash).await;
+        }
+
+        if let Err(e) = guard.release().await {
+            warn!("Failed to release old hash lock: {}", e);
+        }
         Ok(())
     }
 
