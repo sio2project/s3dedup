@@ -336,7 +336,7 @@ pub async fn migrate_single_file_from_metadata(
         return Ok(());
     }
 
-    // Process file data (decompress if needed, compute hash, compress)
+    // Process file data in memory (data is already buffered from filetracker response)
     let uncompressed_data = if file_metadata.is_compressed {
         storage_helpers::decompress_gzip(&file_metadata.data)?
     } else {
@@ -554,7 +554,7 @@ async fn migrate_single_file(
         return Ok(false);
     }
 
-    // Process file data (decompress if needed, compute hash, compress)
+    // Process file data in memory (data is already buffered from filetracker response)
     let uncompressed_data = if file_metadata.is_compressed {
         storage_helpers::decompress_gzip(&file_metadata.data)?
     } else {
@@ -1344,25 +1344,25 @@ async fn migrate_single_file_from_v1_fs(
     }
 
     // Move blocking operations (file I/O, SHA256, compression) to blocking thread pool
-    // to avoid blocking the async runtime
+    // Process via temp file to avoid holding large files in memory
     let file_info_clone = file_info.clone();
-    let (uncompressed_data, digest, compressed_data) = tokio::task::spawn_blocking(move || {
-        // Read file data from filesystem (blocking I/O)
-        let uncompressed_data = v1_filesystem::read_v1_file(&file_info_clone)?;
-
-        // Compute SHA256 hash (CPU-intensive)
-        let digest = storage_helpers::compute_sha256(&uncompressed_data);
-
-        // Compress data (CPU-intensive)
-        let compressed_data = storage_helpers::compress_gzip(&uncompressed_data)?;
-
-        Ok::<_, anyhow::Error>((uncompressed_data, digest, compressed_data))
-    })
-    .await
-    .context("Task panicked during file processing")?
-    .context("Failed to read and process V1 file")?;
-
-    let logical_size = uncompressed_data.len();
+    let (digest, logical_size, compressed_size, _keep_output, compressed_path) =
+        tokio::task::spawn_blocking(move || {
+            // V1 files are uncompressed on disk — process directly without reading into memory
+            let result =
+                storage_helpers::process_uncompressed_temp_file(&file_info_clone.absolute_path)?;
+            let output_path = result.compressed_path.clone();
+            Ok::<_, anyhow::Error>((
+                result.digest,
+                result.logical_size,
+                result.compressed_size,
+                result.output_temp_file,
+                output_path,
+            ))
+        })
+        .await
+        .context("Task panicked during file processing")?
+        .context("Failed to read and process V1 file")?;
 
     // Acquire file lock
     let lock_key = crate::locks::file_lock(&app_state.bucket_name, path);
@@ -1415,16 +1415,20 @@ async fn migrate_single_file_from_v1_fs(
         }
     };
 
-    // Store blob if it doesn't exist
-    if !blob_exists
-        && let Err(e) = app_state
-            .s3storage
-            .put_object(&digest, compressed_data.clone())
+    // Store blob if it doesn't exist (stream from temp file)
+    if !blob_exists {
+        let byte_stream = aws_sdk_s3::primitives::ByteStream::from_path(&compressed_path)
             .await
-    {
-        let _ = hash_guard.release().await;
-        let _ = guard.release().await;
-        return Err(e);
+            .context("Failed to open compressed temp file for S3 upload")?;
+        if let Err(e) = app_state
+            .s3storage
+            .put_object_stream(&digest, byte_stream, Some(compressed_size as i64))
+            .await
+        {
+            let _ = hash_guard.release().await;
+            let _ = guard.release().await;
+            return Err(e);
+        }
     }
 
     // Store logical size metadata
@@ -1441,7 +1445,7 @@ async fn migrate_single_file_from_v1_fs(
     // Store compressed size metadata
     if let Err(e) = app_state
         .kvstorage
-        .set_compressed_size(&app_state.bucket_name, &digest, compressed_data.len())
+        .set_compressed_size(&app_state.bucket_name, &digest, compressed_size)
         .await
     {
         let _ = hash_guard.release().await;

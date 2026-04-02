@@ -53,7 +53,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         .route(
             "/ft/files/{*path}",
             get(s3dedup::routes::ft::get_file::ft_get_file)
-                .head(s3dedup::routes::ft::get_file::ft_get_file)
+                .head(s3dedup::routes::ft::get_file::ft_head_file)
                 .put(s3dedup::routes::ft::put_file::ft_put_file)
                 .delete(s3dedup::routes::ft::delete_file::ft_delete_file),
         )
@@ -1574,4 +1574,755 @@ async fn test_health_endpoint_uptime() {
 
     let uptime = health_status["uptime_seconds"].as_i64().unwrap();
     assert!(uptime >= 0, "Uptime should be non-negative");
+}
+
+// ====================================================================
+// Streaming tests
+// ====================================================================
+
+/// Test that GET streams correctly: Content-Length header matches actual body size.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_streaming_get_content_length_matches_body() {
+    use tower::Service;
+
+    let (mut app, _state) = create_test_app_with_state().await;
+
+    let test_content = b"Streaming GET test - verify Content-Length matches body";
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(test_content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // PUT the file
+    let put_resp = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/stream/gettest.txt?last_modified={}",
+                    encoded_timestamp
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::OK);
+
+    // GET the file
+    let get_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/stream/gettest.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+
+    let content_length: usize = get_resp
+        .headers()
+        .get("Content-Length")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    // Read the streamed body
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+
+    assert_eq!(
+        body_bytes.len(),
+        content_length,
+        "Streamed body size must match Content-Length header"
+    );
+    assert_eq!(
+        body_bytes.len(),
+        compressed_data.len(),
+        "Body should be the compressed data"
+    );
+
+    // Verify data integrity: decompress and compare
+    let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content);
+}
+
+/// Test that HEAD returns the same headers as GET but no body and no S3 fetch.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_streaming_head_matches_get_headers() {
+    use tower::Service;
+
+    let (mut app, _state) = create_test_app_with_state().await;
+
+    let test_content = b"HEAD vs GET header comparison test data";
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(test_content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // PUT the file
+    app.call(
+        Request::builder()
+            .uri(format!(
+                "/ft/files/stream/headvsget.txt?last_modified={}",
+                encoded_timestamp
+            ))
+            .method("PUT")
+            .header("Content-Encoding", "gzip")
+            .header("SHA256-Checksum", &sha256)
+            .header("Logical-Size", test_content.len().to_string())
+            .body(Body::from(compressed_data.clone()))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    // GET
+    let get_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/stream/headvsget.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let get_headers = get_resp.headers().clone();
+
+    // HEAD
+    let head_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/stream/headvsget.txt")
+                .method("HEAD")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(head_resp.status(), StatusCode::OK);
+
+    let head_headers = head_resp.headers();
+
+    // HEAD should have same metadata headers as GET
+    assert_eq!(
+        head_headers.get("Content-Type").unwrap(),
+        get_headers.get("Content-Type").unwrap(),
+        "Content-Type should match"
+    );
+    assert_eq!(
+        head_headers.get("Content-Encoding").unwrap(),
+        get_headers.get("Content-Encoding").unwrap(),
+        "Content-Encoding should match"
+    );
+    assert_eq!(
+        head_headers.get("Last-Modified").unwrap(),
+        get_headers.get("Last-Modified").unwrap(),
+        "Last-Modified should match"
+    );
+    assert_eq!(
+        head_headers.get("Logical-Size").unwrap(),
+        get_headers.get("Logical-Size").unwrap(),
+        "Logical-Size should match"
+    );
+    assert_eq!(
+        head_headers.get("Content-Length").unwrap(),
+        get_headers.get("Content-Length").unwrap(),
+        "Content-Length should match"
+    );
+
+    // HEAD body should be empty
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(head_resp.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body_bytes.len(), 0, "HEAD should return empty body");
+}
+
+/// Test streaming GET with large file (multi-chunk).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_streaming_get_large_file() {
+    use tower::Service;
+
+    let (mut app, _state) = create_test_app_with_state().await;
+
+    // Create content larger than typical chunk sizes (200KB)
+    let test_content: Vec<u8> = (0..200_000).map(|i| (i % 251) as u8).collect();
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(&test_content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(&test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // PUT
+    let put_resp = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/stream/largefile.bin?last_modified={}",
+                    encoded_timestamp
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::OK);
+
+    // GET
+    let get_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/stream/largefile.bin")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+
+    let content_length: usize = get_resp
+        .headers()
+        .get("Content-Length")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body_bytes.len(), content_length);
+    assert_eq!(body_bytes.len(), compressed_data.len());
+
+    let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content, "Large file content mismatch after streaming GET");
+}
+
+/// Test PUT fast path: dedup hit skips body read entirely.
+/// Verifies that uploading same content twice works and no new S3 object is created.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_streaming_put_fast_path_dedup_hit() {
+    use tower::Service;
+
+    let (mut app, state) = create_test_app_with_state().await;
+
+    let test_content = b"Fast path dedup hit test content";
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(test_content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(test_content);
+
+    let timestamp1 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp1 = urlencoding::encode(&timestamp1);
+
+    // First PUT — creates the blob
+    let put1 = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/stream/deduphit_a.txt?last_modified={}",
+                    encoded_timestamp1
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put1.status(), StatusCode::OK);
+
+    // Verify blob exists and refcount is 1
+    assert!(state.s3storage.object_exists(&sha256).await.unwrap());
+    let rc1 = state
+        .kvstorage
+        .get_ref_count(&state.bucket_name, &sha256)
+        .await
+        .unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let timestamp2 = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp2 = urlencoding::encode(&timestamp2);
+
+    // Second PUT with SAME content to different path — dedup hit, body should be skipped
+    let put2 = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/stream/deduphit_b.txt?last_modified={}",
+                    encoded_timestamp2
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put2.status(), StatusCode::OK);
+
+    // Refcount should have increased (dedup hit, just added reference)
+    let rc2 = state
+        .kvstorage
+        .get_ref_count(&state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(rc2, rc1 + 1, "Refcount should increment on dedup hit");
+
+    // Both paths should resolve to the same hash
+    let hash_a = state
+        .kvstorage
+        .get_ref_file(&state.bucket_name, "stream/deduphit_a.txt")
+        .await
+        .unwrap();
+    let hash_b = state
+        .kvstorage
+        .get_ref_file(&state.bucket_name, "stream/deduphit_b.txt")
+        .await
+        .unwrap();
+    assert_eq!(hash_a, hash_b, "Both paths should reference same blob");
+    assert_eq!(hash_a, sha256);
+}
+
+/// Test PUT fast path: dedup miss uploads correctly.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_streaming_put_fast_path_dedup_miss() {
+    use tower::Service;
+
+    let (mut app, state) = create_test_app_with_state().await;
+
+    let test_content = b"Unique content for dedup miss test - should upload to S3";
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(test_content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // Verify blob doesn't exist before PUT
+    assert!(!state.s3storage.object_exists(&sha256).await.unwrap());
+
+    // PUT with all headers (fast path)
+    let put_resp = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/stream/dedupmiss.txt?last_modified={}",
+                    encoded_timestamp
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::OK);
+
+    // Blob should now exist in S3
+    assert!(state.s3storage.object_exists(&sha256).await.unwrap());
+
+    // Verify metadata
+    let compressed_size = state
+        .kvstorage
+        .get_compressed_size(&state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(compressed_size, compressed_data.len());
+
+    let logical_size = state
+        .kvstorage
+        .get_logical_size(&state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(logical_size, test_content.len());
+
+    // Verify GET returns correct data
+    let get_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/stream/dedupmiss.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+    let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content);
+}
+
+/// Test PUT fast path: older timestamp is rejected without reading body.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_streaming_put_fast_path_older_timestamp_skipped() {
+    use tower::Service;
+
+    let (mut app, _state) = create_test_app_with_state().await;
+
+    let test_content = b"Content for timestamp skip test";
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(test_content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(test_content);
+
+    // PUT with a recent timestamp
+    let timestamp_new = chrono::Utc::now().to_rfc2822();
+    let encoded_new = urlencoding::encode(&timestamp_new);
+
+    let put1 = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/stream/tsskip.txt?last_modified={}",
+                    encoded_new
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put1.status(), StatusCode::OK);
+
+    // PUT with an older timestamp — should be rejected
+    let timestamp_old = "Mon, 01 Jan 2024 00:00:00 +0000";
+    let encoded_old = urlencoding::encode(timestamp_old);
+
+    let put2 = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/stream/tsskip.txt?last_modified={}",
+                    encoded_old
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Should return 200 with the current (newer) timestamp
+    assert_eq!(put2.status(), StatusCode::OK);
+
+    let last_modified = put2.headers().get("Last-Modified").unwrap().to_str().unwrap();
+    // Should return the newer timestamp, not the old one
+    assert_ne!(last_modified, timestamp_old);
+}
+
+/// Test PUT slow path: uncompressed input without headers goes through temp file pipeline.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_streaming_put_slow_path_uncompressed() {
+    use tower::Service;
+
+    let (mut app, state) = create_test_app_with_state().await;
+
+    let test_content = b"Uncompressed slow path test - no headers provided";
+    let expected_sha256 = s3dedup::routes::ft::storage_helpers::compute_sha256(test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // PUT without compression headers — triggers slow path with temp file processing
+    let put_resp = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/stream/slowuncomp.txt?last_modified={}",
+                    encoded_timestamp
+                ))
+                .method("PUT")
+                .body(Body::from(test_content.to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::OK);
+
+    // Verify the hash was computed correctly via temp file pipeline
+    let stored_hash = state
+        .kvstorage
+        .get_ref_file(&state.bucket_name, "stream/slowuncomp.txt")
+        .await
+        .unwrap();
+    assert_eq!(stored_hash, expected_sha256, "Hash should match expected SHA256");
+
+    // Verify logical size
+    let logical_size = state
+        .kvstorage
+        .get_logical_size(&state.bucket_name, &expected_sha256)
+        .await
+        .unwrap();
+    assert_eq!(logical_size, test_content.len());
+
+    // Verify compressed size is set and non-zero
+    let compressed_size = state
+        .kvstorage
+        .get_compressed_size(&state.bucket_name, &expected_sha256)
+        .await
+        .unwrap();
+    assert!(compressed_size > 0, "Compressed size should be set");
+
+    // Verify GET returns correct data
+    let get_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/stream/slowuncomp.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+    let decompressed = s3dedup::routes::ft::storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content, "GET should return original content");
+}
+
+/// Test PUT slow path: compressed input without checksum header goes through temp file pipeline.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_streaming_put_slow_path_compressed_no_checksum() {
+    use tower::Service;
+
+    let (mut app, state) = create_test_app_with_state().await;
+
+    let test_content = b"Compressed slow path test - missing SHA256-Checksum header";
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(test_content).unwrap();
+    let expected_sha256 = storage_helpers::compute_sha256(test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // PUT with Content-Encoding but WITHOUT SHA256-Checksum — triggers slow path
+    let put_resp = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/stream/slowcomp.txt?last_modified={}",
+                    encoded_timestamp
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("Logical-Size", test_content.len().to_string())
+                // Deliberately omitting SHA256-Checksum to force slow path
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::OK);
+
+    // Verify hash computed correctly from temp file decompression
+    let stored_hash = state
+        .kvstorage
+        .get_ref_file(&state.bucket_name, "stream/slowcomp.txt")
+        .await
+        .unwrap();
+    assert_eq!(stored_hash, expected_sha256);
+
+    // Verify sizes
+    let logical_size = state
+        .kvstorage
+        .get_logical_size(&state.bucket_name, &expected_sha256)
+        .await
+        .unwrap();
+    assert_eq!(logical_size, test_content.len());
+
+    // GET and verify content
+    let get_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/stream/slowcomp.txt")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+    let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content);
+}
+
+/// Test PUT slow path with large uncompressed data (multi-chunk temp file processing).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_streaming_put_slow_path_large_uncompressed() {
+    use tower::Service;
+
+    let (mut app, state) = create_test_app_with_state().await;
+
+    // 300KB of data — exercises multi-chunk processing in temp file pipeline
+    let test_content: Vec<u8> = (0..300_000).map(|i| (i % 251) as u8).collect();
+
+    use s3dedup::routes::ft::storage_helpers;
+    let expected_sha256 = storage_helpers::compute_sha256(&test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // PUT large uncompressed data (slow path)
+    let put_resp = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/stream/largeslow.bin?last_modified={}",
+                    encoded_timestamp
+                ))
+                .method("PUT")
+                .body(Body::from(test_content.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::OK);
+
+    // Verify hash
+    let stored_hash = state
+        .kvstorage
+        .get_ref_file(&state.bucket_name, "stream/largeslow.bin")
+        .await
+        .unwrap();
+    assert_eq!(stored_hash, expected_sha256);
+
+    // GET and verify content roundtrip
+    let get_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/stream/largeslow.bin")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+    let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content, "Large file roundtrip should preserve content");
+}
+
+/// Test PUT + GET roundtrip with large compressed data (fast path + streaming GET).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_streaming_roundtrip_large_compressed() {
+    use tower::Service;
+
+    let (mut app, _state) = create_test_app_with_state().await;
+
+    // 500KB of data
+    let test_content: Vec<u8> = (0..500_000).map(|i| ((i * 7 + 13) % 256) as u8).collect();
+
+    use s3dedup::routes::ft::storage_helpers;
+    let compressed_data = storage_helpers::compress_gzip(&test_content).unwrap();
+    let sha256 = storage_helpers::compute_sha256(&test_content);
+
+    let timestamp = chrono::Utc::now().to_rfc2822();
+    let encoded_timestamp = urlencoding::encode(&timestamp);
+
+    // PUT (fast path)
+    let put_resp = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/stream/largeround.bin?last_modified={}",
+                    encoded_timestamp
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha256)
+                .header("Logical-Size", test_content.len().to_string())
+                .body(Body::from(compressed_data.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::OK);
+
+    // GET (streaming)
+    let get_resp = app
+        .call(
+            Request::builder()
+                .uri("/ft/files/stream/largeround.bin")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+
+    // Verify Content-Length
+    let content_length: usize = get_resp
+        .headers()
+        .get("Content-Length")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(content_length, compressed_data.len());
+
+    // Verify Logical-Size
+    let logical_size: usize = get_resp
+        .headers()
+        .get("Logical-Size")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(logical_size, test_content.len());
+
+    // Verify body
+    use axum::body::to_bytes;
+    let body_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body_bytes.len(), compressed_data.len());
+
+    let decompressed = storage_helpers::decompress_gzip(&body_bytes).unwrap();
+    assert_eq!(decompressed, test_content);
 }

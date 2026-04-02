@@ -38,6 +38,14 @@ pub struct FiletrackerClient {
 }
 
 #[derive(Clone)]
+pub struct FileHeaders {
+    pub last_modified: i64,
+    pub logical_size: usize,
+    pub content_length: usize,
+    pub is_compressed: bool,
+}
+
+#[derive(Clone)]
 pub struct FileMetadata {
     pub data: Vec<u8>,
     pub last_modified: i64,
@@ -103,6 +111,68 @@ impl FiletrackerClient {
 
         debug!("Listed {} files from filetracker", files.len());
         Ok(files)
+    }
+
+    /// Check if a file exists in filetracker and get its metadata (no body download).
+    /// Uses HTTP HEAD to avoid downloading the file content.
+    pub async fn head_file(&self, path: &str) -> Result<FileHeaders> {
+        let url = format!("{}/files/{}", self.base_url, path);
+        debug!("HEAD file from filetracker: {}", url);
+
+        let response = self
+            .client
+            .head(&url)
+            .send()
+            .await
+            .map_err(|e| TransientError(e.to_string()))?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Err(FileNotFoundError(path.to_string()).into());
+        }
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let msg = format!("HTTP {}", status);
+            if status.is_server_error() {
+                return Err(TransientError(msg).into());
+            }
+            bail!("{}", msg)
+        }
+
+        let last_modified_str = response
+            .headers()
+            .get("Last-Modified")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| anyhow!("Missing Last-Modified header"))?;
+        let last_modified = DateTime::parse_from_rfc2822(last_modified_str)?.timestamp();
+
+        let logical_size = response
+            .headers()
+            .get("Logical-Size")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        let content_length = response
+            .headers()
+            .get("Content-Length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        let is_compressed = response
+            .headers()
+            .get("Content-Encoding")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v == "gzip")
+            .unwrap_or(false);
+
+        Ok(FileHeaders {
+            last_modified,
+            logical_size,
+            content_length,
+            is_compressed,
+        })
     }
 
     /// Get a file from filetracker

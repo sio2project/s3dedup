@@ -1,3 +1,4 @@
+use aws_sdk_s3::primitives::ByteStream;
 use crate::config::BucketConfig;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -88,6 +89,21 @@ impl S3Storage {
         self.0.get_object(key).await
     }
 
+    pub async fn get_object_stream(&self, key: &str) -> Result<(ByteStream, Option<i64>)> {
+        debug!("Getting object stream with key: {}", key);
+        self.0.get_object_stream(key).await
+    }
+
+    pub async fn put_object_stream(
+        &self,
+        key: &str,
+        body: ByteStream,
+        content_length: Option<i64>,
+    ) -> Result<()> {
+        debug!("Putting object stream with key: {}", key);
+        self.0.put_object_stream(key, body, content_length).await
+    }
+
     pub async fn delete_object(&self, key: &str) -> Result<()> {
         debug!("Deleting object with key: {}", key);
         self.0.delete_object(key).await
@@ -96,6 +112,11 @@ impl S3Storage {
     pub async fn object_exists(&self, key: &str) -> Result<bool> {
         debug!("Checking if object exists with key: {}", key);
         self.0.object_exists(key).await
+    }
+
+    pub async fn object_exists_with_size(&self, key: &str) -> Result<Option<i64>> {
+        debug!("HEAD object for size with key: {}", key);
+        self.0.object_exists_with_size(key).await
     }
 
     pub async fn list_objects(

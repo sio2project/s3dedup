@@ -8,6 +8,7 @@ use s3dedup::config;
 use s3dedup::metrics;
 use s3dedup::routes::ft::delete_file::ft_delete_file;
 use s3dedup::routes::ft::get_file::ft_get_file;
+use s3dedup::routes::ft::head_file::ft_head_file;
 use s3dedup::routes::ft::list_files::ft_list_files;
 use s3dedup::routes::ft::put_file::ft_put_file;
 use s3dedup::routes::ft::version::ft_version;
@@ -127,7 +128,7 @@ fn create_router(app_state: Arc<AppState>) -> Router {
         .route(
             "/ft/files/{*path}",
             get(ft_get_file)
-                .head(ft_get_file)
+                .head(ft_head_file)
                 .put(ft_put_file)
                 .delete(ft_delete_file),
         )
