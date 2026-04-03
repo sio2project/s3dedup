@@ -298,9 +298,13 @@ impl KVStorageTrait for Postgres {
         timestamp: i64,
     ) -> Result<Vec<String>> {
         let table = self.table_name("modified");
-        let pattern = format!("{}%", path_prefix);
+        let escaped = path_prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("{}%", escaped);
         let query = format!(
-            "SELECT path FROM {} WHERE bucket = $1 AND path LIKE $2 AND modified <= $3 ORDER BY path",
+            "SELECT path FROM {} WHERE bucket = $1 AND path LIKE $2 ESCAPE '\\' AND modified <= $3 ORDER BY path",
             table
         );
         let rows: Vec<(String,)> = sqlx::query_as(&query)

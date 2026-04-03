@@ -248,9 +248,13 @@ impl KVStorageTrait for SQLite {
         path_prefix: &str,
         timestamp: i64,
     ) -> Result<Vec<String>> {
-        let pattern = format!("{}%", path_prefix);
+        let escaped = path_prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("{}%", escaped);
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT path FROM modified WHERE bucket = ?1 AND path LIKE ?2 AND modified <= ?3 ORDER BY path"
+            "SELECT path FROM modified WHERE bucket = ?1 AND path LIKE ?2 ESCAPE '\\' AND modified <= ?3 ORDER BY path"
         )
         .bind(bucket)
         .bind(pattern)
