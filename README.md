@@ -61,7 +61,8 @@ docker run -d \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LOG_LEVEL` | `info` | Logging level (trace, debug, info, warn, error) |
-| `LOG_JSON` | `false` | Enable JSON logging |
+| `LOG_JSON` | `false` | Enable JSON logging on stdout |
+| `JSON_LOG_PATH` | - | Path for JSON log file (enables dual output: pretty stdout + JSON file) |
 | `BUCKET_NAME` | `default` | Bucket name identifier |
 | `LISTEN_ADDRESS` | `0.0.0.0` | Server bind address |
 | `LISTEN_PORT` | `8080` | Server port |
@@ -73,10 +74,16 @@ docker run -d \
 | `S3_ACCESS_KEY` | *required* | S3 access key |
 | `S3_SECRET_KEY` | *required* | S3 secret key |
 | `S3_FORCE_PATH_STYLE` | `true` | Use path-style S3 URLs |
+| `S3_REGION` | `garage` | S3 region name |
+| `S3_KEY_SHARDING_ENABLED` | `true` | Distribute S3 objects into subdirectories by hash prefix |
+| `S3_KEY_SHARDING_DEPTH` | `2` | Number of sharding levels (e.g. 2 → `ab/cd/abcdef...`) |
+| `MAX_INMEMORY_SIZE` | `67108864` | Max file size (bytes) to buffer in memory before spilling to disk (default 64MB) |
+| `TEMP_DIR` | system default | Directory for temporary files; set to disk-backed path if /tmp is tmpfs |
 | `CLEANER_ENABLED` | `true` | Enable background cleaner |
-| `CLEANER_INTERVAL` | `3600` | Cleaner run interval (seconds) |
+| `CLEANER_INTERVAL` | `3600` | Lightweight cleaner run interval (seconds) |
 | `CLEANER_BATCH_SIZE` | `1000` | Cleaner batch size |
-| `CLEANER_MAX_DELETES` | `10000` | Max deletions per cleaner run |
+| `CLEANER_CONCURRENCY` | `8` | Number of concurrent cleaner workers |
+| `CLEANER_FULL_SCAN_CRON` | - | Cron schedule for full S3 scan (5-field, e.g. `0 3 * * *`) |
 | `FILETRACKER_URL` | - | Old Filetracker URL for live migration (HTTP fallback) |
 | `FILETRACKER_V1_DIR` | - | V1 Filetracker directory for filesystem-based migration |
 
@@ -225,6 +232,26 @@ During V2 live migration:
 - **PUT**: Writes to both s3dedup and old Filetracker
 - **DELETE**: Deletes from both systems
 
+#### Advanced Migration Modes
+
+**Proxy-only mode** — forward requests to Filetracker without background migration (useful as a first phase for very large instances):
+
+```bash
+docker run -d ... ghcr.io/sio2project/s3dedup:latest \
+  live-migrate --env --proxy-only
+```
+
+**File-list mode** — migrate from a pre-generated list instead of calling `/list/` (resilient to Filetracker downtime):
+
+```bash
+# Generate file list from Filetracker filesystem
+find /var/lib/filetracker/links -type l | sed 's|^/var/lib/filetracker/links||' > files.txt
+
+docker run -d ... -v $(pwd)/files.txt:/app/files.txt:ro \
+  ghcr.io/sio2project/s3dedup:latest \
+  live-migrate --env --file-list /app/files.txt --max-concurrency 10
+```
+
 ### V1 Migration (Legacy Filetracker)
 
 V1 Filetracker stores files directly on the filesystem and serves them via a simple HTTP protocol. 
@@ -300,6 +327,12 @@ Compatible with Filetracker protocol v2:
 - `PUT /ft/files/{path}` - Upload file
 - `DELETE /ft/files/{path}` - Delete file
 
+Operational endpoints:
+
+- `GET /metrics` - Prometheus metrics
+- `GET /metrics/json` - Metrics in JSON format
+- `GET /health` - Health check (returns 200/503 with JSON status)
+
 
 ## Testing
 
@@ -316,7 +349,7 @@ docker-compose up -d
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
 export S3_ACCESS_KEY=GK0123456789abcdef01234567
 export S3_SECRET_KEY=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
-cargo test
+cargo test --features test-mocks
 docker-compose down
 ```
 
@@ -340,7 +373,7 @@ docker-compose up -d
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
 export S3_ACCESS_KEY=GK0123456789abcdef01234567
 export S3_SECRET_KEY=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
-cargo test
+cargo test --features test-mocks
 ```
 
 ## Architecture
@@ -352,7 +385,8 @@ cargo test
 - **Lock Manager**: In-memory (single-instance) or PostgreSQL advisory locks (distributed, multi-instance HA)
   - Memory locks: Fast, suitable for single-instance deployments
   - PostgreSQL locks: Distributed coordination, suitable for multi-instance HA setups
-- **Cleaner**: Background worker that removes unreferenced S3 objects
+- **Cleaner**: Background worker that removes unreferenced S3 objects (lightweight DB phases on interval, optional full S3 scan on cron)
+- **Observability**: Prometheus metrics (`/metrics`), JSON metrics (`/metrics/json`), health check (`/health`)
 
 For detailed architecture documentation, see:
 - [docs/deduplication.md](docs/deduplication.md) - Deduplication architecture and performance

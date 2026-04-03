@@ -32,9 +32,11 @@ cargo check
 # Run all unit tests (no external dependencies)
 cargo test --lib
 
-# Run all tests (requires PostgreSQL + MinIO)
+# Run all tests (requires PostgreSQL + S3-compatible storage)
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
-cargo test
+export S3_ACCESS_KEY=GK0123456789abcdef01234567
+export S3_SECRET_KEY=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+cargo test --features test-mocks
 ```
 
 ### Unit Tests
@@ -58,10 +60,10 @@ Integration tests require external services. Run specific tests with appropriate
 
 ```bash
 # Run all integration tests (requires PostgreSQL + S3-compatible storage)
-cargo test --test integration_test
+cargo test --features test-mocks --test integration_test
 
 # Run specific integration test (requires PostgreSQL + S3-compatible storage)
-cargo test --test integration_test test_put_and_get_file -- --nocapture
+cargo test --features test-mocks --test integration_test test_put_and_get_file -- --nocapture
 ```
 
 ### PostgreSQL Lock Tests
@@ -98,13 +100,13 @@ Once PostgreSQL is running:
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
 
 # Run all PostgreSQL lock tests
-cargo test --test postgres_locks_test -- --nocapture
+cargo test --features test-mocks --test postgres_locks_test -- --nocapture
 
 # Run specific PostgreSQL lock test
-cargo test --test postgres_locks_test test_exclusive_lock_mutual_exclusion -- --nocapture
+cargo test --features test-mocks --test postgres_locks_test test_exclusive_lock_mutual_exclusion -- --nocapture
 
 # Run with debug logging
-RUST_LOG=debug cargo test --test postgres_locks_test -- --nocapture
+RUST_LOG=debug cargo test --features test-mocks --test postgres_locks_test -- --nocapture
 ```
 
 #### PostgreSQL Lock Tests Overview
@@ -129,10 +131,10 @@ Run migration tests with PostgreSQL:
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
 
 # Run all migration tests
-cargo test --test migration_test -- --nocapture
+cargo test --features test-mocks --test migration_test -- --nocapture
 
 # Run specific migration test
-cargo test --test migration_test test_offline_migration_empty -- --nocapture
+cargo test --features test-mocks --test migration_test test_offline_migration_empty -- --nocapture
 ```
 
 ### Cleaner Tests
@@ -144,7 +146,7 @@ Run background cleaner tests with PostgreSQL:
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
 
 # Run all cleaner tests
-cargo test --test cleaner_test -- --nocapture
+cargo test --features test-mocks --test cleaner_test -- --nocapture
 ```
 
 ### Full Integration Testing Setup
@@ -159,7 +161,7 @@ docker-compose up -d
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
 export S3_ACCESS_KEY=GK0123456789abcdef01234567
 export S3_SECRET_KEY=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
-cargo test
+cargo test --features test-mocks
 
 # Cleanup
 docker-compose down
@@ -184,42 +186,11 @@ docker run -d \
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
 export S3_ACCESS_KEY=GK0123456789abcdef01234567
 export S3_SECRET_KEY=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
-cargo test
+cargo test --features test-mocks
 
 # Cleanup
 docker stop postgres-test
 docker rm postgres-test
-```
-
-**Option 3: Manual Setup with MinIO (Alternative)**
-
-```bash
-# Terminal 1: Start PostgreSQL
-docker run -d \
-  --name postgres-test \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=s3dedup_test \
-  -p 5432:5432 \
-  postgres:15
-
-# Terminal 2: Start MinIO
-docker run -d \
-  --name minio-test \
-  -p 9000:9000 \
-  -e MINIO_ROOT_USER=minioadmin \
-  -e MINIO_ROOT_PASSWORD=minioadmin \
-  minio/minio:latest server /data
-
-# Terminal 3: Run tests
-export DATABASE_URL="postgres://postgres:postgres@localhost:5432/s3dedup_test"
-export S3_ENDPOINT="http://localhost:9000"
-export S3_ACCESS_KEY="minioadmin"
-export S3_SECRET_KEY="minioadmin"
-cargo test
-
-# Cleanup
-docker stop postgres-test minio-test
-docker rm postgres-test minio-test
 ```
 
 ### Test Categories
@@ -227,11 +198,11 @@ docker rm postgres-test minio-test
 | Test Type | Command | Dependencies | Time |
 |-----------|---------|--------------|------|
 | Unit tests | `cargo test --lib` | None | ~1-2s |
-| PostgreSQL lock tests | `cargo test --test postgres_locks_test` | PostgreSQL + S3 | ~5-10s |
-| Migration tests | `cargo test --test migration_test` | PostgreSQL + S3 | ~10-20s |
-| Integration tests | `cargo test --test integration_test` | PostgreSQL + S3 | ~20-30s |
-| Cleaner tests | `cargo test --test cleaner_test` | PostgreSQL + S3 | ~5-10s |
-| All tests | `cargo test` | PostgreSQL + S3 | ~30-50s |
+| PostgreSQL lock tests | `cargo test --features test-mocks --test postgres_locks_test` | PostgreSQL + S3 | ~5-10s |
+| Migration tests | `cargo test --features test-mocks --test migration_test` | PostgreSQL + S3 | ~10-20s |
+| Integration tests | `cargo test --features test-mocks --test integration_test` | PostgreSQL + S3 | ~20-30s |
+| Cleaner tests | `cargo test --features test-mocks --test cleaner_test` | PostgreSQL + S3 | ~5-10s |
+| All tests | `cargo test --features test-mocks` | PostgreSQL + S3 | ~30-50s |
 
 ### Environment Variables for Testing
 
@@ -240,7 +211,7 @@ docker rm postgres-test minio-test
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/s3dedup_test
 
 # S3 connection (required for integration tests)
-S3_ENDPOINT=http://localhost:3900  # Garage default port (MinIO uses 9000)
+S3_ENDPOINT=http://localhost:3900  # Default for Garage; adjust for your S3 backend
 S3_ACCESS_KEY=your_access_key
 S3_SECRET_KEY=your_secret_key
 
@@ -274,7 +245,7 @@ createdb -U postgres s3dedup_test
 
 ```bash
 # Run with timeout
-timeout 30 cargo test --test postgres_locks_test test_exclusive_lock_mutual_exclusion -- --nocapture
+timeout 30 cargo test --features test-mocks --test postgres_locks_test test_exclusive_lock_mutual_exclusion -- --nocapture
 
 # Check PostgreSQL locks status
 psql -U postgres -d s3dedup_test -c "SELECT * FROM pg_locks WHERE locktype = 'advisory';"
@@ -455,7 +426,7 @@ cargo clippy --fix
 When making changes:
 
 1. Write tests for new functionality
-2. Ensure all existing tests pass: `cargo test`
+2. Ensure all existing tests pass: `cargo test --features test-mocks`
 3. Run clippy: `cargo clippy`
 4. Format code: `cargo fmt`
 5. Document public APIs with doc comments

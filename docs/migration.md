@@ -1,8 +1,6 @@
 # Migration Guide
 
-This guide covers migrating from Filetracker v2.1+ to s3dedup.
-
-> **Note**: Migration from Filetracker v1.x will be covered in a future version of this guide.
+This guide covers migrating from Filetracker (V1 and V2) to s3dedup.
 
 ## Overview
 
@@ -234,6 +232,34 @@ Client deletes file → s3dedup:
                       └─ Also delete from old Filetracker
 ```
 
+### Advanced Live Migration Modes
+
+#### Proxy-Only Mode
+
+For very large Filetracker instances, start in proxy-only mode first — requests are forwarded to Filetracker but no background migration runs:
+
+```bash
+docker run -d ... ghcr.io/sio2project/s3dedup:latest \
+  live-migrate --env --proxy-only
+```
+
+Once stable, switch to file-list mode for controlled migration.
+
+#### File-List Mode
+
+Migrate from a pre-generated file list instead of calling `/list/`. This is resilient to Filetracker downtime and uses infinite retry with backoff:
+
+```bash
+# Generate file list from Filetracker filesystem
+find /var/lib/filetracker/links -type l | sed 's|^/var/lib/filetracker/links||' > files.txt
+
+docker run -d ... -v $(pwd)/files.txt:/app/files.txt:ro \
+  ghcr.io/sio2project/s3dedup:latest \
+  live-migrate --env --file-list /app/files.txt --max-concurrency 10
+```
+
+`--proxy-only` and `--file-list` are mutually exclusive.
+
 ### Step 3: Monitor Migration Progress
 
 Watch the logs:
@@ -256,22 +282,17 @@ You'll see:
 
 ### Step 4: Monitor Metrics
 
-Check migration progress via API:
+Check migration progress via metrics:
 
 ```bash
-# Get migration status (if implemented)
-curl http://localhost:8080/admin/migration/status
+# Prometheus format
+curl http://localhost:8080/metrics
 
-# Sample response:
-{
-  "mode": "live",
-  "total_files": 15432,
-  "migrated_files": 8234,
-  "progress_percent": 53.4,
-  "deduplication_rate": 46.7,
-  "storage_saved_gb": 66.5
-}
+# JSON format
+curl http://localhost:8080/metrics/json
 ```
+
+Key metrics to watch: `s3dedup_migration_active`, `s3dedup_migration_files_migrated_total`, `s3dedup_filetracker_fallbacks_total`.
 
 ### Step 5: Gradual Traffic Migration
 
@@ -455,14 +476,7 @@ If migration fails:
 3. Re-run migration (idempotent - safe to retry)
 
 ```bash
-# Clear partial migration
-docker run --rm \
-  --env-file .env \
-  -v s3dedup-data:/app/data \
-  ghcr.io/sio2project/s3dedup:latest \
-  admin clear-bucket --confirm
-
-# Restart migration
+# Re-run migration (idempotent - safe to retry)
 docker run --rm \
   --env-file .env \
   -v s3dedup-data:/app/data \
@@ -506,19 +520,11 @@ CLEANER_BATCH_SIZE=1000
 ### 2. Monitor Storage Savings
 
 ```bash
-# Check deduplication metrics
-curl http://localhost:8080/admin/stats
-
-# Sample response:
-{
-  "total_files": 15432,
-  "unique_blobs": 8234,
-  "deduplication_rate": 46.7,
-  "logical_storage_gb": 142.3,
-  "physical_storage_gb": 75.8,
-  "savings_gb": 66.5
-}
+# Check deduplication and storage metrics
+curl http://localhost:8080/metrics/json
 ```
+
+Key metrics: `s3dedup_total_files`, `s3dedup_total_blobs`, `s3dedup_deduplication_ratio`, `s3dedup_total_logical_size_bytes`, `s3dedup_total_storage_bytes`.
 
 ### 3. Optimize Database
 
@@ -552,7 +558,7 @@ cp .env .env.backup
 ### Pre-Migration
 
 - [ ] Backup old Filetracker data
-- [ ] Set up S3/MinIO storage
+- [ ] Set up S3-compatible storage (Garage, MinIO, AWS S3, etc.)
 - [ ] Set up PostgreSQL/SQLite database
 - [ ] Test connectivity between s3dedup and Filetracker
 - [ ] Verify sufficient storage capacity
@@ -574,6 +580,56 @@ cp .env .env.backup
 - [ ] Optimize database
 - [ ] Update documentation
 - [ ] Plan decommissioning of old server
+
+## V1 Migration (Legacy Filetracker)
+
+V1 Filetracker stores files directly on the filesystem. Since V1 has no `/list/` endpoint, migration uses filesystem walking with chunked processing (10,000 files per chunk) for constant memory usage.
+
+### Offline V1 Migration
+
+Requires access to the V1 `$FILETRACKER_DIR`:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -v s3dedup-data:/app/data \
+  -v /path/to/filetracker:/filetracker:ro \
+  ghcr.io/sio2project/s3dedup:latest \
+  migrate-v1 --env \
+  --v1-directory /filetracker \
+  --max-concurrency 10
+```
+
+### Live V1 Migration
+
+Run the proxy while migrating from V1 in the background. Supports filesystem walking and/or HTTP fallback:
+
+```bash
+# With filesystem access + HTTP fallback
+docker run -d \
+  --env-file .env \
+  -v s3dedup-data:/app/data \
+  -v /path/to/filetracker:/filetracker:ro \
+  ghcr.io/sio2project/s3dedup:latest \
+  live-migrate-v1 --env \
+  --v1-directory /filetracker \
+  --filetracker-url http://old-filetracker-v1:8000 \
+  --max-concurrency 10
+
+# HTTP fallback only (no filesystem access)
+docker run -d \
+  --env-file .env \
+  -v s3dedup-data:/app/data \
+  ghcr.io/sio2project/s3dedup:latest \
+  live-migrate-v1 --env \
+  --filetracker-url http://old-filetracker-v1:8000 \
+  --max-concurrency 10
+```
+
+During V1 live migration:
+- **Background**: If `--v1-directory` is provided, the filesystem is scanned in chunks
+- **HTTP fallback**: If `--filetracker-url` is provided, GET requests fall back to V1 server and migrate on first access
+- **New requests**: PUT/GET/DELETE work normally during migration
 
 ## Support
 
