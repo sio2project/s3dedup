@@ -3,6 +3,8 @@ use serde::Deserialize;
 use tracing::info;
 
 pub mod memory;
+#[cfg(feature = "test-mocks")]
+pub mod mock;
 pub mod postgres;
 
 /**
@@ -73,6 +75,8 @@ pub(crate) trait LockStorage {
 pub enum LocksStorage {
     Memory(memory::MemoryLocks),
     Postgres(Box<postgres::PostgresLocks>),
+    #[cfg(feature = "test-mocks")]
+    Mock(mock::MockLocks),
 }
 
 impl LocksStorage {
@@ -109,6 +113,8 @@ impl LocksStorage {
         match self {
             LocksStorage::Memory(memory_locks) => memory_locks.prepare_lock(key).await,
             LocksStorage::Postgres(postgres_locks) => postgres_locks.prepare_lock(key).await,
+            #[cfg(feature = "test-mocks")]
+            LocksStorage::Mock(mock_locks) => mock_locks.prepare_lock(key).await,
         }
     }
 }
