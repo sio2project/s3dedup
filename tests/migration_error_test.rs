@@ -39,6 +39,7 @@ fn create_mock_app_state() -> (Arc<AppState>, MockKVStorage, MockS3Storage) {
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner,
     });
 

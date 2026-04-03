@@ -38,11 +38,14 @@ pub async fn read_body_bytes(body: axum::body::Body, max_size: usize) -> Result<
 
 /// Stream HTTP body to a temp file without processing.
 /// Used when headers already provide digest/sizes but the body is too large for memory.
-pub async fn stream_body_to_temp_file(body: axum::body::Body) -> Result<RawTempFile> {
+pub async fn stream_body_to_temp_file(
+    body: axum::body::Body,
+    temp_dir: &std::path::Path,
+) -> Result<RawTempFile> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
 
-    let temp_file = tempfile::NamedTempFile::new()?;
+    let temp_file = tempfile::NamedTempFile::new_in(temp_dir)?;
     let temp_path = temp_file.path().to_path_buf();
 
     let std_file = temp_file.as_file().try_clone()?;
@@ -81,12 +84,13 @@ pub struct RawTempFile {
 pub async fn process_body_to_temp_file(
     body: axum::body::Body,
     is_compressed: bool,
+    temp_dir: &std::path::Path,
 ) -> Result<ProcessedFile> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
 
     // Stream body to temp file using async I/O to avoid blocking the runtime
-    let temp_input = tempfile::NamedTempFile::new()?;
+    let temp_input = tempfile::NamedTempFile::new_in(temp_dir)?;
     let temp_input_path = temp_input.path().to_path_buf();
 
     {
@@ -101,13 +105,14 @@ pub async fn process_body_to_temp_file(
     }
 
     let input_path = temp_input_path.clone();
+    let temp_dir_owned = temp_dir.to_path_buf();
     let result = tokio::task::spawn_blocking(move || {
         if is_compressed {
             // Input is compressed: compute hash by decompressing, keep original as-is
             process_compressed_temp_file(&input_path)
         } else {
             // Input is uncompressed: compute hash and compress to a new temp file
-            process_uncompressed_temp_file(&input_path)
+            process_uncompressed_temp_file(&input_path, &temp_dir_owned)
         }
     })
     .await??;
@@ -184,13 +189,16 @@ pub fn process_compressed_temp_file(input_path: &std::path::Path) -> Result<Proc
 }
 
 /// Process an uncompressed temp file: compute hash and compress to new temp file.
-pub fn process_uncompressed_temp_file(input_path: &std::path::Path) -> Result<ProcessingResult> {
+pub fn process_uncompressed_temp_file(
+    input_path: &std::path::Path,
+    temp_dir: &std::path::Path,
+) -> Result<ProcessingResult> {
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use std::io::{Read, Write};
 
     let mut input_file = std::fs::File::open(input_path)?;
-    let output_temp = tempfile::NamedTempFile::new()?;
+    let output_temp = tempfile::NamedTempFile::new_in(temp_dir)?;
     let output_path = output_temp.path().to_path_buf();
 
     let mut hasher = Sha256::new();
@@ -258,7 +266,7 @@ mod tests {
         input.write_all(data).unwrap();
         input.flush().unwrap();
 
-        let result = process_uncompressed_temp_file(input.path()).unwrap();
+        let result = process_uncompressed_temp_file(input.path(), &std::env::temp_dir()).unwrap();
 
         assert_eq!(result.digest, expected_hash, "Hash should match");
         assert_eq!(
@@ -326,7 +334,7 @@ mod tests {
         input.write_all(&data).unwrap();
         input.flush().unwrap();
 
-        let result = process_uncompressed_temp_file(input.path()).unwrap();
+        let result = process_uncompressed_temp_file(input.path(), &std::env::temp_dir()).unwrap();
 
         assert_eq!(result.digest, expected_hash);
         assert_eq!(result.logical_size, data.len());
@@ -369,7 +377,7 @@ mod tests {
         input.write_all(data).unwrap();
         input.flush().unwrap();
 
-        let result = process_uncompressed_temp_file(input.path()).unwrap();
+        let result = process_uncompressed_temp_file(input.path(), &std::env::temp_dir()).unwrap();
         assert_eq!(result.digest, expected_hash);
         assert_eq!(result.logical_size, 0);
     }
@@ -380,7 +388,9 @@ mod tests {
         let expected_hash = compute_sha256(data);
 
         let body = axum::body::Body::from(data.to_vec());
-        let result = process_body_to_temp_file(body, false).await.unwrap();
+        let result = process_body_to_temp_file(body, false, &std::env::temp_dir())
+            .await
+            .unwrap();
 
         assert_eq!(result.digest, expected_hash);
         assert_eq!(result.logical_size, data.len());
@@ -399,7 +409,9 @@ mod tests {
         let compressed = compress_gzip(data).unwrap();
 
         let body = axum::body::Body::from(compressed.clone());
-        let result = process_body_to_temp_file(body, true).await.unwrap();
+        let result = process_body_to_temp_file(body, true, &std::env::temp_dir())
+            .await
+            .unwrap();
 
         assert_eq!(result.digest, expected_hash);
         assert_eq!(result.logical_size, data.len());
@@ -413,7 +425,9 @@ mod tests {
         let expected_hash = compute_sha256(&data);
 
         let body = axum::body::Body::from(data.clone());
-        let result = process_body_to_temp_file(body, false).await.unwrap();
+        let result = process_body_to_temp_file(body, false, &std::env::temp_dir())
+            .await
+            .unwrap();
 
         assert_eq!(result.digest, expected_hash);
         assert_eq!(result.logical_size, data.len());

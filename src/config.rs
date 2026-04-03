@@ -48,6 +48,12 @@ pub struct BucketConfig {
     #[serde(default = "default_max_inmemory_size")]
     pub max_inmemory_size: usize,
 
+    /// Directory for temporary files (large uploads, migration).
+    /// Defaults to system temp dir. Set this to a disk-backed path on systems
+    /// where /tmp is tmpfs (RAM-backed), e.g. Debian.
+    #[serde(default)]
+    pub temp_dir: Option<String>,
+
     /// Optional filetracker URL for live migration mode
     #[serde(default)]
     pub filetracker_url: Option<String>,
@@ -237,6 +243,10 @@ impl BucketConfig {
         {
             self.max_inmemory_size = size;
         }
+
+        if let Ok(val) = std::env::var("TEMP_DIR") {
+            self.temp_dir = Some(val);
+        }
     }
 
     /// Create a bucket config from environment variables only
@@ -294,6 +304,7 @@ impl BucketConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_else(default_max_inmemory_size),
+            temp_dir: std::env::var("TEMP_DIR").ok(),
             filetracker_url: std::env::var("FILETRACKER_URL").ok(),
             filetracker_v1_dir: std::env::var("FILETRACKER_V1_DIR").ok(),
         })

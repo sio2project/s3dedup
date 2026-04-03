@@ -59,7 +59,7 @@ async fn ft_get_file_inner(state: &AppState, path: &str) -> Result<Response<Body
             debug!("File {} not found in s3dedup, checking filetracker", path);
 
             match filetracker_client
-                .download_file(path, state.max_inmemory_size)
+                .download_file(path, state.max_inmemory_size, &state.temp_dir)
                 .await
             {
                 Ok(downloaded) => {

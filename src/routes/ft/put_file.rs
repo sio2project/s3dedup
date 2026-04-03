@@ -172,16 +172,17 @@ async fn ft_put_file_inner(
 
             let (compressed_size, _fast_temp_file) = if fast_use_tempfile {
                 // Large file: stream body to temp file, upload from disk
-                let raw = match storage_helpers::stream_body_to_temp_file(body).await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        error!("Failed to stream request body: {}", e);
-                        return Ok(Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .body("Failed to stream request body".to_string())
-                            .unwrap());
-                    }
-                };
+                let raw =
+                    match storage_helpers::stream_body_to_temp_file(body, &state.temp_dir).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            error!("Failed to stream request body: {}", e);
+                            return Ok(Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .body("Failed to stream request body".to_string())
+                                .unwrap());
+                        }
+                    };
                 let compressed_size = raw.data_size;
                 let byte_stream = aws_sdk_s3::primitives::ByteStream::from_path(&raw.temp_path)
                     .await
@@ -319,7 +320,7 @@ async fn ft_put_file_inner(
             )
         } else if has_headers {
             // Headers provided, large file — stream to temp file to bound memory
-            match storage_helpers::stream_body_to_temp_file(body).await {
+            match storage_helpers::stream_body_to_temp_file(body, &state.temp_dir).await {
                 Ok(raw) => {
                     let compressed_size = raw.data_size;
                     let pf = storage_helpers::ProcessedFile {
@@ -347,7 +348,9 @@ async fn ft_put_file_inner(
             }
         } else if use_tempfile {
             // Large file: stream body to temp file to bound memory usage
-            match storage_helpers::process_body_to_temp_file(body, compressed).await {
+            match storage_helpers::process_body_to_temp_file(body, compressed, &state.temp_dir)
+                .await
+            {
                 Ok(pf) => {
                     let digest = pf.digest.clone();
                     let logical_size = pf.logical_size;

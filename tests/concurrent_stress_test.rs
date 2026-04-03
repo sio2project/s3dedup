@@ -44,6 +44,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner,
     });
 
