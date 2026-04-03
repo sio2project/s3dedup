@@ -45,6 +45,7 @@ pub fn create_test_bucket_config(prefix: &str) -> (BucketConfig, String) {
         s3: Some(s3_config_from_env()),
         cleaner: Default::default(),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: None,
         filetracker_url: None,
         filetracker_v1_dir: None,
     };

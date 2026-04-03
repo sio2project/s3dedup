@@ -198,6 +198,7 @@ async fn create_test_app_state() -> Arc<AppState> {
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner,
     });
 
@@ -389,6 +390,7 @@ async fn test_live_migration_get_fallback() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner: app_state.cleaner.clone(),
     });
 
@@ -436,6 +438,7 @@ async fn test_live_migration_put_dual_write() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner: app_state.cleaner.clone(),
     });
 
@@ -513,6 +516,7 @@ async fn test_live_migration_delete_dual_delete() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner: app_state.cleaner.clone(),
     });
 
@@ -582,6 +586,7 @@ async fn test_live_migration_get_not_found_in_both() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner: app_state.cleaner.clone(),
     });
 
@@ -627,6 +632,7 @@ async fn test_live_migration_get_fallback_response_data() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner: app_state.cleaner.clone(),
     });
 
@@ -705,6 +711,7 @@ async fn test_live_migration_get_no_deadlock_on_fallback() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner: app_state.cleaner.clone(),
     });
 
@@ -769,6 +776,7 @@ async fn test_live_migration_subsequent_get_from_s3dedup() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner: app_state.cleaner.clone(),
     });
 
@@ -1231,6 +1239,7 @@ async fn create_test_app_state_with_threshold(max_inmemory_size: usize) -> Arc<A
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size,
+        temp_dir: std::env::temp_dir(),
         cleaner,
     });
 
@@ -1445,6 +1454,7 @@ async fn test_live_migration_get_streaming_tempfile() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 10,
+        temp_dir: std::env::temp_dir(),
         cleaner: app_state.cleaner.clone(),
     });
 
@@ -1517,6 +1527,7 @@ async fn test_live_migration_get_inmemory_small() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner: app_state.cleaner.clone(),
     });
 

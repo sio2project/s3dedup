@@ -46,6 +46,7 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: std::env::temp_dir(),
         cleaner,
     });
 
@@ -940,6 +941,7 @@ async fn test_max_inmemory_size_zero_forces_tempfile() {
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 0, // Force temp file for ALL sizes
+        temp_dir: std::env::temp_dir(),
         cleaner,
     });
 
@@ -1124,6 +1126,7 @@ async fn test_invalid_s3_endpoint_fails_at_creation() {
         }),
         cleaner: Default::default(),
         max_inmemory_size: 64 * 1024 * 1024,
+        temp_dir: None,
         filetracker_url: None,
         filetracker_v1_dir: None,
     };

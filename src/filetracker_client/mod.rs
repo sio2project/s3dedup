@@ -223,6 +223,7 @@ impl FiletrackerClient {
         &self,
         path: &str,
         max_inmemory_size: usize,
+        temp_dir: &std::path::Path,
     ) -> Result<DownloadedFile> {
         use futures_util::StreamExt;
         use tokio::io::AsyncWriteExt;
@@ -264,7 +265,7 @@ impl FiletrackerClient {
             }))
         } else {
             // Large or unknown size: stream to temp file
-            let temp_file = tempfile::NamedTempFile::new()?;
+            let temp_file = tempfile::NamedTempFile::new_in(temp_dir)?;
             let temp_path = temp_file.path().to_path_buf();
             let std_file = temp_file.as_file().try_clone()?;
             let mut async_file = tokio::fs::File::from_std(std_file);

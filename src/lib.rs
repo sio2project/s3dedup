@@ -37,7 +37,18 @@ pub struct AppState {
     pub metrics: Arc<metrics::Metrics>,
     /// Max file size to process in memory during PUT slow path. Larger files use temp files.
     pub max_inmemory_size: usize,
+    /// Directory for temporary files (large uploads, migration).
+    pub temp_dir: std::path::PathBuf,
     pub cleaner: Arc<cleaner::Cleaner>,
+}
+
+fn resolve_temp_dir(config: &config::Config) -> std::path::PathBuf {
+    config
+        .bucket
+        .temp_dir
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 impl AppState {
@@ -62,6 +73,7 @@ impl AppState {
             filetracker_client: None,
             metrics,
             max_inmemory_size: config.bucket.max_inmemory_size,
+            temp_dir: resolve_temp_dir(config),
             cleaner,
         }))
     }
@@ -95,6 +107,7 @@ impl AppState {
             filetracker_client: Some(Arc::new(filetracker_client)),
             metrics,
             max_inmemory_size: config.bucket.max_inmemory_size,
+            temp_dir: resolve_temp_dir(config),
             cleaner,
         }))
     }

@@ -15,7 +15,7 @@ pub(super) async fn migrate_single_file(
 ) -> Result<bool> {
     // Download file — small files buffered in memory, large files streamed to temp file
     let downloaded = filetracker_client
-        .download_file(path, app_state.max_inmemory_size)
+        .download_file(path, app_state.max_inmemory_size, &app_state.temp_dir)
         .await?;
 
     let (last_modified, is_compressed) = match &downloaded {
@@ -59,11 +59,12 @@ pub(super) async fn migrate_single_file(
             DownloadedFile::OnDisk(streaming_meta) => {
                 // Large file: process from temp file in 64KB chunks
                 let temp_path = streaming_meta.temp_path.clone();
+                let temp_dir = app_state.temp_dir.clone();
                 let processed = tokio::task::spawn_blocking(move || {
                     if is_compressed {
                         storage_helpers::process_compressed_temp_file(&temp_path)
                     } else {
-                        storage_helpers::process_uncompressed_temp_file(&temp_path)
+                        storage_helpers::process_uncompressed_temp_file(&temp_path, &temp_dir)
                     }
                 })
                 .await
@@ -255,9 +256,10 @@ pub async fn migrate_single_file_from_metadata(
     let (digest, logical_size, compressed_size, compressed_data, _compressed_path, _keep_alive) =
         if use_tempfile {
             // Large file: write to temp file, process via chunked pipeline
+            let temp_dir = app_state.temp_dir.clone();
             let processed = tokio::task::spawn_blocking(move || {
                 use std::io::Write;
-                let mut temp = tempfile::NamedTempFile::new()?;
+                let mut temp = tempfile::NamedTempFile::new_in(&temp_dir)?;
                 temp.write_all(&data)?;
                 temp.flush()?;
                 let input_path = temp.path().to_path_buf();
@@ -265,7 +267,7 @@ pub async fn migrate_single_file_from_metadata(
                 let result = if is_compressed {
                     storage_helpers::process_compressed_temp_file(&input_path)?
                 } else {
-                    storage_helpers::process_uncompressed_temp_file(&input_path)?
+                    storage_helpers::process_uncompressed_temp_file(&input_path, &temp_dir)?
                 };
 
                 let keep_alive: Box<dyn std::any::Any + Send> = if is_compressed {
@@ -481,11 +483,12 @@ pub async fn migrate_single_file_from_streaming(
     // Process from temp file (hash + compress in 64KB chunks, no full buffer)
     let is_compressed = streaming_meta.is_compressed;
     let temp_path = streaming_meta.temp_path.clone();
+    let temp_dir = app_state.temp_dir.clone();
     let processed = tokio::task::spawn_blocking(move || {
         if is_compressed {
             storage_helpers::process_compressed_temp_file(&temp_path)
         } else {
-            storage_helpers::process_uncompressed_temp_file(&temp_path)
+            storage_helpers::process_uncompressed_temp_file(&temp_path, &temp_dir)
         }
     })
     .await
@@ -651,11 +654,14 @@ pub(super) async fn migrate_single_file_from_v1_fs(
     // Move blocking operations (file I/O, SHA256, compression) to blocking thread pool
     // Process via temp file to avoid holding large files in memory
     let file_info_clone = file_info.clone();
+    let temp_dir = app_state.temp_dir.clone();
     let (digest, logical_size, compressed_size, _keep_output, compressed_path) =
         tokio::task::spawn_blocking(move || {
             // V1 files are uncompressed on disk — process directly without reading into memory
-            let result =
-                storage_helpers::process_uncompressed_temp_file(&file_info_clone.absolute_path)?;
+            let result = storage_helpers::process_uncompressed_temp_file(
+                &file_info_clone.absolute_path,
+                &temp_dir,
+            )?;
             let output_path = result.compressed_path.clone();
             Ok::<_, anyhow::Error>((
                 result.digest,

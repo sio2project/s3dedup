@@ -66,7 +66,9 @@ async fn test_download_file_missing_last_modified() {
     let url = create_mock_server(app).await;
     let client = FiletrackerClient::new(url);
 
-    let result = client.download_file("test/missing_lm.txt", 1024).await;
+    let result = client
+        .download_file("test/missing_lm.txt", 1024, &std::env::temp_dir())
+        .await;
     assert!(
         result.is_err(),
         "Expected error when Last-Modified is missing"
@@ -116,7 +118,9 @@ async fn test_download_file_invalid_timestamp() {
     let url = create_mock_server(app).await;
     let client = FiletrackerClient::new(url);
 
-    let result = client.download_file("test/bad_date.txt", 1024).await;
+    let result = client
+        .download_file("test/bad_date.txt", 1024, &std::env::temp_dir())
+        .await;
     assert!(
         result.is_err(),
         "Expected error for invalid RFC2822 timestamp"
@@ -241,7 +245,7 @@ async fn test_download_file_missing_content_length_streams_to_disk() {
     let client = FiletrackerClient::new(url);
 
     let result = client
-        .download_file("test/no_cl.txt", 1024)
+        .download_file("test/no_cl.txt", 1024, &std::env::temp_dir())
         .await
         .expect("download should succeed");
 
