@@ -162,9 +162,42 @@ pub(super) async fn migrate_single_file(
         }
     }
 
-    // Record blob metadata (sizes + refcount increment)
+    // Read old_hash BEFORE record_blob_metadata/update_file_ref overwrite it
+    let old_hash = if current_modified > 0 {
+        match app_state
+            .kvstorage
+            .get_ref_file(&app_state.bucket_name, path)
+            .await
+        {
+            Ok(v) => Some(v),
+            Err(e) => {
+                let _ = hash_guard.release().await;
+                let _ = guard.release().await;
+                return Err(e);
+            }
+        }
+    } else {
+        None
+    };
+
+    // Record blob metadata (sizes + conditionally increment refcount)
     if let Err(e) = app_state
-        .record_blob_metadata(&digest, logical_size, Some(compressed_size), None)
+        .record_blob_metadata(
+            &digest,
+            logical_size,
+            Some(compressed_size),
+            old_hash.as_deref(),
+        )
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
+
+    // Update file metadata while still holding hash lock (prevents cleaner Phase 2 race)
+    if let Err(e) = app_state
+        .update_file_ref(path, &digest, last_modified)
         .await
     {
         let _ = hash_guard.release().await;
@@ -177,29 +210,9 @@ pub(super) async fn migrate_single_file(
         warn!("Failed to release hash lock: {}", e);
     }
 
-    // Handle overwriting existing file — decrement old hash refcount
-    if current_modified > 0 {
-        let old_hash = match app_state
-            .kvstorage
-            .get_ref_file(&app_state.bucket_name, path)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = guard.release().await;
-                return Err(e);
-            }
-        };
-        if let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await {
-            let _ = guard.release().await;
-            return Err(e);
-        }
-    }
-
-    // Update file metadata
-    if let Err(e) = app_state
-        .update_file_ref(path, &digest, last_modified)
-        .await
+    // Decrement old hash refcount if overwriting with different content
+    if let Some(old_hash) = old_hash
+        && let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await
     {
         let _ = guard.release().await;
         return Err(e);
@@ -387,9 +400,42 @@ pub async fn migrate_single_file_from_metadata(
         }
     }
 
-    // Record blob metadata (sizes + refcount increment)
+    // Read old_hash BEFORE record_blob_metadata/update_file_ref overwrite it
+    let old_hash = if current_modified > 0 {
+        match app_state
+            .kvstorage
+            .get_ref_file(&app_state.bucket_name, path)
+            .await
+        {
+            Ok(v) => Some(v),
+            Err(e) => {
+                let _ = hash_guard.release().await;
+                let _ = guard.release().await;
+                return Err(e);
+            }
+        }
+    } else {
+        None
+    };
+
+    // Record blob metadata (sizes + conditionally increment refcount)
     if let Err(e) = app_state
-        .record_blob_metadata(&digest, logical_size, Some(compressed_size), None)
+        .record_blob_metadata(
+            &digest,
+            logical_size,
+            Some(compressed_size),
+            old_hash.as_deref(),
+        )
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
+
+    // Update file metadata while still holding hash lock (prevents cleaner Phase 2 race)
+    if let Err(e) = app_state
+        .update_file_ref(path, &digest, file_metadata.last_modified)
         .await
     {
         let _ = hash_guard.release().await;
@@ -402,29 +448,9 @@ pub async fn migrate_single_file_from_metadata(
         warn!("Failed to release hash lock: {}", e);
     }
 
-    // Handle overwriting existing file — decrement old hash refcount
-    if current_modified > 0 {
-        let old_hash = match app_state
-            .kvstorage
-            .get_ref_file(&app_state.bucket_name, path)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = guard.release().await;
-                return Err(e);
-            }
-        };
-        if let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await {
-            let _ = guard.release().await;
-            return Err(e);
-        }
-    }
-
-    // Update file metadata
-    if let Err(e) = app_state
-        .update_file_ref(path, &digest, file_metadata.last_modified)
-        .await
+    // Decrement old hash refcount if overwriting with different content
+    if let Some(old_hash) = old_hash
+        && let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await
     {
         let _ = guard.release().await;
         return Err(e);
@@ -542,9 +568,42 @@ pub async fn migrate_single_file_from_streaming(
         }
     }
 
-    // Record blob metadata (sizes + refcount increment)
+    // Read old_hash BEFORE record_blob_metadata/update_file_ref overwrite it
+    let old_hash = if current_modified_after_lock > 0 {
+        match app_state
+            .kvstorage
+            .get_ref_file(&app_state.bucket_name, path)
+            .await
+        {
+            Ok(v) => Some(v),
+            Err(e) => {
+                let _ = hash_guard.release().await;
+                let _ = guard.release().await;
+                return Err(e);
+            }
+        }
+    } else {
+        None
+    };
+
+    // Record blob metadata (sizes + conditionally increment refcount)
     if let Err(e) = app_state
-        .record_blob_metadata(&digest, logical_size, Some(compressed_size), None)
+        .record_blob_metadata(
+            &digest,
+            logical_size,
+            Some(compressed_size),
+            old_hash.as_deref(),
+        )
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
+
+    // Update file metadata while still holding hash lock (prevents cleaner Phase 2 race)
+    if let Err(e) = app_state
+        .update_file_ref(path, &digest, streaming_meta.last_modified)
         .await
     {
         let _ = hash_guard.release().await;
@@ -556,29 +615,9 @@ pub async fn migrate_single_file_from_streaming(
         warn!("Failed to release hash lock: {}", e);
     }
 
-    // Handle overwriting existing file — decrement old hash refcount
-    if current_modified_after_lock > 0 {
-        let old_hash = match app_state
-            .kvstorage
-            .get_ref_file(&app_state.bucket_name, path)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = guard.release().await;
-                return Err(e);
-            }
-        };
-        if let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await {
-            let _ = guard.release().await;
-            return Err(e);
-        }
-    }
-
-    // Update file metadata
-    if let Err(e) = app_state
-        .update_file_ref(path, &digest, streaming_meta.last_modified)
-        .await
+    // Decrement old hash refcount if overwriting with different content
+    if let Some(old_hash) = old_hash
+        && let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await
     {
         let _ = guard.release().await;
         return Err(e);
@@ -703,9 +742,42 @@ pub(super) async fn migrate_single_file_from_v1_fs(
         }
     }
 
-    // Record blob metadata (sizes + refcount increment)
+    // Read old_hash BEFORE record_blob_metadata/update_file_ref overwrite it
+    let old_hash = if current_modified > 0 {
+        match app_state
+            .kvstorage
+            .get_ref_file(&app_state.bucket_name, path)
+            .await
+        {
+            Ok(v) => Some(v),
+            Err(e) => {
+                let _ = hash_guard.release().await;
+                let _ = guard.release().await;
+                return Err(e);
+            }
+        }
+    } else {
+        None
+    };
+
+    // Record blob metadata (sizes + conditionally increment refcount)
     if let Err(e) = app_state
-        .record_blob_metadata(&digest, logical_size, Some(compressed_size), None)
+        .record_blob_metadata(
+            &digest,
+            logical_size,
+            Some(compressed_size),
+            old_hash.as_deref(),
+        )
+        .await
+    {
+        let _ = hash_guard.release().await;
+        let _ = guard.release().await;
+        return Err(e);
+    }
+
+    // Update file metadata while still holding hash lock (prevents cleaner Phase 2 race)
+    if let Err(e) = app_state
+        .update_file_ref(path, &digest, file_info.last_modified)
         .await
     {
         let _ = hash_guard.release().await;
@@ -718,29 +790,9 @@ pub(super) async fn migrate_single_file_from_v1_fs(
         warn!("Failed to release hash lock: {}", e);
     }
 
-    // Handle overwriting existing file — decrement old hash refcount
-    if current_modified > 0 {
-        let old_hash = match app_state
-            .kvstorage
-            .get_ref_file(&app_state.bucket_name, path)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = guard.release().await;
-                return Err(e);
-            }
-        };
-        if let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await {
-            let _ = guard.release().await;
-            return Err(e);
-        }
-    }
-
-    // Update file metadata
-    if let Err(e) = app_state
-        .update_file_ref(path, &digest, file_info.last_modified)
-        .await
+    // Decrement old hash refcount if overwriting with different content
+    if let Some(old_hash) = old_hash
+        && let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await
     {
         let _ = guard.release().await;
         return Err(e);

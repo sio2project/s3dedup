@@ -194,55 +194,80 @@ impl KVStorageTrait for MockKVStorage {
         Ok(results)
     }
 
-    async fn list_ref_files_batch(
+    async fn list_orphaned_ref_files(
         &self,
         bucket: &str,
+        after_cursor: &str,
         limit: usize,
-        offset: usize,
     ) -> Result<Vec<(String, String)>> {
-        self.check_fail("list_ref_files_batch")?;
-        let map = self.inner.ref_file.lock().unwrap();
-        let mut entries: Vec<(String, String)> = map
+        self.check_fail("list_orphaned_ref_files")?;
+        let ref_file_map = self.inner.ref_file.lock().unwrap();
+        let refcount_map = self.inner.refcount.lock().unwrap();
+        let mut entries: Vec<(String, String)> = ref_file_map
             .iter()
             .filter(|((b, _), _)| b == bucket)
+            .filter(|((_, _), hash)| {
+                let rc = refcount_map
+                    .get(&(bucket.to_string(), hash.to_string()))
+                    .copied()
+                    .unwrap_or(0);
+                rc == 0
+            })
             .map(|((_, p), h)| (p.clone(), h.clone()))
+            .filter(|(p, _)| p.as_str() > after_cursor)
             .collect();
         entries.sort();
-        Ok(entries.into_iter().skip(offset).take(limit).collect())
+        Ok(entries.into_iter().take(limit).collect())
     }
 
-    async fn list_refcounts_batch(
+    async fn list_orphaned_refcounts(
         &self,
         bucket: &str,
+        after_cursor: &str,
         limit: usize,
-        offset: usize,
     ) -> Result<Vec<(String, i32)>> {
-        self.check_fail("list_refcounts_batch")?;
-        let map = self.inner.refcount.lock().unwrap();
-        let mut entries: Vec<(String, i32)> = map
+        self.check_fail("list_orphaned_refcounts")?;
+        let refcount_map = self.inner.refcount.lock().unwrap();
+        let ref_file_map = self.inner.ref_file.lock().unwrap();
+        let mut entries: Vec<(String, i32)> = refcount_map
             .iter()
             .filter(|((b, _), _)| b == bucket)
+            .filter(|((_, hash), _)| {
+                !ref_file_map
+                    .iter()
+                    .any(|((b, _), h)| b == bucket && h == hash)
+            })
             .map(|((_, h), &c)| (h.clone(), c))
+            .filter(|(h, _)| h.as_str() > after_cursor)
             .collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(entries.into_iter().skip(offset).take(limit).collect())
+        Ok(entries.into_iter().take(limit).collect())
     }
 
-    async fn list_logical_sizes_batch(
+    async fn list_orphaned_logical_sizes(
         &self,
         bucket: &str,
+        after_cursor: &str,
         limit: usize,
-        offset: usize,
     ) -> Result<Vec<String>> {
-        self.check_fail("list_logical_sizes_batch")?;
-        let map = self.inner.logical_size.lock().unwrap();
-        let mut entries: Vec<String> = map
+        self.check_fail("list_orphaned_logical_sizes")?;
+        let ls_map = self.inner.logical_size.lock().unwrap();
+        let refcount_map = self.inner.refcount.lock().unwrap();
+        let mut entries: Vec<String> = ls_map
             .iter()
             .filter(|((b, _), _)| b == bucket)
+            .filter(|((_, hash), _)| {
+                let rc = refcount_map
+                    .get(&(bucket.to_string(), hash.to_string()))
+                    .copied()
+                    .unwrap_or(0);
+                rc == 0
+            })
             .map(|((_, h), _)| h.clone())
+            .filter(|h| h.as_str() > after_cursor)
             .collect();
         entries.sort();
-        Ok(entries.into_iter().skip(offset).take(limit).collect())
+        Ok(entries.into_iter().take(limit).collect())
     }
 
     async fn delete_refcount(&self, bucket: &str, hash: &str) -> Result<()> {

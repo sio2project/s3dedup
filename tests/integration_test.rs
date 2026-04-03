@@ -30,14 +30,25 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         .unwrap();
     let s3storage = S3Storage::new(&config.bucket).await.unwrap();
 
+    let kvstorage = Arc::new(*kvstorage);
+    let locks = Arc::new(*locks);
+    let s3storage = Arc::new(*s3storage);
+    let cleaner = Arc::new(s3dedup::cleaner::Cleaner::new(
+        config.bucket.name.clone(),
+        kvstorage.clone(),
+        s3storage.clone(),
+        locks.clone(),
+        Default::default(),
+    ));
     let app_state = Arc::new(AppState {
         bucket_name: config.bucket.name.clone(),
-        kvstorage: Arc::new(*kvstorage),
-        locks: Arc::new(*locks),
-        s3storage: Arc::new(*s3storage),
+        kvstorage,
+        locks,
+        s3storage,
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        cleaner,
     });
 
     app_state.kvstorage.setup().await.unwrap();
@@ -2362,14 +2373,25 @@ async fn create_test_app_with_inmemory_size(
         .unwrap();
     let s3storage = S3Storage::new(&config.bucket).await.unwrap();
 
+    let kvstorage = Arc::new(*kvstorage);
+    let locks = Arc::new(*locks);
+    let s3storage = Arc::new(*s3storage);
+    let cleaner = Arc::new(s3dedup::cleaner::Cleaner::new(
+        config.bucket.name.clone(),
+        kvstorage.clone(),
+        s3storage.clone(),
+        locks.clone(),
+        Default::default(),
+    ));
     let app_state = Arc::new(AppState {
         bucket_name: config.bucket.name.clone(),
-        kvstorage: Arc::new(*kvstorage),
-        locks: Arc::new(*locks),
-        s3storage: Arc::new(*s3storage),
+        kvstorage,
+        locks,
+        s3storage,
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size,
+        cleaner,
     });
 
     app_state.kvstorage.setup().await.unwrap();

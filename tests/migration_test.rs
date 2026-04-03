@@ -180,14 +180,25 @@ async fn create_test_app_state() -> Arc<AppState> {
         .unwrap();
     let s3storage = S3Storage::new(&config.bucket).await.unwrap();
 
+    let kvstorage = Arc::new(*kvstorage);
+    let locks = Arc::new(*locks);
+    let s3storage = Arc::new(*s3storage);
+    let cleaner = Arc::new(s3dedup::cleaner::Cleaner::new(
+        config.bucket.name.clone(),
+        kvstorage.clone(),
+        s3storage.clone(),
+        locks.clone(),
+        Default::default(),
+    ));
     let app_state = Arc::new(AppState {
         bucket_name: config.bucket.name.clone(),
-        kvstorage: Arc::new(*kvstorage),
-        locks: Arc::new(*locks),
-        s3storage: Arc::new(*s3storage),
+        kvstorage,
+        locks,
+        s3storage,
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        cleaner,
     });
 
     app_state.kvstorage.setup().await.unwrap();
@@ -378,6 +389,7 @@ async fn test_live_migration_get_fallback() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        cleaner: app_state.cleaner.clone(),
     });
 
     // Create router with live migration support
@@ -424,6 +436,7 @@ async fn test_live_migration_put_dual_write() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        cleaner: app_state.cleaner.clone(),
     });
 
     // Create router with live migration support
@@ -500,6 +513,7 @@ async fn test_live_migration_delete_dual_delete() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        cleaner: app_state.cleaner.clone(),
     });
 
     // Verify file exists in both before deletion
@@ -568,6 +582,7 @@ async fn test_live_migration_get_not_found_in_both() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        cleaner: app_state.cleaner.clone(),
     });
 
     // Create router with live migration support
@@ -612,6 +627,7 @@ async fn test_live_migration_get_fallback_response_data() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        cleaner: app_state.cleaner.clone(),
     });
 
     // Create router with live migration support
@@ -689,6 +705,7 @@ async fn test_live_migration_get_no_deadlock_on_fallback() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        cleaner: app_state.cleaner.clone(),
     });
 
     // Create router
@@ -752,6 +769,7 @@ async fn test_live_migration_subsequent_get_from_s3dedup() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        cleaner: app_state.cleaner.clone(),
     });
 
     // First GET - should fallback to filetracker and migrate
@@ -1195,14 +1213,25 @@ async fn create_test_app_state_with_threshold(max_inmemory_size: usize) -> Arc<A
         .unwrap();
     let s3storage = S3Storage::new(&config.bucket).await.unwrap();
 
+    let kvstorage = Arc::new(*kvstorage);
+    let locks = Arc::new(*locks);
+    let s3storage = Arc::new(*s3storage);
+    let cleaner = Arc::new(s3dedup::cleaner::Cleaner::new(
+        config.bucket.name.clone(),
+        kvstorage.clone(),
+        s3storage.clone(),
+        locks.clone(),
+        Default::default(),
+    ));
     let app_state = Arc::new(AppState {
         bucket_name: config.bucket.name.clone(),
-        kvstorage: Arc::new(*kvstorage),
-        locks: Arc::new(*locks),
-        s3storage: Arc::new(*s3storage),
+        kvstorage,
+        locks,
+        s3storage,
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size,
+        cleaner,
     });
 
     app_state.kvstorage.setup().await.unwrap();
@@ -1416,6 +1445,7 @@ async fn test_live_migration_get_streaming_tempfile() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 10,
+        cleaner: app_state.cleaner.clone(),
     });
 
     let app = Router::new()
@@ -1487,6 +1517,7 @@ async fn test_live_migration_get_inmemory_small() {
         filetracker_client: Some(Arc::new(FiletrackerClient::new(url))),
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 1024 * 1024,
+        cleaner: app_state.cleaner.clone(),
     });
 
     let app = Router::new()

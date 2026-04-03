@@ -265,57 +265,66 @@ impl KVStorageTrait for SQLite {
         Ok(rows.into_iter().map(|(path,)| path).collect())
     }
 
-    async fn list_ref_files_batch(
+    async fn list_orphaned_ref_files(
         &self,
         bucket: &str,
+        after_cursor: &str,
         limit: usize,
-        offset: usize,
     ) -> Result<Vec<(String, String)>> {
         let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT path, hash FROM ref_file WHERE bucket = ?1 ORDER BY path LIMIT ?2 OFFSET ?3",
+            "SELECT rf.path, rf.hash FROM ref_file rf
+             LEFT JOIN refcount rc ON rf.bucket = rc.bucket AND rf.hash = rc.hash
+             WHERE rf.bucket = ?1 AND (rc.refcount IS NULL OR rc.refcount = 0)
+               AND rf.path > ?2
+             ORDER BY rf.path LIMIT ?3",
         )
         .bind(bucket)
+        .bind(after_cursor)
         .bind(limit as i64)
-        .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
-
         Ok(rows)
     }
 
-    async fn list_refcounts_batch(
+    async fn list_orphaned_refcounts(
         &self,
         bucket: &str,
+        after_cursor: &str,
         limit: usize,
-        offset: usize,
     ) -> Result<Vec<(String, i32)>> {
         let rows: Vec<(String, i32)> = sqlx::query_as(
-            "SELECT hash, refcount FROM refcount WHERE bucket = ?1 ORDER BY hash LIMIT ?2 OFFSET ?3"
+            "SELECT rc.hash, rc.refcount FROM refcount rc
+             LEFT JOIN ref_file rf ON rc.bucket = rf.bucket AND rc.hash = rf.hash
+             WHERE rc.bucket = ?1 AND rf.hash IS NULL
+               AND rc.hash > ?2
+             ORDER BY rc.hash LIMIT ?3",
         )
         .bind(bucket)
+        .bind(after_cursor)
         .bind(limit as i64)
-        .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
-
         Ok(rows)
     }
 
-    async fn list_logical_sizes_batch(
+    async fn list_orphaned_logical_sizes(
         &self,
         bucket: &str,
+        after_cursor: &str,
         limit: usize,
-        offset: usize,
     ) -> Result<Vec<String>> {
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT hash FROM logical_size WHERE bucket = ?1 ORDER BY hash LIMIT ?2 OFFSET ?3",
+            "SELECT ls.hash FROM logical_size ls
+             LEFT JOIN refcount rc ON ls.bucket = rc.bucket AND ls.hash = rc.hash
+             WHERE ls.bucket = ?1 AND (rc.refcount IS NULL OR rc.refcount = 0)
+               AND ls.hash > ?2
+             ORDER BY ls.hash LIMIT ?3",
         )
         .bind(bucket)
+        .bind(after_cursor)
         .bind(limit as i64)
-        .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
-
         Ok(rows.into_iter().map(|(hash,)| hash).collect())
     }
 

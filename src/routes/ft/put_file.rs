@@ -242,7 +242,13 @@ async fn ft_put_file_inner(
             .await
             .context("Failed to record blob metadata")?;
 
-        // Release hash lock — done with S3/refcount operations for new hash
+        // Update file metadata while still holding hash lock (same reason as slow path)
+        state
+            .update_file_ref(path, &digest, timestamp)
+            .await
+            .context("Failed to update file reference")?;
+
+        // Release hash lock — done with S3/refcount/ref_file operations for new hash
         let _ = hash_guard.release().await;
 
         // Handle old hash decrement
@@ -254,12 +260,6 @@ async fn ft_put_file_inner(
                 old_hash, e
             );
         }
-
-        // Update file metadata
-        state
-            .update_file_ref(path, &digest, timestamp)
-            .await
-            .context("Failed to update file reference")?;
 
         debug!("Created link {} (fast path).", path);
 
@@ -524,7 +524,17 @@ async fn ft_put_file_inner(
         .await
         .context("Failed to record blob metadata")?;
 
-    // Release hash lock — done with S3/refcount operations for new hash
+    // 9. Update file metadata while still holding hash lock, so that
+    // ref_file is set atomically with the refcount increment. This prevents
+    // a race where the cleaner sees a positive refcount with no ref_file
+    // (which looks like a crash orphan) during the window between releasing
+    // the hash lock and setting ref_file.
+    state
+        .update_file_ref(path, &digest, timestamp)
+        .await
+        .context("Failed to update file reference")?;
+
+    // Release hash lock — done with S3/refcount/ref_file operations for new hash
     let _ = hash_guard.release().await;
 
     // If overwriting with different content, decrement old blob reference
@@ -536,12 +546,6 @@ async fn ft_put_file_inner(
             old_hash, e
         );
     }
-
-    // 9. Update file metadata (path -> hash mapping and timestamp)
-    state
-        .update_file_ref(path, &digest, timestamp)
-        .await
-        .context("Failed to update file reference")?;
 
     debug!("Created link {}.", path);
 

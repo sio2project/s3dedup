@@ -78,7 +78,7 @@ async fn test_cleaner_config_defaults() {
     assert!(!config.enabled);
     assert_eq!(config.interval_seconds, 3600);
     assert_eq!(config.batch_size, 1000);
-    assert_eq!(config.max_deletes_per_run, 10000);
+    assert_eq!(config.concurrency, 8);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -87,14 +87,14 @@ async fn test_cleaner_config_deserialization() {
         "enabled": true,
         "interval_seconds": 7200,
         "batch_size": 500,
-        "max_deletes_per_run": 5000
+        "concurrency": 16
     }"#;
 
     let config: CleanerConfig = serde_json::from_str(json).unwrap();
     assert!(config.enabled);
     assert_eq!(config.interval_seconds, 7200);
     assert_eq!(config.batch_size, 500);
-    assert_eq!(config.max_deletes_per_run, 5000);
+    assert_eq!(config.concurrency, 16);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -148,7 +148,7 @@ async fn test_clean_orphaned_ref_files() {
         enabled: false, // We'll call run_cleanup directly
         interval_seconds: 1,
         batch_size: 10,
-        max_deletes_per_run: 100,
+        ..Default::default()
     };
 
     let cleaner = Cleaner::new(
@@ -221,7 +221,7 @@ async fn test_clean_unreferenced_refcounts() {
         enabled: false,
         interval_seconds: 1,
         batch_size: 10,
-        max_deletes_per_run: 100,
+        ..Default::default()
     };
 
     let cleaner = Cleaner::new(
@@ -289,7 +289,7 @@ async fn test_clean_unused_s3_objects() {
         enabled: false,
         interval_seconds: 1,
         batch_size: 10,
-        max_deletes_per_run: 100,
+        ..Default::default()
     };
 
     let cleaner = Cleaner::new(
@@ -299,7 +299,8 @@ async fn test_clean_unused_s3_objects() {
         locks,
         config,
     );
-    let result = cleaner.run_cleanup().await;
+    // run_full_cleanup includes Phase 3 (S3 scan)
+    let result = cleaner.run_full_cleanup().await;
     assert!(result.is_ok());
 
     // Verify unused S3 objects were cleaned up
@@ -360,7 +361,7 @@ async fn test_clean_orphaned_logical_sizes() {
         enabled: false,
         interval_seconds: 1,
         batch_size: 10,
-        max_deletes_per_run: 100,
+        ..Default::default()
     };
 
     let cleaner = Cleaner::new(
@@ -395,66 +396,6 @@ async fn test_clean_orphaned_logical_sizes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_max_deletes_per_run_limit() {
-    if !is_s3_available().await {
-        eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
-        return;
-    }
-
-    let (kvstorage, s3storage, locks, bucket_name) =
-        setup_test_env("test-max-deletes-per-run-limit").await;
-
-    // Create many orphaned ref_files (more than max_deletes_per_run)
-    for i in 0..20 {
-        kvstorage
-            .set_ref_file(
-                &bucket_name,
-                &format!("file{}.txt", i),
-                &format!("hash{}", i),
-            )
-            .await
-            .unwrap();
-        kvstorage
-            .set_modified(&bucket_name, &format!("file{}.txt", i), 1000 + i as i64)
-            .await
-            .unwrap();
-    }
-
-    // Run cleaner with low max_deletes_per_run
-    let config = CleanerConfig {
-        enabled: false,
-        interval_seconds: 1,
-        batch_size: 10,
-        max_deletes_per_run: 5, // Only allow 5 deletes
-    };
-
-    let cleaner = Cleaner::new(
-        bucket_name.clone(),
-        kvstorage.clone(),
-        s3storage,
-        locks,
-        config,
-    );
-    let result = cleaner.run_cleanup().await;
-    assert!(result.is_ok());
-
-    // Count how many ref_files still exist
-    let mut remaining = 0;
-    for i in 0..20 {
-        let hash = kvstorage
-            .get_ref_file(&bucket_name, &format!("file{}.txt", i))
-            .await
-            .unwrap();
-        if !hash.is_empty() {
-            remaining += 1;
-        }
-    }
-
-    // Should have deleted exactly 5, leaving 15
-    assert_eq!(remaining, 15);
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn test_batched_processing() {
     if !is_s3_available().await {
         eprintln!("Skipping test: S3 not available (set S3_ACCESS_KEY and S3_SECRET_KEY)");
@@ -485,7 +426,7 @@ async fn test_batched_processing() {
         enabled: false,
         interval_seconds: 1,
         batch_size: 5, // Small batch size to test pagination
-        max_deletes_per_run: 100,
+        ..Default::default()
     };
 
     let cleaner = Cleaner::new(
@@ -567,7 +508,7 @@ async fn test_full_cleanup_cycle() {
         enabled: false,
         interval_seconds: 1,
         batch_size: 10,
-        max_deletes_per_run: 100,
+        ..Default::default()
     };
 
     let cleaner = Cleaner::new(
