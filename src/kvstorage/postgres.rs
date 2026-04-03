@@ -40,8 +40,8 @@ impl KVStorageTrait for Postgres {
 
         sqlx::query(&format!(
             "CREATE TABLE IF NOT EXISTS {} (
-                bucket VARCHAR(255) NOT NULL,
-                hash VARCHAR(255) NOT NULL,
+                bucket TEXT NOT NULL,
+                hash TEXT NOT NULL,
                 refcount INT NOT NULL,
                 PRIMARY KEY (bucket, hash)
             )",
@@ -52,8 +52,8 @@ impl KVStorageTrait for Postgres {
 
         sqlx::query(&format!(
             "CREATE TABLE IF NOT EXISTS {} (
-                bucket VARCHAR(255) NOT NULL,
-                path VARCHAR(255) NOT NULL,
+                bucket TEXT NOT NULL,
+                path TEXT NOT NULL,
                 modified BIGINT NOT NULL,
                 PRIMARY KEY (bucket, path)
             )",
@@ -64,9 +64,9 @@ impl KVStorageTrait for Postgres {
 
         sqlx::query(&format!(
             "CREATE TABLE IF NOT EXISTS {} (
-                bucket VARCHAR(255) NOT NULL,
-                path VARCHAR(255) NOT NULL,
-                hash VARCHAR(255) NOT NULL,
+                bucket TEXT NOT NULL,
+                path TEXT NOT NULL,
+                hash TEXT NOT NULL,
                 PRIMARY KEY (bucket, path)
             )",
             ref_file_table
@@ -76,8 +76,8 @@ impl KVStorageTrait for Postgres {
 
         sqlx::query(&format!(
             "CREATE TABLE IF NOT EXISTS {} (
-                bucket VARCHAR(255) NOT NULL,
-                hash VARCHAR(255) NOT NULL,
+                bucket TEXT NOT NULL,
+                hash TEXT NOT NULL,
                 logical_size BIGINT NOT NULL,
                 compressed_size BIGINT,
                 PRIMARY KEY (bucket, hash)
@@ -91,7 +91,7 @@ impl KVStorageTrait for Postgres {
         sqlx::query(&format!(
             "CREATE TABLE IF NOT EXISTS {} (
                 id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-                version VARCHAR(255) NOT NULL
+                version TEXT NOT NULL
             )",
             version_table
         ))
@@ -106,6 +106,36 @@ impl KVStorageTrait for Postgres {
         ))
         .execute(&self.pool)
         .await?;
+
+        // Migrate existing VARCHAR(255) columns to TEXT (one-time, skipped if already TEXT)
+        let needs_migration: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = $1 AND data_type = 'character varying'
+            )",
+        )
+        .bind(&refcount_table)
+        .fetch_one(&self.pool)
+        .await?;
+
+        if needs_migration {
+            for (table, columns) in [
+                (&refcount_table, vec!["bucket", "hash"]),
+                (&modified_table, vec!["bucket", "path"]),
+                (&ref_file_table, vec!["bucket", "path", "hash"]),
+                (&logical_size_table, vec!["bucket", "hash"]),
+                (&version_table, vec!["version"]),
+            ] {
+                for col in columns {
+                    sqlx::query(&format!(
+                        "ALTER TABLE {} ALTER COLUMN {} TYPE TEXT",
+                        table, col
+                    ))
+                    .execute(&self.pool)
+                    .await?;
+                }
+            }
+        }
 
         Ok(())
     }
