@@ -153,7 +153,7 @@ impl AppState {
 
     /// Record blob metadata: logical size, optionally compressed size, and conditionally increment refcount.
     /// If `old_hash` is Some and equals `digest`, refcount is NOT incremented (same content).
-    /// Pass `None` for `old_hash` to always increment (migration path).
+    /// Pass `None` for `old_hash` when there is no previous version (new file).
     /// Pass `None` for `compressed_size` to skip updating it (e.g. dedup hit where body wasn't read).
     pub async fn record_blob_metadata(
         &self,
