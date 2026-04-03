@@ -867,3 +867,444 @@ async fn test_cleaner_vs_put_race() {
         );
     }
 }
+
+/// Test: Cleaner Phase 3 vs PUT race
+/// PUT uploads blob -> cleaner runs between upload and record_blob_metadata
+/// -> hash lock should prevent the cleaner from deleting the blob
+///
+/// This simulates a window where a blob exists in S3 with refcount=0 because
+/// the PUT hasn't yet incremented the refcount. The cleaner's Phase 3 hash lock
+/// should serialize against the PUT's hash lock, preventing data loss.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_cleaner_phase3_vs_put_hash_lock() {
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available");
+        return;
+    }
+
+    let (router, app_state) = create_test_app_with_state().await;
+    let router = Arc::new(router);
+
+    let content = b"Content for cleaner phase3 vs PUT race test";
+    let sha256 = s3dedup::routes::ft::storage_helpers::compute_sha256(content);
+
+    // Step 1: Upload a file normally so the blob exists
+    let response = (*router)
+        .clone()
+        .oneshot(create_put_request("phase3_race/original.txt", content))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Verify refcount is 1
+    let rc = app_state
+        .kvstorage
+        .get_ref_count(&app_state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(rc, 1);
+
+    // Step 2: Concurrently run cleaner and PUT with same hash to different paths
+    let num_puts = 10;
+    let barrier = Arc::new(Barrier::new(num_puts + 1)); // +1 for cleaner
+
+    // Cleaner task
+    let cleaner_app_state = app_state.clone();
+    let cleaner_barrier = barrier.clone();
+    let cleaner_handle = tokio::spawn(async move {
+        let cleaner_config = s3dedup::cleaner::CleanerConfig {
+            enabled: false,
+            interval_seconds: 1,
+            batch_size: 100,
+            max_deletes_per_run: 100,
+        };
+        let cleaner = s3dedup::cleaner::Cleaner::new(
+            cleaner_app_state.bucket_name.clone(),
+            cleaner_app_state.kvstorage.clone(),
+            cleaner_app_state.s3storage.clone(),
+            cleaner_app_state.locks.clone(),
+            cleaner_config,
+        );
+
+        cleaner_barrier.wait().await;
+        cleaner.run_cleanup().await.unwrap();
+    });
+
+    // PUT tasks with same content
+    let mut put_handles = Vec::new();
+    for i in 0..num_puts {
+        let router = router.clone();
+        let barrier = barrier.clone();
+
+        put_handles.push(tokio::spawn(async move {
+            barrier.wait().await;
+            let response = (*router)
+                .clone()
+                .oneshot(create_put_request(
+                    &format!("phase3_race/new_{}.txt", i),
+                    content,
+                ))
+                .await
+                .unwrap();
+            response.status()
+        }));
+    }
+
+    // Wait for all
+    cleaner_handle.await.unwrap();
+    for handle in put_handles {
+        let status = handle.await.unwrap();
+        assert_eq!(status, StatusCode::OK, "PUT should succeed");
+    }
+
+    // Verify blob exists in S3 (hash lock should have prevented deletion)
+    let blob_exists = app_state.s3storage.object_exists(&sha256).await.unwrap();
+    assert!(
+        blob_exists,
+        "Blob should exist - cleaner Phase 3 hash lock should prevent deletion during PUT"
+    );
+
+    // Verify refcount is correct: original + num_puts
+    let final_rc = app_state
+        .kvstorage
+        .get_ref_count(&app_state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert!(
+        final_rc >= (num_puts as i32 + 1),
+        "Refcount should be at least {} (original + puts), got {}",
+        num_puts + 1,
+        final_rc
+    );
+
+    // Verify all files are readable
+    for i in 0..num_puts {
+        let response = (*router)
+            .clone()
+            .oneshot(create_get_request(&format!("phase3_race/new_{}.txt", i)))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "File phase3_race/new_{}.txt should exist",
+            i
+        );
+    }
+}
+
+/// Test: Cleaner Phase 3 with non-hash S3 objects
+/// Manually created S3 objects with keys that are not valid SHA256 hashes
+/// should be cleaned up by the cleaner (refcount lookup returns 0).
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_cleaner_phase3_non_hash_s3_objects() {
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available");
+        return;
+    }
+
+    let (_, app_state) = create_test_app_with_state().await;
+
+    // Manually upload S3 objects with non-standard keys (no slashes, since
+    // the sharding layer uses slashes for prefix directories and round-trip
+    // through s3_key_to_hash would break for keys containing slashes)
+    let non_hash_keys = [
+        "not-a-hash-key",
+        "abc", // short key, bypasses sharding
+        "UPPERCASE_KEY_1234",
+        "random-garbage-data-not-a-sha256-hex-digest-at-all-nope-nope-1234",
+    ];
+
+    for key in &non_hash_keys {
+        app_state
+            .s3storage
+            .put_object(key, vec![1, 2, 3])
+            .await
+            .unwrap();
+    }
+
+    // Verify they exist
+    for key in &non_hash_keys {
+        let exists = app_state.s3storage.object_exists(key).await.unwrap();
+        assert!(exists, "Object {} should exist before cleanup", key);
+    }
+
+    // Run cleaner - Phase 3 should delete them because refcount lookup returns 0
+    let cleaner_config = s3dedup::cleaner::CleanerConfig {
+        enabled: false,
+        interval_seconds: 1,
+        batch_size: 100,
+        max_deletes_per_run: 100,
+    };
+    let cleaner = s3dedup::cleaner::Cleaner::new(
+        app_state.bucket_name.clone(),
+        app_state.kvstorage.clone(),
+        app_state.s3storage.clone(),
+        app_state.locks.clone(),
+        cleaner_config,
+    );
+    cleaner.run_cleanup().await.unwrap();
+
+    // Verify they were deleted
+    for key in &non_hash_keys {
+        let exists = app_state.s3storage.object_exists(key).await.unwrap();
+        assert!(
+            !exists,
+            "Object {} should be deleted by cleaner (refcount=0)",
+            key
+        );
+    }
+}
+
+/// Test: Cleaner Phase 1 race with different-path PUT sharing same hash
+/// Setup: file A points to hash H with refcount=1
+/// Concurrently: cleaner scans A (refcount=1 -> skip), PUT file B with same hash H
+/// After: refcount should be 2, both files exist
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_cleaner_phase1_different_path_put_same_hash() {
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available");
+        return;
+    }
+
+    let (router, app_state) = create_test_app_with_state().await;
+    let router = Arc::new(router);
+
+    let content = b"Content for cleaner phase1 race with same-hash PUT";
+    let sha256 = s3dedup::routes::ft::storage_helpers::compute_sha256(content);
+
+    // Setup: create file A pointing to hash H
+    let response = (*router)
+        .clone()
+        .oneshot(create_put_request("phase1_race/file_a.txt", content))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let rc = app_state
+        .kvstorage
+        .get_ref_count(&app_state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(rc, 1);
+
+    // Concurrently: run cleaner + PUT file B with same hash
+    let num_new_files = 5;
+    let barrier = Arc::new(Barrier::new(num_new_files + 1)); // +1 for cleaner
+
+    // Cleaner task
+    let cleaner_app_state = app_state.clone();
+    let cleaner_barrier = barrier.clone();
+    let cleaner_handle = tokio::spawn(async move {
+        let cleaner_config = s3dedup::cleaner::CleanerConfig {
+            enabled: false,
+            interval_seconds: 1,
+            batch_size: 100,
+            max_deletes_per_run: 100,
+        };
+        let cleaner = s3dedup::cleaner::Cleaner::new(
+            cleaner_app_state.bucket_name.clone(),
+            cleaner_app_state.kvstorage.clone(),
+            cleaner_app_state.s3storage.clone(),
+            cleaner_app_state.locks.clone(),
+            cleaner_config,
+        );
+
+        cleaner_barrier.wait().await;
+        cleaner.run_cleanup().await.unwrap();
+    });
+
+    // PUT tasks with same content to new paths
+    let mut put_handles = Vec::new();
+    for i in 0..num_new_files {
+        let router = router.clone();
+        let barrier = barrier.clone();
+
+        put_handles.push(tokio::spawn(async move {
+            barrier.wait().await;
+            let response = (*router)
+                .clone()
+                .oneshot(create_put_request(
+                    &format!("phase1_race/file_b_{}.txt", i),
+                    content,
+                ))
+                .await
+                .unwrap();
+            response.status()
+        }));
+    }
+
+    // Wait for all
+    cleaner_handle.await.unwrap();
+    for handle in put_handles {
+        let status = handle.await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // Verify: refcount should be 1 (original A) + num_new_files
+    let final_rc = app_state
+        .kvstorage
+        .get_ref_count(&app_state.bucket_name, &sha256)
+        .await
+        .unwrap();
+    assert_eq!(
+        final_rc,
+        1 + num_new_files as i32,
+        "Refcount should be {} (1 original + {} new), got {}",
+        1 + num_new_files,
+        num_new_files,
+        final_rc
+    );
+
+    // Verify all files exist
+    let response = (*router)
+        .clone()
+        .oneshot(create_get_request("phase1_race/file_a.txt"))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "Original file A should still exist"
+    );
+
+    for i in 0..num_new_files {
+        let response = (*router)
+            .clone()
+            .oneshot(create_get_request(&format!("phase1_race/file_b_{}.txt", i)))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "New file B_{} should exist",
+            i
+        );
+    }
+
+    // Verify blob exists
+    let blob_exists = app_state.s3storage.object_exists(&sha256).await.unwrap();
+    assert!(blob_exists, "Blob should still exist after cleanup");
+}
+
+/// Test: Cleaner batch offset with concurrent insertions
+/// Start with 10 files, run cleaner with batch_size=3, concurrently add 5 more.
+/// No files should be deleted (all have valid refcounts).
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_cleaner_batch_offset_concurrent_insertions() {
+    if !is_s3_available().await {
+        eprintln!("Skipping test: S3 not available");
+        return;
+    }
+
+    let (router, app_state) = create_test_app_with_state().await;
+    let router = Arc::new(router);
+
+    // Setup: create 10 files with different content
+    let num_initial = 10;
+    for i in 0..num_initial {
+        let content = format!("Batch offset test content {}", i);
+        let response = (*router)
+            .clone()
+            .oneshot(create_put_request(
+                &format!("batch_offset/file_{}.txt", i),
+                content.as_bytes(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // Concurrently: run cleaner with small batch_size AND add more files
+    let num_new = 5;
+    let barrier = Arc::new(Barrier::new(num_new + 1)); // +1 for cleaner
+
+    // Cleaner task with batch_size=3
+    let cleaner_app_state = app_state.clone();
+    let cleaner_barrier = barrier.clone();
+    let cleaner_handle = tokio::spawn(async move {
+        let cleaner_config = s3dedup::cleaner::CleanerConfig {
+            enabled: false,
+            interval_seconds: 1,
+            batch_size: 3,
+            max_deletes_per_run: 1000,
+        };
+        let cleaner = s3dedup::cleaner::Cleaner::new(
+            cleaner_app_state.bucket_name.clone(),
+            cleaner_app_state.kvstorage.clone(),
+            cleaner_app_state.s3storage.clone(),
+            cleaner_app_state.locks.clone(),
+            cleaner_config,
+        );
+
+        cleaner_barrier.wait().await;
+        cleaner.run_cleanup().await.unwrap();
+    });
+
+    // Concurrent PUT tasks adding new files
+    let mut put_handles = Vec::new();
+    for i in 0..num_new {
+        let router = router.clone();
+        let barrier = barrier.clone();
+        let idx = num_initial + i;
+
+        put_handles.push(tokio::spawn(async move {
+            barrier.wait().await;
+            let content = format!("Batch offset test NEW content {}", idx);
+            let response = (*router)
+                .clone()
+                .oneshot(create_put_request(
+                    &format!("batch_offset/file_{}.txt", idx),
+                    content.as_bytes(),
+                ))
+                .await
+                .unwrap();
+            response.status()
+        }));
+    }
+
+    // Wait for all
+    cleaner_handle.await.unwrap();
+    for handle in put_handles {
+        let status = handle.await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // Verify: all 15 files should still exist (no files deleted)
+    let total_files = num_initial + num_new;
+    for i in 0..total_files {
+        let response = (*router)
+            .clone()
+            .oneshot(create_get_request(&format!("batch_offset/file_{}.txt", i)))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "File batch_offset/file_{}.txt should still exist after cleanup",
+            i
+        );
+    }
+
+    // Verify refcounts are all positive for all hashes
+    for i in 0..total_files {
+        let content = if i < num_initial {
+            format!("Batch offset test content {}", i)
+        } else {
+            format!("Batch offset test NEW content {}", i)
+        };
+        let sha256 = s3dedup::routes::ft::storage_helpers::compute_sha256(content.as_bytes());
+        let rc = app_state
+            .kvstorage
+            .get_ref_count(&app_state.bucket_name, &sha256)
+            .await
+            .unwrap();
+        assert!(
+            rc > 0,
+            "Refcount for file {} (hash {}) should be > 0, got {}",
+            i,
+            sha256,
+            rc
+        );
+    }
+}

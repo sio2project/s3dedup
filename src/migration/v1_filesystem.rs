@@ -250,4 +250,53 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("does not exist"));
     }
+
+    #[test]
+    fn test_symlinks_are_skipped() {
+        let temp_dir = TempDir::new().unwrap();
+        let v1_dir = temp_dir.path();
+
+        let files_dir = v1_dir.join("files");
+        fs::create_dir(&files_dir).unwrap();
+
+        // Create a regular file
+        fs::write(files_dir.join("real_file.txt"), b"real content").unwrap();
+
+        // Create a symlink pointing to the regular file
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            files_dir.join("real_file.txt"),
+            files_dir.join("link_file.txt"),
+        )
+        .unwrap();
+
+        let files = walk_v1_directory(v1_dir.to_str().unwrap()).unwrap();
+
+        // Only the regular file should be included; symlink is not a regular file
+        assert_eq!(files.len(), 1, "Symlink should be skipped");
+        assert_eq!(files[0].relative_path, "real_file.txt");
+    }
+
+    #[test]
+    fn test_zero_byte_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let v1_dir = temp_dir.path();
+
+        let files_dir = v1_dir.join("files");
+        fs::create_dir(&files_dir).unwrap();
+
+        // Create an empty file
+        fs::write(files_dir.join("empty.txt"), b"").unwrap();
+
+        let files = walk_v1_directory(v1_dir.to_str().unwrap()).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].size, 0);
+
+        // Verify read_v1_file returns empty content
+        let data = read_v1_file(&files[0]).unwrap();
+        assert!(
+            data.is_empty(),
+            "read_v1_file should return empty Vec for 0-byte file"
+        );
+    }
 }
