@@ -7,6 +7,9 @@ use tracing::{debug, info};
 
 pub mod s3compat;
 
+#[cfg(feature = "test-mocks")]
+pub mod mock;
+
 /// Configuration for S3 key sharding
 /// When enabled, transforms keys like "abcdef..." to "ab/cd/abcdef..."
 /// to distribute objects across directories and avoid ext4 performance issues
@@ -82,7 +85,11 @@ pub(crate) trait S3StorageTrait {
 }
 
 #[derive(Clone)]
-pub struct S3Storage(s3compat::S3CompatClient);
+pub enum S3Storage {
+    S3Compat(s3compat::S3CompatClient),
+    #[cfg(feature = "test-mocks")]
+    Mock(mock::MockS3Storage),
+}
 
 impl S3Storage {
     pub async fn new(config: &BucketConfig) -> Result<Box<Self>> {
@@ -90,24 +97,36 @@ impl S3Storage {
             S3StorageType::S3Compat => {
                 info!("Using S3-compatible storage");
                 let client = s3compat::S3CompatClient::new(config).await?;
-                Ok(Box::new(S3Storage(*client)))
+                Ok(Box::new(S3Storage::S3Compat(*client)))
             }
         }
     }
 
     pub async fn put_object(&self, key: &str, data: Vec<u8>) -> Result<()> {
         debug!("Putting object with key: {}", key);
-        self.0.put_object(key, data).await
+        match self {
+            S3Storage::S3Compat(s) => s.put_object(key, data).await,
+            #[cfg(feature = "test-mocks")]
+            S3Storage::Mock(s) => s.put_object(key, data).await,
+        }
     }
 
     pub async fn get_object(&self, key: &str) -> Result<Vec<u8>> {
         debug!("Getting object with key: {}", key);
-        self.0.get_object(key).await
+        match self {
+            S3Storage::S3Compat(s) => s.get_object(key).await,
+            #[cfg(feature = "test-mocks")]
+            S3Storage::Mock(s) => s.get_object(key).await,
+        }
     }
 
     pub async fn get_object_stream(&self, key: &str) -> Result<(ByteStream, Option<i64>)> {
         debug!("Getting object stream with key: {}", key);
-        self.0.get_object_stream(key).await
+        match self {
+            S3Storage::S3Compat(s) => s.get_object_stream(key).await,
+            #[cfg(feature = "test-mocks")]
+            S3Storage::Mock(s) => s.get_object_stream(key).await,
+        }
     }
 
     pub async fn put_object_stream(
@@ -117,22 +136,38 @@ impl S3Storage {
         content_length: Option<i64>,
     ) -> Result<()> {
         debug!("Putting object stream with key: {}", key);
-        self.0.put_object_stream(key, body, content_length).await
+        match self {
+            S3Storage::S3Compat(s) => s.put_object_stream(key, body, content_length).await,
+            #[cfg(feature = "test-mocks")]
+            S3Storage::Mock(s) => s.put_object_stream(key, body, content_length).await,
+        }
     }
 
     pub async fn delete_object(&self, key: &str) -> Result<()> {
         debug!("Deleting object with key: {}", key);
-        self.0.delete_object(key).await
+        match self {
+            S3Storage::S3Compat(s) => s.delete_object(key).await,
+            #[cfg(feature = "test-mocks")]
+            S3Storage::Mock(s) => s.delete_object(key).await,
+        }
     }
 
     pub async fn object_exists(&self, key: &str) -> Result<bool> {
         debug!("Checking if object exists with key: {}", key);
-        self.0.object_exists(key).await
+        match self {
+            S3Storage::S3Compat(s) => s.object_exists(key).await,
+            #[cfg(feature = "test-mocks")]
+            S3Storage::Mock(s) => s.object_exists(key).await,
+        }
     }
 
     pub async fn object_exists_with_size(&self, key: &str) -> Result<Option<i64>> {
         debug!("HEAD object for size with key: {}", key);
-        self.0.object_exists_with_size(key).await
+        match self {
+            S3Storage::S3Compat(s) => s.object_exists_with_size(key).await,
+            #[cfg(feature = "test-mocks")]
+            S3Storage::Mock(s) => s.object_exists_with_size(key).await,
+        }
     }
 
     pub async fn list_objects(
@@ -143,11 +178,19 @@ impl S3Storage {
             "Listing objects with continuation_token: {:?}",
             continuation_token
         );
-        self.0.list_objects(continuation_token).await
+        match self {
+            S3Storage::S3Compat(s) => s.list_objects(continuation_token).await,
+            #[cfg(feature = "test-mocks")]
+            S3Storage::Mock(s) => s.list_objects(continuation_token).await,
+        }
     }
 
     pub async fn check_health(&self) -> Result<()> {
         debug!("Checking S3 health");
-        self.0.check_health().await
+        match self {
+            S3Storage::S3Compat(s) => s.check_health().await,
+            #[cfg(feature = "test-mocks")]
+            S3Storage::Mock(s) => s.check_health().await,
+        }
     }
 }

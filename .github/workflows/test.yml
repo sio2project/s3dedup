@@ -154,20 +154,20 @@ jobs:
 
     - name: Run tests (SQLite)
       if: matrix.kvstorage == 'sqlite'
-      run: cargo test --verbose
+      run: cargo test --features test-mocks --verbose
       env:
         RUST_LOG: debug
 
     - name: Run tests (Postgres + Memory Locks)
       if: matrix.kvstorage == 'postgres' && matrix.locks == 'memory'
-      run: cargo test --verbose
+      run: cargo test --features test-mocks --verbose
       env:
         RUST_LOG: debug
         DATABASE_URL: postgres://postgres:postgres@localhost:5432/s3dedup_test
 
     - name: Run tests (Postgres + Postgres Locks)
       if: matrix.kvstorage == 'postgres' && matrix.locks == 'postgres'
-      run: cargo test --verbose
+      run: cargo test --features test-mocks --verbose
       env:
         RUST_LOG: debug
         DATABASE_URL: postgres://postgres:postgres@localhost:5432/s3dedup_test

@@ -7,6 +7,9 @@ mod pooled;
 pub mod postgres;
 pub mod sqlite;
 
+#[cfg(feature = "test-mocks")]
+pub mod mock;
+
 #[derive(Debug, Deserialize, Clone)]
 pub enum KVStorageType {
     #[serde(rename = "postgres")]
@@ -141,6 +144,8 @@ pub struct StorageStats {
 pub enum KVStorage {
     Postgres(postgres::Postgres),
     SQLite(sqlite::SQLite),
+    #[cfg(feature = "test-mocks")]
+    Mock(mock::MockKVStorage),
 }
 
 impl KVStorage {
@@ -166,6 +171,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.setup().await,
             KVStorage::SQLite(storage) => storage.setup().await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.setup().await,
         }
     }
 
@@ -178,6 +185,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_ref_count(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.get_ref_count(bucket, hash).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_ref_count(bucket, hash).await,
         }
     }
 
@@ -193,6 +202,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.atomic_increment_ref_count(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.atomic_increment_ref_count(bucket, hash).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.atomic_increment_ref_count(bucket, hash).await,
         }
     }
 
@@ -209,6 +220,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.atomic_decrement_ref_count(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.atomic_decrement_ref_count(bucket, hash).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.atomic_decrement_ref_count(bucket, hash).await,
         }
     }
 
@@ -224,6 +237,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_modified(bucket, path).await,
             KVStorage::SQLite(storage) => storage.get_modified(bucket, path).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_modified(bucket, path).await,
         }
     }
 
@@ -238,6 +253,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.set_modified(bucket, path, modified).await,
             KVStorage::SQLite(storage) => storage.set_modified(bucket, path, modified).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.set_modified(bucket, path, modified).await,
         }
     }
 
@@ -252,6 +269,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.delete_modified(bucket, path).await,
             KVStorage::SQLite(storage) => storage.delete_modified(bucket, path).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.delete_modified(bucket, path).await,
         }
     }
 
@@ -264,6 +283,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_ref_file(bucket, path).await,
             KVStorage::SQLite(storage) => storage.get_ref_file(bucket, path).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_ref_file(bucket, path).await,
         }
     }
 
@@ -278,6 +299,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.set_ref_file(bucket, path, hash).await,
             KVStorage::SQLite(storage) => storage.set_ref_file(bucket, path, hash).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.set_ref_file(bucket, path, hash).await,
         }
     }
 
@@ -289,6 +312,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.delete_ref_file(bucket, path).await,
             KVStorage::SQLite(storage) => storage.delete_ref_file(bucket, path).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.delete_ref_file(bucket, path).await,
         }
     }
 
@@ -304,6 +329,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_logical_size(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.get_logical_size(bucket, hash).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_logical_size(bucket, hash).await,
         }
     }
 
@@ -318,6 +345,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.set_logical_size(bucket, hash, size).await,
             KVStorage::SQLite(storage) => storage.set_logical_size(bucket, hash, size).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.set_logical_size(bucket, hash, size).await,
         }
     }
 
@@ -329,6 +358,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_compressed_size(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.get_compressed_size(bucket, hash).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_compressed_size(bucket, hash).await,
         }
     }
 
@@ -340,6 +371,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.set_compressed_size(bucket, hash, size).await,
             KVStorage::SQLite(storage) => storage.set_compressed_size(bucket, hash, size).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.set_compressed_size(bucket, hash, size).await,
         }
     }
 
@@ -361,6 +394,8 @@ impl KVStorage {
                 storage.list_files(bucket, path_prefix, timestamp).await
             }
             KVStorage::SQLite(storage) => storage.list_files(bucket, path_prefix, timestamp).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.list_files(bucket, path_prefix, timestamp).await,
         }
     }
 
@@ -375,6 +410,8 @@ impl KVStorage {
                 storage.list_ref_files_batch(bucket, limit, offset).await
             }
             KVStorage::SQLite(storage) => storage.list_ref_files_batch(bucket, limit, offset).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.list_ref_files_batch(bucket, limit, offset).await,
         }
     }
 
@@ -389,6 +426,8 @@ impl KVStorage {
                 storage.list_refcounts_batch(bucket, limit, offset).await
             }
             KVStorage::SQLite(storage) => storage.list_refcounts_batch(bucket, limit, offset).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.list_refcounts_batch(bucket, limit, offset).await,
         }
     }
 
@@ -409,6 +448,12 @@ impl KVStorage {
                     .list_logical_sizes_batch(bucket, limit, offset)
                     .await
             }
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => {
+                storage
+                    .list_logical_sizes_batch(bucket, limit, offset)
+                    .await
+            }
         }
     }
 
@@ -416,6 +461,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.delete_refcount(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.delete_refcount(bucket, hash).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.delete_refcount(bucket, hash).await,
         }
     }
 
@@ -423,6 +470,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.delete_logical_size(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.delete_logical_size(bucket, hash).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.delete_logical_size(bucket, hash).await,
         }
     }
 
@@ -431,6 +480,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.hash_is_referenced(bucket, hash).await,
             KVStorage::SQLite(storage) => storage.hash_is_referenced(bucket, hash).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.hash_is_referenced(bucket, hash).await,
         }
     }
 
@@ -438,6 +489,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_total_files(bucket).await,
             KVStorage::SQLite(storage) => storage.get_total_files(bucket).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_total_files(bucket).await,
         }
     }
 
@@ -445,6 +498,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_total_blobs(bucket).await,
             KVStorage::SQLite(storage) => storage.get_total_blobs(bucket).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_total_blobs(bucket).await,
         }
     }
 
@@ -452,6 +507,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_total_storage_bytes(bucket).await,
             KVStorage::SQLite(storage) => storage.get_total_storage_bytes(bucket).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_total_storage_bytes(bucket).await,
         }
     }
 
@@ -459,6 +516,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_total_logical_bytes(bucket).await,
             KVStorage::SQLite(storage) => storage.get_total_logical_bytes(bucket).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_total_logical_bytes(bucket).await,
         }
     }
 
@@ -466,6 +525,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_deduplicated_bytes_saved(bucket).await,
             KVStorage::SQLite(storage) => storage.get_deduplicated_bytes_saved(bucket).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_deduplicated_bytes_saved(bucket).await,
         }
     }
 
@@ -475,6 +536,8 @@ impl KVStorage {
                 storage.get_total_compressed_bytes_no_dedup(bucket).await
             }
             KVStorage::SQLite(storage) => storage.get_total_compressed_bytes_no_dedup(bucket).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_total_compressed_bytes_no_dedup(bucket).await,
         }
     }
 
@@ -482,6 +545,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_pool_stats(),
             KVStorage::SQLite(storage) => storage.get_pool_stats(),
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_pool_stats(),
         }
     }
 
@@ -489,6 +554,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_version().await,
             KVStorage::SQLite(storage) => storage.get_version().await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_version().await,
         }
     }
 
@@ -496,6 +563,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.set_version(version).await,
             KVStorage::SQLite(storage) => storage.set_version(version).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.set_version(version).await,
         }
     }
 
@@ -503,6 +572,8 @@ impl KVStorage {
         match self {
             KVStorage::Postgres(storage) => storage.get_storage_stats(bucket).await,
             KVStorage::SQLite(storage) => storage.get_storage_stats(bucket).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.get_storage_stats(bucket).await,
         }
     }
 }

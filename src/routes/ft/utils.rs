@@ -9,8 +9,10 @@ pub fn conv_rfc2822_to_unix_timestamp(rfc2822: &str) -> Result<i64> {
 }
 
 pub fn format_rfc2822_timestamp(timestamp: i64) -> String {
-    let dt = Utc.timestamp_opt(timestamp, 0).unwrap();
-    dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string()
+    match Utc.timestamp_opt(timestamp, 0) {
+        chrono::LocalResult::Single(dt) => dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
+        _ => "Thu, 01 Jan 1970 00:00:00 GMT".to_string(), // fallback for out-of-range timestamps
+    }
 }
 
 /// Extract timestamp from request (header or query param)
@@ -41,6 +43,12 @@ pub fn extract_timestamp(
     match timestamp_str {
         Some(ts_str) => match conv_rfc2822_to_unix_timestamp(&ts_str) {
             Ok(ts) => {
+                if ts <= 0 {
+                    return Err(format!(
+                        "Timestamp must be positive, got {} from '{}'",
+                        ts, ts_str
+                    ));
+                }
                 debug!("Parsed timestamp: {}", ts);
                 Ok(ts)
             }
@@ -55,5 +63,75 @@ pub fn extract_timestamp(
                 Ok(ts)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_rfc2822_timestamp_normal() {
+        let result = format_rfc2822_timestamp(1000000000);
+        assert!(result.contains("2001"));
+    }
+
+    #[test]
+    fn test_format_rfc2822_timestamp_extreme_values_no_panic() {
+        // These should not panic
+        let _ = format_rfc2822_timestamp(i64::MAX);
+        let _ = format_rfc2822_timestamp(i64::MIN);
+        let _ = format_rfc2822_timestamp(0);
+    }
+
+    #[test]
+    fn test_format_rfc2822_timestamp_out_of_range_returns_epoch() {
+        let result = format_rfc2822_timestamp(i64::MAX);
+        assert_eq!(result, "Thu, 01 Jan 1970 00:00:00 GMT");
+    }
+
+    #[test]
+    fn test_extract_timestamp_rejects_zero() {
+        // Thu, 01 Jan 1970 00:00:00 +0000 parses to timestamp 0
+        let headers = HeaderMap::new();
+        let epoch = "Thu, 01 Jan 1970 00:00:00 +0000".to_string();
+        let result = extract_timestamp(&headers, Some(&epoch), true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be positive"));
+    }
+
+    #[test]
+    fn test_extract_timestamp_rejects_negative() {
+        // Wed, 31 Dec 1969 23:00:00 +0000 parses to timestamp -3600
+        let headers = HeaderMap::new();
+        let pre_epoch = "Wed, 31 Dec 1969 23:00:00 +0000".to_string();
+        let result = extract_timestamp(&headers, Some(&pre_epoch), true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be positive"));
+    }
+
+    #[test]
+    fn test_extract_timestamp_accepts_positive() {
+        let headers = HeaderMap::new();
+        let ts = "Thu, 01 Jan 2026 00:00:00 +0000".to_string();
+        let result = extract_timestamp(&headers, Some(&ts), true);
+        assert!(result.is_ok());
+        assert!(result.unwrap() > 0);
+    }
+
+    #[test]
+    fn test_extract_timestamp_missing_required() {
+        let headers = HeaderMap::new();
+        let result = extract_timestamp(&headers, None, true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("is required"));
+    }
+
+    #[test]
+    fn test_extract_timestamp_missing_optional_uses_current_time() {
+        let headers = HeaderMap::new();
+        let result = extract_timestamp(&headers, None, false);
+        assert!(result.is_ok());
+        assert!(result.unwrap() > 0);
     }
 }

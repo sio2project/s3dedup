@@ -3,6 +3,9 @@ name = "s3dedup"
 version = "1.2.6"
 edition = "2024"
 
+[features]
+test-mocks = []
+
 [lib]
 name = "s3dedup"
 path = "src/lib.rs"
