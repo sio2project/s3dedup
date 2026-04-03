@@ -286,10 +286,7 @@ impl Cleaner {
                         let guard = match lock.acquire_exclusive().await {
                             Ok(g) => g,
                             Err(e) => {
-                                warn!(
-                                    "Failed to acquire file lock for cleaner {}: {}",
-                                    path, e
-                                );
+                                warn!("Failed to acquire file lock for cleaner {}: {}", path, e);
                                 return false;
                             }
                         };
@@ -297,18 +294,14 @@ impl Cleaner {
                         // Re-check under lock: verify ref_file still points to the
                         // same hash (a concurrent PUT could have overwritten this path
                         // with a different hash).
-                        let current_hash =
-                            match kvstorage.get_ref_file(bucket, &path).await {
-                                Ok(h) => h,
-                                Err(e) => {
-                                    error!(
-                                        "Failed to re-read ref_file for {}: {}",
-                                        path, e
-                                    );
-                                    let _ = guard.release().await;
-                                    return false;
-                                }
-                            };
+                        let current_hash = match kvstorage.get_ref_file(bucket, &path).await {
+                            Ok(h) => h,
+                            Err(e) => {
+                                error!("Failed to re-read ref_file for {}: {}", path, e);
+                                let _ = guard.release().await;
+                                return false;
+                            }
+                        };
 
                         if current_hash != hash {
                             debug!(
@@ -330,10 +323,7 @@ impl Cleaner {
                         };
 
                         if refcount != 0 {
-                            debug!(
-                                "Refcount changed for {} (now {}), skipping",
-                                hash, refcount
-                            );
+                            debug!("Refcount changed for {} (now {}), skipping", hash, refcount);
                             let _ = guard.release().await;
                             return false;
                         }
@@ -563,10 +553,7 @@ impl Cleaner {
                         let guard = match lock.acquire_exclusive().await {
                             Ok(g) => g,
                             Err(e) => {
-                                warn!(
-                                    "Failed to acquire hash lock for cleaner {}: {}",
-                                    hash, e
-                                );
+                                warn!("Failed to acquire hash lock for cleaner {}: {}", hash, e);
                                 return false;
                             }
                         };

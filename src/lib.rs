@@ -43,7 +43,8 @@ pub struct AppState {
 impl AppState {
     pub async fn new(config: &config::Config) -> Result<Arc<Self>> {
         let kvstorage = Arc::new(*kvstorage::KVStorage::new(config).await?);
-        let locks = Arc::new(*locks::LocksStorage::new_with_config(config.locks_type, config).await?);
+        let locks =
+            Arc::new(*locks::LocksStorage::new_with_config(config.locks_type, config).await?);
         let s3storage = Arc::new(*s3storage::S3Storage::new(&config.bucket).await?);
         let metrics = Arc::new(metrics::Metrics::new());
         let cleaner = Arc::new(cleaner::Cleaner::new(
@@ -70,7 +71,8 @@ impl AppState {
         filetracker_url: String,
     ) -> Result<Arc<Self>> {
         let kvstorage = Arc::new(*kvstorage::KVStorage::new(config).await?);
-        let locks = Arc::new(*locks::LocksStorage::new_with_config(config.locks_type, config).await?);
+        let locks =
+            Arc::new(*locks::LocksStorage::new_with_config(config.locks_type, config).await?);
         let s3storage = Arc::new(*s3storage::S3Storage::new(&config.bucket).await?);
         let filetracker_client = filetracker_client::FiletrackerClient::new(filetracker_url);
         let metrics = Arc::new(metrics::Metrics::new());
