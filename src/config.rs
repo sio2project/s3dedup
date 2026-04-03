@@ -134,7 +134,8 @@ impl Config {
                 std::env::var("LOCKS_TYPE").unwrap_or_else(|_| "memory".to_string());
             match locks_type_str.as_str() {
                 "memory" => LocksType::Memory,
-                _ => LocksType::Memory, // Default to memory
+                "postgres" => LocksType::Postgres,
+                _ => bail!("Invalid LOCKS_TYPE: {}", locks_type_str),
             }
         };
 
