@@ -26,14 +26,25 @@ async fn create_test_app_with_state() -> (Router, Arc<s3dedup::AppState>) {
         .unwrap();
     let s3storage = S3Storage::new(&config.bucket).await.unwrap();
 
+    let kvstorage = Arc::new(*kvstorage);
+    let locks = Arc::new(*locks);
+    let s3storage = Arc::new(*s3storage);
+    let cleaner = Arc::new(s3dedup::cleaner::Cleaner::new(
+        config.bucket.name.clone(),
+        kvstorage.clone(),
+        s3storage.clone(),
+        locks.clone(),
+        Default::default(),
+    ));
     let app_state = Arc::new(AppState {
         bucket_name: config.bucket.name.clone(),
-        kvstorage: Arc::new(*kvstorage),
-        locks: Arc::new(*locks),
-        s3storage: Arc::new(*s3storage),
+        kvstorage,
+        locks,
+        s3storage,
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        cleaner,
     });
 
     app_state.kvstorage.setup().await.unwrap();
@@ -916,7 +927,7 @@ async fn test_cleaner_phase3_vs_put_hash_lock() {
             enabled: false,
             interval_seconds: 1,
             batch_size: 100,
-            max_deletes_per_run: 100,
+            ..Default::default()
         };
         let cleaner = s3dedup::cleaner::Cleaner::new(
             cleaner_app_state.bucket_name.clone(),
@@ -927,7 +938,7 @@ async fn test_cleaner_phase3_vs_put_hash_lock() {
         );
 
         cleaner_barrier.wait().await;
-        cleaner.run_cleanup().await.unwrap();
+        cleaner.run_full_cleanup().await.unwrap();
     });
 
     // PUT tasks with same content
@@ -1034,7 +1045,7 @@ async fn test_cleaner_phase3_non_hash_s3_objects() {
         enabled: false,
         interval_seconds: 1,
         batch_size: 100,
-        max_deletes_per_run: 100,
+        ..Default::default()
     };
     let cleaner = s3dedup::cleaner::Cleaner::new(
         app_state.bucket_name.clone(),
@@ -1043,7 +1054,7 @@ async fn test_cleaner_phase3_non_hash_s3_objects() {
         app_state.locks.clone(),
         cleaner_config,
     );
-    cleaner.run_cleanup().await.unwrap();
+    cleaner.run_full_cleanup().await.unwrap();
 
     // Verify they were deleted
     for key in &non_hash_keys {
@@ -1100,7 +1111,7 @@ async fn test_cleaner_phase1_different_path_put_same_hash() {
             enabled: false,
             interval_seconds: 1,
             batch_size: 100,
-            max_deletes_per_run: 100,
+            ..Default::default()
         };
         let cleaner = s3dedup::cleaner::Cleaner::new(
             cleaner_app_state.bucket_name.clone(),
@@ -1111,7 +1122,7 @@ async fn test_cleaner_phase1_different_path_put_same_hash() {
         );
 
         cleaner_barrier.wait().await;
-        cleaner.run_cleanup().await.unwrap();
+        cleaner.run_full_cleanup().await.unwrap();
     });
 
     // PUT tasks with same content to new paths
@@ -1227,7 +1238,7 @@ async fn test_cleaner_batch_offset_concurrent_insertions() {
             enabled: false,
             interval_seconds: 1,
             batch_size: 3,
-            max_deletes_per_run: 1000,
+            ..Default::default()
         };
         let cleaner = s3dedup::cleaner::Cleaner::new(
             cleaner_app_state.bucket_name.clone(),
@@ -1238,7 +1249,7 @@ async fn test_cleaner_batch_offset_concurrent_insertions() {
         );
 
         cleaner_barrier.wait().await;
-        cleaner.run_cleanup().await.unwrap();
+        cleaner.run_full_cleanup().await.unwrap();
     });
 
     // Concurrent PUT tasks adding new files

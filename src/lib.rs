@@ -37,22 +37,31 @@ pub struct AppState {
     pub metrics: Arc<metrics::Metrics>,
     /// Max file size to process in memory during PUT slow path. Larger files use temp files.
     pub max_inmemory_size: usize,
+    pub cleaner: Arc<cleaner::Cleaner>,
 }
 
 impl AppState {
     pub async fn new(config: &config::Config) -> Result<Arc<Self>> {
-        let kvstorage = kvstorage::KVStorage::new(config).await?;
-        let locks = locks::LocksStorage::new_with_config(config.locks_type, config).await?;
-        let s3storage = s3storage::S3Storage::new(&config.bucket).await?;
+        let kvstorage = Arc::new(*kvstorage::KVStorage::new(config).await?);
+        let locks = Arc::new(*locks::LocksStorage::new_with_config(config.locks_type, config).await?);
+        let s3storage = Arc::new(*s3storage::S3Storage::new(&config.bucket).await?);
         let metrics = Arc::new(metrics::Metrics::new());
+        let cleaner = Arc::new(cleaner::Cleaner::new(
+            config.bucket.name.clone(),
+            kvstorage.clone(),
+            s3storage.clone(),
+            locks.clone(),
+            config.bucket.cleaner.clone(),
+        ));
         Ok(Arc::new(Self {
             bucket_name: config.bucket.name.clone(),
-            kvstorage: Arc::new(*kvstorage),
-            locks: Arc::new(*locks),
-            s3storage: Arc::new(*s3storage),
+            kvstorage,
+            locks,
+            s3storage,
             filetracker_client: None,
             metrics,
             max_inmemory_size: config.bucket.max_inmemory_size,
+            cleaner,
         }))
     }
 
@@ -60,23 +69,31 @@ impl AppState {
         config: &config::Config,
         filetracker_url: String,
     ) -> Result<Arc<Self>> {
-        let kvstorage = kvstorage::KVStorage::new(config).await?;
-        let locks = locks::LocksStorage::new_with_config(config.locks_type, config).await?;
-        let s3storage = s3storage::S3Storage::new(&config.bucket).await?;
+        let kvstorage = Arc::new(*kvstorage::KVStorage::new(config).await?);
+        let locks = Arc::new(*locks::LocksStorage::new_with_config(config.locks_type, config).await?);
+        let s3storage = Arc::new(*s3storage::S3Storage::new(&config.bucket).await?);
         let filetracker_client = filetracker_client::FiletrackerClient::new(filetracker_url);
         let metrics = Arc::new(metrics::Metrics::new());
+        let cleaner = Arc::new(cleaner::Cleaner::new(
+            config.bucket.name.clone(),
+            kvstorage.clone(),
+            s3storage.clone(),
+            locks.clone(),
+            config.bucket.cleaner.clone(),
+        ));
 
         // Mark migration as active
         metrics::MIGRATION_ACTIVE.set(1);
 
         Ok(Arc::new(Self {
             bucket_name: config.bucket.name.clone(),
-            kvstorage: Arc::new(*kvstorage),
-            locks: Arc::new(*locks),
-            s3storage: Arc::new(*s3storage),
+            kvstorage,
+            locks,
+            s3storage,
             filetracker_client: Some(Arc::new(filetracker_client)),
             metrics,
             max_inmemory_size: config.bucket.max_inmemory_size,
+            cleaner,
         }))
     }
 

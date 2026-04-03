@@ -21,14 +21,25 @@ fn create_mock_app_state() -> (Arc<AppState>, MockKVStorage, MockS3Storage) {
     let mock_kv = MockKVStorage::new();
     let mock_s3 = MockS3Storage::new();
 
+    let kvstorage = Arc::new(KVStorage::Mock(mock_kv.clone()));
+    let locks = Arc::new(*LocksStorage::new(s3dedup::config::LocksType::Memory));
+    let s3storage = Arc::new(S3Storage::Mock(mock_s3.clone()));
+    let cleaner = Arc::new(s3dedup::cleaner::Cleaner::new(
+        "test-bucket".to_string(),
+        kvstorage.clone(),
+        s3storage.clone(),
+        locks.clone(),
+        Default::default(),
+    ));
     let app_state = Arc::new(AppState {
         bucket_name: "test-bucket".to_string(),
-        kvstorage: Arc::new(KVStorage::Mock(mock_kv.clone())),
-        locks: Arc::new(*LocksStorage::new(s3dedup::config::LocksType::Memory)),
-        s3storage: Arc::new(S3Storage::Mock(mock_s3.clone())),
+        kvstorage,
+        locks,
+        s3storage,
         filetracker_client: None,
         metrics: Arc::new(s3dedup::metrics::Metrics::new()),
         max_inmemory_size: 64 * 1024 * 1024,
+        cleaner,
     });
 
     (app_state, mock_kv, mock_s3)

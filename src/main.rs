@@ -3,7 +3,6 @@ use axum::Router;
 use axum::routing::get;
 use clap::{Parser, Subcommand};
 use s3dedup::AppState;
-use s3dedup::cleaner::Cleaner;
 use s3dedup::config;
 use s3dedup::metrics;
 use s3dedup::routes::ft::delete_file::ft_delete_file;
@@ -147,16 +146,10 @@ fn create_router(app_state: Arc<AppState>) -> Router {
 }
 
 /// Start background tasks (cleaner and metrics updater)
-fn start_background_tasks(app_state: Arc<AppState>, bucket_config: &config::BucketConfig) {
-    // Start cleaner
-    let cleaner = Arc::new(Cleaner::new(
-        bucket_config.name.clone(),
-        app_state.kvstorage.clone(),
-        app_state.s3storage.clone(),
-        app_state.locks.clone(),
-        bucket_config.cleaner.clone(),
-    ));
-    cleaner.start();
+fn start_background_tasks(app_state: Arc<AppState>, _bucket_config: &config::BucketConfig) {
+    // Lightweight cleaner (phases 1, 2, 4) runs on interval_seconds.
+    // Full S3 scan (phase 3) runs on full_scan_cron schedule if configured.
+    app_state.cleaner.clone().start();
 
     // Start metrics updater task
     let metrics_state = app_state.clone();

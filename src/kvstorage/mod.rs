@@ -57,29 +57,34 @@ pub(crate) trait KVStorageTrait {
         timestamp: i64,
     ) -> Result<Vec<String>>;
 
-    // Batched methods for cleaner
-    /// List ref_file entries in batches (path, hash)
-    async fn list_ref_files_batch(
+    // Cursor-based orphan-detection methods for cleaner (server-side JOIN filtering)
+
+    /// List orphaned ref_files: entries whose hash has refcount=0 or no refcount row.
+    /// Cursor-based: returns entries with path > after_cursor, ordered by path.
+    /// Pass empty string for initial call.
+    async fn list_orphaned_ref_files(
         &self,
         bucket: &str,
+        after_cursor: &str,
         limit: usize,
-        offset: usize,
     ) -> Result<Vec<(String, String)>>;
 
-    /// List refcount entries in batches (hash, count)
-    async fn list_refcounts_batch(
+    /// List orphaned refcounts: entries with no ref_file pointing to them.
+    /// Cursor-based: returns entries with hash > after_cursor, ordered by hash.
+    async fn list_orphaned_refcounts(
         &self,
         bucket: &str,
+        after_cursor: &str,
         limit: usize,
-        offset: usize,
     ) -> Result<Vec<(String, i32)>>;
 
-    /// List logical_size entries in batches (hash)
-    async fn list_logical_sizes_batch(
+    /// List orphaned logical_size entries: those with refcount=0 or no refcount row.
+    /// Cursor-based: returns entries with hash > after_cursor, ordered by hash.
+    async fn list_orphaned_logical_sizes(
         &self,
         bucket: &str,
+        after_cursor: &str,
         limit: usize,
-        offset: usize,
     ) -> Result<Vec<String>>;
 
     /// Delete a refcount entry
@@ -399,59 +404,79 @@ impl KVStorage {
         }
     }
 
-    pub async fn list_ref_files_batch(
+    pub async fn list_orphaned_ref_files(
         &self,
         bucket: &str,
+        after_cursor: &str,
         limit: usize,
-        offset: usize,
     ) -> Result<Vec<(String, String)>> {
         match self {
             KVStorage::Postgres(storage) => {
-                storage.list_ref_files_batch(bucket, limit, offset).await
-            }
-            KVStorage::SQLite(storage) => storage.list_ref_files_batch(bucket, limit, offset).await,
-            #[cfg(feature = "test-mocks")]
-            KVStorage::Mock(storage) => storage.list_ref_files_batch(bucket, limit, offset).await,
-        }
-    }
-
-    pub async fn list_refcounts_batch(
-        &self,
-        bucket: &str,
-        limit: usize,
-        offset: usize,
-    ) -> Result<Vec<(String, i32)>> {
-        match self {
-            KVStorage::Postgres(storage) => {
-                storage.list_refcounts_batch(bucket, limit, offset).await
-            }
-            KVStorage::SQLite(storage) => storage.list_refcounts_batch(bucket, limit, offset).await,
-            #[cfg(feature = "test-mocks")]
-            KVStorage::Mock(storage) => storage.list_refcounts_batch(bucket, limit, offset).await,
-        }
-    }
-
-    pub async fn list_logical_sizes_batch(
-        &self,
-        bucket: &str,
-        limit: usize,
-        offset: usize,
-    ) -> Result<Vec<String>> {
-        match self {
-            KVStorage::Postgres(storage) => {
                 storage
-                    .list_logical_sizes_batch(bucket, limit, offset)
+                    .list_orphaned_ref_files(bucket, after_cursor, limit)
                     .await
             }
             KVStorage::SQLite(storage) => {
                 storage
-                    .list_logical_sizes_batch(bucket, limit, offset)
+                    .list_orphaned_ref_files(bucket, after_cursor, limit)
                     .await
             }
             #[cfg(feature = "test-mocks")]
             KVStorage::Mock(storage) => {
                 storage
-                    .list_logical_sizes_batch(bucket, limit, offset)
+                    .list_orphaned_ref_files(bucket, after_cursor, limit)
+                    .await
+            }
+        }
+    }
+
+    pub async fn list_orphaned_refcounts(
+        &self,
+        bucket: &str,
+        after_cursor: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, i32)>> {
+        match self {
+            KVStorage::Postgres(storage) => {
+                storage
+                    .list_orphaned_refcounts(bucket, after_cursor, limit)
+                    .await
+            }
+            KVStorage::SQLite(storage) => {
+                storage
+                    .list_orphaned_refcounts(bucket, after_cursor, limit)
+                    .await
+            }
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => {
+                storage
+                    .list_orphaned_refcounts(bucket, after_cursor, limit)
+                    .await
+            }
+        }
+    }
+
+    pub async fn list_orphaned_logical_sizes(
+        &self,
+        bucket: &str,
+        after_cursor: &str,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        match self {
+            KVStorage::Postgres(storage) => {
+                storage
+                    .list_orphaned_logical_sizes(bucket, after_cursor, limit)
+                    .await
+            }
+            KVStorage::SQLite(storage) => {
+                storage
+                    .list_orphaned_logical_sizes(bucket, after_cursor, limit)
+                    .await
+            }
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => {
+                storage
+                    .list_orphaned_logical_sizes(bucket, after_cursor, limit)
                     .await
             }
         }

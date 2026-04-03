@@ -284,10 +284,11 @@ impl BucketConfig {
                     .ok()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(1000),
-                max_deletes_per_run: std::env::var("CLEANER_MAX_DELETES")
+                concurrency: std::env::var("CLEANER_CONCURRENCY")
                     .ok()
                     .and_then(|v| v.parse().ok())
-                    .unwrap_or(10000),
+                    .unwrap_or(8),
+                full_scan_cron: std::env::var("CLEANER_FULL_SCAN_CRON").ok(),
             },
             max_inmemory_size: std::env::var("MAX_INMEMORY_SIZE")
                 .ok()
