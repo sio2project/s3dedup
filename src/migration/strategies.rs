@@ -182,7 +182,7 @@ pub(super) async fn migrate_single_file(
     };
 
     // Record blob metadata (sizes + conditionally increment refcount)
-    if let Err(e) = app_state
+    let new_refcount = match app_state
         .record_blob_metadata(
             &digest,
             logical_size,
@@ -191,10 +191,13 @@ pub(super) async fn migrate_single_file(
         )
         .await
     {
-        let _ = hash_guard.release().await;
-        let _ = guard.release().await;
-        return Err(e);
-    }
+        Ok(rc) => rc,
+        Err(e) => {
+            let _ = hash_guard.release().await;
+            let _ = guard.release().await;
+            return Err(e);
+        }
+    };
 
     // Update file metadata while still holding hash lock (prevents cleaner Phase 2 race)
     if let Err(e) = app_state
@@ -211,12 +214,43 @@ pub(super) async fn migrate_single_file(
         warn!("Failed to release hash lock: {}", e);
     }
 
+    // Build stats delta
+    let mut delta = if let Some(rc) = new_refcount {
+        crate::kvstorage::StatsDelta::for_ref_increment(
+            rc,
+            logical_size as i64,
+            compressed_size as i64,
+        )
+    } else {
+        crate::kvstorage::StatsDelta::default()
+    };
+    if current_modified_after_lock == 0 {
+        delta.total_files = 1;
+    }
+
     // Decrement old hash refcount if overwriting with different content
-    if let Some(old_hash) = old_hash
-        && let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await
+    if let Some(ref old_hash) = old_hash {
+        let (old_ls, old_cs) = app_state.get_blob_sizes(old_hash).await;
+        match app_state.decrement_old_ref(old_hash, &digest).await {
+            Ok(Some(old_rc)) => {
+                delta.merge(&crate::kvstorage::StatsDelta::for_ref_decrement(
+                    old_rc, old_ls, old_cs,
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = guard.release().await;
+                return Err(e);
+            }
+        }
+    }
+
+    if let Err(e) = app_state
+        .kvstorage
+        .adjust_stats(&app_state.bucket_name, &delta)
+        .await
     {
-        let _ = guard.release().await;
-        return Err(e);
+        warn!("Failed to adjust stats during migration: {}", e);
     }
 
     if let Err(e) = guard.release().await {
@@ -421,7 +455,7 @@ pub async fn migrate_single_file_from_metadata(
     };
 
     // Record blob metadata (sizes + conditionally increment refcount)
-    if let Err(e) = app_state
+    let new_refcount = match app_state
         .record_blob_metadata(
             &digest,
             logical_size,
@@ -430,10 +464,13 @@ pub async fn migrate_single_file_from_metadata(
         )
         .await
     {
-        let _ = hash_guard.release().await;
-        let _ = guard.release().await;
-        return Err(e);
-    }
+        Ok(rc) => rc,
+        Err(e) => {
+            let _ = hash_guard.release().await;
+            let _ = guard.release().await;
+            return Err(e);
+        }
+    };
 
     // Update file metadata while still holding hash lock (prevents cleaner Phase 2 race)
     if let Err(e) = app_state
@@ -450,12 +487,43 @@ pub async fn migrate_single_file_from_metadata(
         warn!("Failed to release hash lock: {}", e);
     }
 
+    // Build stats delta
+    let mut delta = if let Some(rc) = new_refcount {
+        crate::kvstorage::StatsDelta::for_ref_increment(
+            rc,
+            logical_size as i64,
+            compressed_size as i64,
+        )
+    } else {
+        crate::kvstorage::StatsDelta::default()
+    };
+    if current_modified_after_lock == 0 {
+        delta.total_files = 1;
+    }
+
     // Decrement old hash refcount if overwriting with different content
-    if let Some(old_hash) = old_hash
-        && let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await
+    if let Some(ref old_hash) = old_hash {
+        let (old_ls, old_cs) = app_state.get_blob_sizes(old_hash).await;
+        match app_state.decrement_old_ref(old_hash, &digest).await {
+            Ok(Some(old_rc)) => {
+                delta.merge(&crate::kvstorage::StatsDelta::for_ref_decrement(
+                    old_rc, old_ls, old_cs,
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = guard.release().await;
+                return Err(e);
+            }
+        }
+    }
+
+    if let Err(e) = app_state
+        .kvstorage
+        .adjust_stats(&app_state.bucket_name, &delta)
+        .await
     {
-        let _ = guard.release().await;
-        return Err(e);
+        warn!("Failed to adjust stats during migration: {}", e);
     }
 
     if let Err(e) = guard.release().await {
@@ -590,7 +658,7 @@ pub async fn migrate_single_file_from_streaming(
     };
 
     // Record blob metadata (sizes + conditionally increment refcount)
-    if let Err(e) = app_state
+    let new_refcount = match app_state
         .record_blob_metadata(
             &digest,
             logical_size,
@@ -599,10 +667,13 @@ pub async fn migrate_single_file_from_streaming(
         )
         .await
     {
-        let _ = hash_guard.release().await;
-        let _ = guard.release().await;
-        return Err(e);
-    }
+        Ok(rc) => rc,
+        Err(e) => {
+            let _ = hash_guard.release().await;
+            let _ = guard.release().await;
+            return Err(e);
+        }
+    };
 
     // Update file metadata while still holding hash lock (prevents cleaner Phase 2 race)
     if let Err(e) = app_state
@@ -618,12 +689,43 @@ pub async fn migrate_single_file_from_streaming(
         warn!("Failed to release hash lock: {}", e);
     }
 
+    // Build stats delta
+    let mut delta = if let Some(rc) = new_refcount {
+        crate::kvstorage::StatsDelta::for_ref_increment(
+            rc,
+            logical_size as i64,
+            compressed_size as i64,
+        )
+    } else {
+        crate::kvstorage::StatsDelta::default()
+    };
+    if current_modified_after_lock == 0 {
+        delta.total_files = 1;
+    }
+
     // Decrement old hash refcount if overwriting with different content
-    if let Some(old_hash) = old_hash
-        && let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await
+    if let Some(ref old_hash) = old_hash {
+        let (old_ls, old_cs) = app_state.get_blob_sizes(old_hash).await;
+        match app_state.decrement_old_ref(old_hash, &digest).await {
+            Ok(Some(old_rc)) => {
+                delta.merge(&crate::kvstorage::StatsDelta::for_ref_decrement(
+                    old_rc, old_ls, old_cs,
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = guard.release().await;
+                return Err(e);
+            }
+        }
+    }
+
+    if let Err(e) = app_state
+        .kvstorage
+        .adjust_stats(&app_state.bucket_name, &delta)
+        .await
     {
-        let _ = guard.release().await;
-        return Err(e);
+        warn!("Failed to adjust stats during migration: {}", e);
     }
 
     if let Err(e) = guard.release().await {
@@ -767,7 +869,7 @@ pub(super) async fn migrate_single_file_from_v1_fs(
     };
 
     // Record blob metadata (sizes + conditionally increment refcount)
-    if let Err(e) = app_state
+    let new_refcount = match app_state
         .record_blob_metadata(
             &digest,
             logical_size,
@@ -776,10 +878,13 @@ pub(super) async fn migrate_single_file_from_v1_fs(
         )
         .await
     {
-        let _ = hash_guard.release().await;
-        let _ = guard.release().await;
-        return Err(e);
-    }
+        Ok(rc) => rc,
+        Err(e) => {
+            let _ = hash_guard.release().await;
+            let _ = guard.release().await;
+            return Err(e);
+        }
+    };
 
     // Update file metadata while still holding hash lock (prevents cleaner Phase 2 race)
     if let Err(e) = app_state
@@ -796,12 +901,43 @@ pub(super) async fn migrate_single_file_from_v1_fs(
         warn!("Failed to release hash lock: {}", e);
     }
 
+    // Build stats delta
+    let mut delta = if let Some(rc) = new_refcount {
+        crate::kvstorage::StatsDelta::for_ref_increment(
+            rc,
+            logical_size as i64,
+            compressed_size as i64,
+        )
+    } else {
+        crate::kvstorage::StatsDelta::default()
+    };
+    if current_modified_after_lock == 0 {
+        delta.total_files = 1;
+    }
+
     // Decrement old hash refcount if overwriting with different content
-    if let Some(old_hash) = old_hash
-        && let Err(e) = app_state.decrement_old_ref(&old_hash, &digest).await
+    if let Some(ref old_hash) = old_hash {
+        let (old_ls, old_cs) = app_state.get_blob_sizes(old_hash).await;
+        match app_state.decrement_old_ref(old_hash, &digest).await {
+            Ok(Some(old_rc)) => {
+                delta.merge(&crate::kvstorage::StatsDelta::for_ref_decrement(
+                    old_rc, old_ls, old_cs,
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = guard.release().await;
+                return Err(e);
+            }
+        }
+    }
+
+    if let Err(e) = app_state
+        .kvstorage
+        .adjust_stats(&app_state.bucket_name, &delta)
+        .await
     {
-        let _ = guard.release().await;
-        return Err(e);
+        warn!("Failed to adjust stats during migration: {}", e);
     }
 
     if let Err(e) = guard.release().await {

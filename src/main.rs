@@ -203,6 +203,15 @@ async fn run_s3dedup_server(config_path: Option<&str>, use_env: bool) -> anyhow:
         .with_label_values(&[env!("CARGO_PKG_VERSION")])
         .set(1);
 
+    info!("Computing storage stats...");
+    if let Err(e) = app_state
+        .kvstorage
+        .recompute_stats(&app_state.bucket_name)
+        .await
+    {
+        warn!("Failed to compute storage stats on startup: {}", e);
+    }
+
     start_background_tasks(app_state.clone(), &config.bucket);
 
     let app = create_router(app_state);
@@ -349,6 +358,15 @@ async fn run_live_migrate(
         init_app_state(&config).await?
     };
 
+    info!("Computing storage stats...");
+    if let Err(e) = app_state
+        .kvstorage
+        .recompute_stats(&app_state.bucket_name)
+        .await
+    {
+        warn!("Failed to compute storage stats on startup: {}", e);
+    }
+
     start_background_tasks(app_state.clone(), &config.bucket);
 
     // Start background migration worker based on mode
@@ -443,6 +461,15 @@ async fn run_live_migrate_v1(
     } else {
         init_app_state(&config).await?
     };
+
+    info!("Computing storage stats...");
+    if let Err(e) = app_state
+        .kvstorage
+        .recompute_stats(&app_state.bucket_name)
+        .await
+    {
+        warn!("Failed to compute storage stats on startup: {}", e);
+    }
 
     start_background_tasks(app_state.clone(), &config.bucket);
 
