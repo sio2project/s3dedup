@@ -134,7 +134,9 @@ For detailed pool sizing guidance, monitoring strategies, and tuning considerati
 
 ### Config File
 
-Alternatively, use a JSON config file:
+Alternatively, use a JSON config file. See [`config.example.json`](config.example.json) for a full example with all available options.
+
+Only one KV storage backend should be configured — either `sqlite` or `postgres`, matching the `kvstorage_type` setting. The other section can be omitted.
 
 ```bash
 docker run -d \

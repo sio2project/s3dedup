@@ -1,0 +1,50 @@
+{
+  "logging": {
+    "level": "info",
+    "json": false,
+    "json_log_path": "/var/log/s3dedup/s3dedup.json",
+    "json_log_rotation": "daily"
+  },
+
+  "kvstorage_type": "postgres",
+
+  "postgres": {
+    "host": "localhost",
+    "port": 5432,
+    "user": "s3dedup",
+    "password": "changeme",
+    "dbname": "s3dedup",
+    "pool_size": 20
+  },
+
+  "locks_type": "postgres",
+
+  "bucket": {
+    "name": "default",
+    "address": "0.0.0.0",
+    "port": 8080,
+    "s3storage_type": "s3",
+    "s3": {
+      "endpoint": "http://localhost:3900",
+      "access_key": "GK0123456789abcdef01234567",
+      "secret_key": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "force_path_style": true,
+      "region": "garage",
+      "key_sharding": {
+        "enabled": true,
+        "depth": 2
+      }
+    },
+    "cleaner": {
+      "enabled": true,
+      "interval_seconds": 3600,
+      "batch_size": 1000,
+      "concurrency": 8,
+      "full_scan_cron": "0 3 * * *"
+    },
+    "max_inmemory_size": 67108864,
+    "temp_dir": "/var/tmp/s3dedup",
+    "filetracker_url": "http://old-filetracker:9999",
+    "filetracker_v1_dir": "/var/lib/filetracker"
+  }
+}
