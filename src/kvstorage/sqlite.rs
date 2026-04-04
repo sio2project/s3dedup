@@ -92,6 +92,15 @@ impl KVStorageTrait for SQLite {
                 bucket TEXT NOT NULL PRIMARY KEY,
                 version TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS stats (
+                bucket TEXT PRIMARY KEY,
+                total_files INTEGER NOT NULL DEFAULT 0,
+                total_blobs INTEGER NOT NULL DEFAULT 0,
+                total_storage_bytes INTEGER NOT NULL DEFAULT 0,
+                total_logical_bytes INTEGER NOT NULL DEFAULT 0,
+                deduplicated_bytes_saved INTEGER NOT NULL DEFAULT 0,
+                total_compressed_bytes_no_dedup INTEGER NOT NULL DEFAULT 0
+            );
             CREATE INDEX IF NOT EXISTS idx_ref_file_hash ON ref_file(bucket, hash);",
         )
         .execute(&self.pool)
@@ -457,6 +466,53 @@ impl KVStorageTrait for SQLite {
     }
 
     async fn get_storage_stats(&self, bucket: &str) -> Result<crate::kvstorage::StorageStats> {
+        let result: Option<(i64, i64, i64, i64, i64, i64)> = sqlx::query_as(
+            "SELECT total_files, total_blobs, total_storage_bytes, total_logical_bytes,
+                    deduplicated_bytes_saved, total_compressed_bytes_no_dedup
+             FROM stats WHERE bucket = ?1",
+        )
+        .bind(bucket)
+        .fetch_optional(&self.pool)
+        .await?;
+        match result {
+            Some(row) => Ok(crate::kvstorage::StorageStats {
+                total_files: row.0,
+                total_blobs: row.1,
+                total_storage_bytes: row.2,
+                total_logical_bytes: row.3,
+                deduplicated_bytes_saved: row.4,
+                total_compressed_bytes_no_dedup: row.5,
+            }),
+            None => Ok(crate::kvstorage::StorageStats::default()),
+        }
+    }
+
+    async fn adjust_stats(&self, bucket: &str, delta: &crate::kvstorage::StatsDelta) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO stats (bucket, total_files, total_blobs, total_storage_bytes,
+                total_logical_bytes, deduplicated_bytes_saved, total_compressed_bytes_no_dedup)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT (bucket) DO UPDATE SET
+                total_files = stats.total_files + excluded.total_files,
+                total_blobs = stats.total_blobs + excluded.total_blobs,
+                total_storage_bytes = stats.total_storage_bytes + excluded.total_storage_bytes,
+                total_logical_bytes = stats.total_logical_bytes + excluded.total_logical_bytes,
+                deduplicated_bytes_saved = stats.deduplicated_bytes_saved + excluded.deduplicated_bytes_saved,
+                total_compressed_bytes_no_dedup = stats.total_compressed_bytes_no_dedup + excluded.total_compressed_bytes_no_dedup",
+        )
+        .bind(bucket)
+        .bind(delta.total_files)
+        .bind(delta.total_blobs)
+        .bind(delta.total_storage_bytes)
+        .bind(delta.total_logical_bytes)
+        .bind(delta.deduplicated_bytes_saved)
+        .bind(delta.total_compressed_bytes_no_dedup)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn recompute_stats(&self, bucket: &str) -> Result<crate::kvstorage::StorageStats> {
         type Row = (
             Option<i64>,
             Option<i64>,
@@ -488,14 +544,33 @@ impl KVStorageTrait for SQLite {
         .bind(bucket)
         .fetch_one(&self.pool)
         .await?;
-        Ok(crate::kvstorage::StorageStats {
+
+        let stats = crate::kvstorage::StorageStats {
             total_files: row.0.unwrap_or(0),
             total_blobs: row.1.unwrap_or(0),
             total_storage_bytes: row.2.unwrap_or(0),
             total_logical_bytes: row.3.unwrap_or(0),
             deduplicated_bytes_saved: row.4.unwrap_or(0),
             total_compressed_bytes_no_dedup: row.5.unwrap_or(0),
-        })
+        };
+
+        // Store in stats cache table
+        sqlx::query(
+            "INSERT OR REPLACE INTO stats (bucket, total_files, total_blobs, total_storage_bytes,
+                total_logical_bytes, deduplicated_bytes_saved, total_compressed_bytes_no_dedup)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(bucket)
+        .bind(stats.total_files)
+        .bind(stats.total_blobs)
+        .bind(stats.total_storage_bytes)
+        .bind(stats.total_logical_bytes)
+        .bind(stats.deduplicated_bytes_saved)
+        .bind(stats.total_compressed_bytes_no_dedup)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(stats)
     }
 
     fn get_pool_stats(&self) -> (u32, u32) {

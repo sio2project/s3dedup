@@ -238,7 +238,7 @@ async fn ft_put_file_inner(
         };
 
         // Record blob metadata: logical size, compressed size, and conditionally increment refcount
-        state
+        let new_refcount = state
             .record_blob_metadata(&digest, logical_size, compressed_size, old_hash.as_deref())
             .await
             .context("Failed to record blob metadata")?;
@@ -252,14 +252,44 @@ async fn ft_put_file_inner(
         // Release hash lock — done with S3/refcount/ref_file operations for new hash
         let _ = hash_guard.release().await;
 
+        // Build stats delta
+        let mut delta = crate::kvstorage::StatsDelta::default();
+        if let Some(rc) = new_refcount {
+            let cs = match compressed_size {
+                Some(cs) => cs as i64,
+                None => state.get_blob_sizes(&digest).await.1,
+            };
+            delta = crate::kvstorage::StatsDelta::for_ref_increment(rc, logical_size as i64, cs);
+        }
+        if current_modified == 0 {
+            delta.total_files = 1;
+        }
+
         // Handle old hash decrement
-        if let Some(old_hash) = old_hash
-            && let Err(e) = state.decrement_old_ref(&old_hash, &digest).await
+        if let Some(old_hash) = old_hash {
+            let (old_ls, old_cs) = state.get_blob_sizes(&old_hash).await;
+            match state.decrement_old_ref(&old_hash, &digest).await {
+                Ok(Some(old_rc)) => {
+                    delta.merge(&crate::kvstorage::StatsDelta::for_ref_decrement(
+                        old_rc, old_ls, old_cs,
+                    ));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    warn!(
+                        "Failed to decrement old ref for {}, refcount may be leaked (cleaner will reclaim): {}",
+                        old_hash, e
+                    );
+                }
+            }
+        }
+
+        if let Err(e) = state
+            .kvstorage
+            .adjust_stats(&state.bucket_name, &delta)
+            .await
         {
-            warn!(
-                "Failed to decrement old ref for {}, refcount may be leaked (cleaner will reclaim): {}",
-                old_hash, e
-            );
+            warn!("Failed to adjust stats: {}", e);
         }
 
         debug!("Created link {} (fast path).", path);
@@ -517,7 +547,7 @@ async fn ft_put_file_inner(
     };
 
     // Record blob metadata: logical size, compressed size, and conditionally increment refcount
-    state
+    let new_refcount = state
         .record_blob_metadata(
             &digest,
             logical_size,
@@ -540,14 +570,45 @@ async fn ft_put_file_inner(
     // Release hash lock — done with S3/refcount/ref_file operations for new hash
     let _ = hash_guard.release().await;
 
+    // Build stats delta
+    let mut delta = if let Some(rc) = new_refcount {
+        crate::kvstorage::StatsDelta::for_ref_increment(
+            rc,
+            logical_size as i64,
+            compressed_size as i64,
+        )
+    } else {
+        crate::kvstorage::StatsDelta::default()
+    };
+    if current_modified == 0 {
+        delta.total_files = 1;
+    }
+
     // If overwriting with different content, decrement old blob reference
-    if let Some(old_hash) = old_hash
-        && let Err(e) = state.decrement_old_ref(&old_hash, &digest).await
+    if let Some(old_hash) = old_hash {
+        let (old_ls, old_cs) = state.get_blob_sizes(&old_hash).await;
+        match state.decrement_old_ref(&old_hash, &digest).await {
+            Ok(Some(old_rc)) => {
+                delta.merge(&crate::kvstorage::StatsDelta::for_ref_decrement(
+                    old_rc, old_ls, old_cs,
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                warn!(
+                    "Failed to decrement old ref for {}, refcount may be leaked (cleaner will reclaim): {}",
+                    old_hash, e
+                );
+            }
+        }
+    }
+
+    if let Err(e) = state
+        .kvstorage
+        .adjust_stats(&state.bucket_name, &delta)
+        .await
     {
-        warn!(
-            "Failed to decrement old ref for {}, refcount may be leaked (cleaner will reclaim): {}",
-            old_hash, e
-        );
+        warn!("Failed to adjust stats: {}", e);
     }
 
     debug!("Created link {}.", path);

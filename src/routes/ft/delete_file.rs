@@ -5,7 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{Response, StatusCode};
 use axum::response::IntoResponse;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub async fn ft_delete_file(
     State(state): State<Arc<AppState>>,
@@ -109,6 +109,9 @@ async fn ft_delete_file_inner(
         .await
         .context("Failed to acquire hash lock")?;
 
+    // Fetch sizes before decrement (needed for stats delta, and before set_logical_size(0))
+    let (logical_sz, compressed_sz) = state.get_blob_sizes(&hash).await;
+
     // 6. Decrement reference count atomically and get new count
     let ref_count = state
         .kvstorage
@@ -135,6 +138,18 @@ async fn ft_delete_file_inner(
 
     // Release hash lock — done with refcount/S3 operations
     let _ = hash_guard.release().await;
+
+    // Build stats delta for the delete
+    let mut delta =
+        crate::kvstorage::StatsDelta::for_ref_decrement(ref_count, logical_sz, compressed_sz);
+    delta.total_files = -1;
+    if let Err(e) = state
+        .kvstorage
+        .adjust_stats(&state.bucket_name, &delta)
+        .await
+    {
+        warn!("Failed to adjust stats after delete: {}", e);
+    }
 
     // 8. Delete file metadata (path -> hash mapping and timestamp)
     state

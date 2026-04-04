@@ -98,6 +98,22 @@ impl KVStorageTrait for Postgres {
         .execute(&self.pool)
         .await?;
 
+        let stats_table = self.table_name("stats");
+        sqlx::query(&format!(
+            "CREATE TABLE IF NOT EXISTS {} (
+                bucket TEXT PRIMARY KEY,
+                total_files BIGINT NOT NULL DEFAULT 0,
+                total_blobs BIGINT NOT NULL DEFAULT 0,
+                total_storage_bytes BIGINT NOT NULL DEFAULT 0,
+                total_logical_bytes BIGINT NOT NULL DEFAULT 0,
+                deduplicated_bytes_saved BIGINT NOT NULL DEFAULT 0,
+                total_compressed_bytes_no_dedup BIGINT NOT NULL DEFAULT 0
+            )",
+            stats_table
+        ))
+        .execute(&self.pool)
+        .await?;
+
         // Create index on ref_file(bucket, hash) for efficient hash lookups by cleaner
         sqlx::query(&format!(
             "CREATE INDEX IF NOT EXISTS idx_{}_hash ON {}(bucket, hash)",
@@ -590,10 +606,65 @@ impl KVStorageTrait for Postgres {
     }
 
     async fn get_storage_stats(&self, bucket: &str) -> Result<crate::kvstorage::StorageStats> {
+        let stats_table = self.table_name("stats");
+        let query = format!(
+            "SELECT total_files, total_blobs, total_storage_bytes, total_logical_bytes,
+                    deduplicated_bytes_saved, total_compressed_bytes_no_dedup
+             FROM {} WHERE bucket = $1",
+            stats_table
+        );
+        let result: Option<(i64, i64, i64, i64, i64, i64)> = sqlx::query_as(&query)
+            .bind(bucket)
+            .fetch_optional(&self.pool)
+            .await?;
+        match result {
+            Some(row) => Ok(crate::kvstorage::StorageStats {
+                total_files: row.0,
+                total_blobs: row.1,
+                total_storage_bytes: row.2,
+                total_logical_bytes: row.3,
+                deduplicated_bytes_saved: row.4,
+                total_compressed_bytes_no_dedup: row.5,
+            }),
+            None => Ok(crate::kvstorage::StorageStats::default()),
+        }
+    }
+
+    async fn adjust_stats(&self, bucket: &str, delta: &crate::kvstorage::StatsDelta) -> Result<()> {
+        let stats_table = self.table_name("stats");
+        let query = format!(
+            "INSERT INTO {t} (bucket, total_files, total_blobs, total_storage_bytes,
+                total_logical_bytes, deduplicated_bytes_saved, total_compressed_bytes_no_dedup)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (bucket) DO UPDATE SET
+                total_files = {t}.total_files + EXCLUDED.total_files,
+                total_blobs = {t}.total_blobs + EXCLUDED.total_blobs,
+                total_storage_bytes = {t}.total_storage_bytes + EXCLUDED.total_storage_bytes,
+                total_logical_bytes = {t}.total_logical_bytes + EXCLUDED.total_logical_bytes,
+                deduplicated_bytes_saved = {t}.deduplicated_bytes_saved + EXCLUDED.deduplicated_bytes_saved,
+                total_compressed_bytes_no_dedup = {t}.total_compressed_bytes_no_dedup + EXCLUDED.total_compressed_bytes_no_dedup",
+            t = stats_table
+        );
+        sqlx::query(&query)
+            .bind(bucket)
+            .bind(delta.total_files)
+            .bind(delta.total_blobs)
+            .bind(delta.total_storage_bytes)
+            .bind(delta.total_logical_bytes)
+            .bind(delta.deduplicated_bytes_saved)
+            .bind(delta.total_compressed_bytes_no_dedup)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn recompute_stats(&self, bucket: &str) -> Result<crate::kvstorage::StorageStats> {
         let modified_table = self.table_name("modified");
         let refcount_table = self.table_name("refcount");
         let logical_size_table = self.table_name("logical_size");
+        let stats_table = self.table_name("stats");
 
+        // Expensive full-scan query
         let query = format!(
             "SELECT
                 (SELECT COUNT(*) FROM {modified} WHERE bucket = $1),
@@ -621,14 +692,42 @@ impl KVStorageTrait for Postgres {
             .bind(bucket)
             .fetch_one(&self.pool)
             .await?;
-        Ok(crate::kvstorage::StorageStats {
+
+        let stats = crate::kvstorage::StorageStats {
             total_files: row.0,
             total_blobs: row.1,
             total_storage_bytes: row.2,
             total_logical_bytes: row.3,
             deduplicated_bytes_saved: row.4,
             total_compressed_bytes_no_dedup: row.5,
-        })
+        };
+
+        // Store in stats cache table
+        let upsert = format!(
+            "INSERT INTO {t} (bucket, total_files, total_blobs, total_storage_bytes,
+                total_logical_bytes, deduplicated_bytes_saved, total_compressed_bytes_no_dedup)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (bucket) DO UPDATE SET
+                total_files = EXCLUDED.total_files,
+                total_blobs = EXCLUDED.total_blobs,
+                total_storage_bytes = EXCLUDED.total_storage_bytes,
+                total_logical_bytes = EXCLUDED.total_logical_bytes,
+                deduplicated_bytes_saved = EXCLUDED.deduplicated_bytes_saved,
+                total_compressed_bytes_no_dedup = EXCLUDED.total_compressed_bytes_no_dedup",
+            t = stats_table
+        );
+        sqlx::query(&upsert)
+            .bind(bucket)
+            .bind(stats.total_files)
+            .bind(stats.total_blobs)
+            .bind(stats.total_storage_bytes)
+            .bind(stats.total_logical_bytes)
+            .bind(stats.deduplicated_bytes_saved)
+            .bind(stats.total_compressed_bytes_no_dedup)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(stats)
     }
 
     fn get_pool_stats(&self) -> (u32, u32) {

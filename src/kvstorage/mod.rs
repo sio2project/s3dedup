@@ -126,6 +126,13 @@ pub(crate) trait KVStorageTrait {
     /// Get all storage statistics in a single query (avoids repeated expensive JOINs).
     async fn get_storage_stats(&self, bucket: &str) -> Result<StorageStats>;
 
+    /// Atomically adjust cached stats counters by deltas.
+    async fn adjust_stats(&self, bucket: &str, delta: &StatsDelta) -> Result<()>;
+
+    /// Full-scan recompute of stats, storing result in stats cache table.
+    /// Used on startup and after cleaner runs for reconciliation.
+    async fn recompute_stats(&self, bucket: &str) -> Result<StorageStats>;
+
     /// Get connection pool statistics (active connections, idle connections)
     /// Returns (active, idle)
     fn get_pool_stats(&self) -> (u32, u32) {
@@ -143,6 +150,71 @@ pub struct StorageStats {
     pub total_logical_bytes: i64,
     pub deduplicated_bytes_saved: i64,
     pub total_compressed_bytes_no_dedup: i64,
+}
+
+/// Incremental deltas to apply to the cached stats table.
+#[derive(Debug, Default, Clone)]
+pub struct StatsDelta {
+    pub total_files: i64,
+    pub total_blobs: i64,
+    pub total_storage_bytes: i64,
+    pub total_logical_bytes: i64,
+    pub deduplicated_bytes_saved: i64,
+    pub total_compressed_bytes_no_dedup: i64,
+}
+
+impl StatsDelta {
+    /// Delta for a blob refcount increment (PUT/migration).
+    /// `new_refcount` is the refcount AFTER the increment.
+    pub fn for_ref_increment(new_refcount: i32, logical_size: i64, compressed_size: i64) -> Self {
+        if new_refcount == 1 {
+            Self {
+                total_blobs: 1,
+                total_storage_bytes: compressed_size,
+                total_logical_bytes: logical_size,
+                total_compressed_bytes_no_dedup: compressed_size,
+                ..Default::default()
+            }
+        } else {
+            Self {
+                total_logical_bytes: logical_size,
+                total_compressed_bytes_no_dedup: compressed_size,
+                deduplicated_bytes_saved: logical_size,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// Delta for a blob refcount decrement (overwrite/DELETE).
+    /// `new_refcount` is the refcount AFTER the decrement.
+    pub fn for_ref_decrement(new_refcount: i32, logical_size: i64, compressed_size: i64) -> Self {
+        if new_refcount <= 0 {
+            Self {
+                total_blobs: -1,
+                total_storage_bytes: -compressed_size,
+                total_logical_bytes: -logical_size,
+                total_compressed_bytes_no_dedup: -compressed_size,
+                ..Default::default()
+            }
+        } else {
+            Self {
+                total_logical_bytes: -logical_size,
+                total_compressed_bytes_no_dedup: -compressed_size,
+                deduplicated_bytes_saved: -logical_size,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// Merge another delta into this one.
+    pub fn merge(&mut self, other: &StatsDelta) {
+        self.total_files += other.total_files;
+        self.total_blobs += other.total_blobs;
+        self.total_storage_bytes += other.total_storage_bytes;
+        self.total_logical_bytes += other.total_logical_bytes;
+        self.deduplicated_bytes_saved += other.deduplicated_bytes_saved;
+        self.total_compressed_bytes_no_dedup += other.total_compressed_bytes_no_dedup;
+    }
 }
 
 #[derive(Clone)]
@@ -599,6 +671,24 @@ impl KVStorage {
             KVStorage::SQLite(storage) => storage.get_storage_stats(bucket).await,
             #[cfg(feature = "test-mocks")]
             KVStorage::Mock(storage) => storage.get_storage_stats(bucket).await,
+        }
+    }
+
+    pub async fn adjust_stats(&self, bucket: &str, delta: &StatsDelta) -> Result<()> {
+        match self {
+            KVStorage::Postgres(storage) => storage.adjust_stats(bucket, delta).await,
+            KVStorage::SQLite(storage) => storage.adjust_stats(bucket, delta).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.adjust_stats(bucket, delta).await,
+        }
+    }
+
+    pub async fn recompute_stats(&self, bucket: &str) -> Result<StorageStats> {
+        match self {
+            KVStorage::Postgres(storage) => storage.recompute_stats(bucket).await,
+            KVStorage::SQLite(storage) => storage.recompute_stats(bucket).await,
+            #[cfg(feature = "test-mocks")]
+            KVStorage::Mock(storage) => storage.recompute_stats(bucket).await,
         }
     }
 }

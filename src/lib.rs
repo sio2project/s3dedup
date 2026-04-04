@@ -153,6 +153,21 @@ impl AppState {
 
     // --- Shared helpers for PUT and migration ---
 
+    /// Fetch logical_size and compressed_size for a blob hash (returns 0 for missing entries).
+    pub async fn get_blob_sizes(&self, hash: &str) -> (i64, i64) {
+        let ls = self
+            .kvstorage
+            .get_logical_size(&self.bucket_name, hash)
+            .await
+            .unwrap_or(0) as i64;
+        let cs = self
+            .kvstorage
+            .get_compressed_size(&self.bucket_name, hash)
+            .await
+            .unwrap_or(0) as i64;
+        (ls, cs)
+    }
+
     /// Set ref_file and modified timestamp for a path.
     pub async fn update_file_ref(&self, path: &str, digest: &str, timestamp: i64) -> Result<()> {
         self.kvstorage
@@ -168,13 +183,14 @@ impl AppState {
     /// If `old_hash` is Some and equals `digest`, refcount is NOT incremented (same content).
     /// Pass `None` for `old_hash` when there is no previous version (new file).
     /// Pass `None` for `compressed_size` to skip updating it (e.g. dedup hit where body wasn't read).
+    /// Returns `Some(new_refcount)` if refcount was incremented, `None` if same content (no change).
     pub async fn record_blob_metadata(
         &self,
         digest: &str,
         logical_size: usize,
         compressed_size: Option<usize>,
         old_hash: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<Option<i32>> {
         self.kvstorage
             .set_logical_size(&self.bucket_name, digest, logical_size)
             .await?;
@@ -186,18 +202,22 @@ impl AppState {
 
         let same_content = matches!(old_hash, Some(old) if !old.is_empty() && old == digest);
         if !same_content {
-            self.kvstorage
+            let new_refcount = self
+                .kvstorage
                 .atomic_increment_ref_count(&self.bucket_name, digest)
                 .await?;
+            Ok(Some(new_refcount))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 
     /// Decrement the refcount for `old_hash` and delete the S3 blob if it reaches 0.
     /// Acquires hash lock internally. No-op if `old_hash` is empty or equals `new_digest`.
-    pub async fn decrement_old_ref(&self, old_hash: &str, new_digest: &str) -> Result<()> {
+    /// Returns `Some(new_refcount)` after decrement, or `None` if no-op.
+    pub async fn decrement_old_ref(&self, old_hash: &str, new_digest: &str) -> Result<Option<i32>> {
         if old_hash.is_empty() || old_hash == new_digest {
-            return Ok(());
+            return Ok(None);
         }
 
         let hash_lock_key = locks::hash_lock(&self.bucket_name, old_hash);
@@ -220,7 +240,7 @@ impl AppState {
         if let Err(e) = guard.release().await {
             warn!("Failed to release old hash lock: {}", e);
         }
-        Ok(())
+        Ok(Some(ref_count))
     }
 
     /// Check health of database and S3 connectivity

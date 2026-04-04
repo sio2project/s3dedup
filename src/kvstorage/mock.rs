@@ -340,4 +340,16 @@ impl KVStorageTrait for MockKVStorage {
             ..Default::default()
         })
     }
+
+    async fn adjust_stats(
+        &self,
+        _bucket: &str,
+        _delta: &crate::kvstorage::StatsDelta,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn recompute_stats(&self, bucket: &str) -> Result<StorageStats> {
+        self.get_storage_stats(bucket).await
+    }
 }

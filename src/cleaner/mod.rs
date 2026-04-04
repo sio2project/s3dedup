@@ -231,6 +231,11 @@ impl Cleaner {
             self.bucket_name, total_deletes, total_bytes_freed
         );
 
+        // Reconcile stats cache after cleanup to correct any drift
+        if let Err(e) = self.kvstorage.recompute_stats(&self.bucket_name).await {
+            warn!("Failed to reconcile stats after cleanup: {}", e);
+        }
+
         self.update_cleanup_metrics(total_deletes, total_bytes_freed);
         Ok(())
     }
