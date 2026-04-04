@@ -113,17 +113,20 @@ async fn ft_head_file_inner(state: &AppState, path: &str) -> Result<Response<Bod
     // Release lock — all metadata reads complete
     let _ = guard.release().await;
 
-    // For legacy blobs without stored compressed_size, fall back to S3 head_object.
-    // This runs after lock release — a concurrent DELETE could remove the object,
-    // causing us to return Content-Length: 0. This is acceptable: the file is being
-    // deleted anyway, and HEAD has no body to truncate.
-    let content_length = if compressed_size > 0 {
-        compressed_size as i64
-    } else {
-        match state.s3storage.object_exists_with_size(&hash).await {
-            Ok(Some(size)) => size,
-            _ => 0,
+    // Always query S3 for the true object size. DB compressed_size can diverge from
+    // actual S3 object size (e.g. different gzip encodings across uploads with same
+    // content hash). Falls back to DB value if S3 HEAD fails.
+    let content_length = match state.s3storage.object_exists_with_size(&hash).await {
+        Ok(Some(s3_size)) => {
+            if compressed_size > 0 && s3_size != compressed_size as i64 {
+                error!(
+                    "compressed_size mismatch for hash {}: db={} s3={}",
+                    hash, compressed_size, s3_size
+                );
+            }
+            s3_size
         }
+        _ => compressed_size as i64,
     };
 
     Ok(build_ft_file_response(

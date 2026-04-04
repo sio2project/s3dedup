@@ -141,11 +141,19 @@ async fn ft_get_file_inner(state: &AppState, path: &str) -> Result<Response<Body
     // (including Garage) complete in-progress GETs even if object is deleted.
     let _ = guard.release().await;
 
-    let content_length = if compressed_size > 0 {
-        compressed_size as i64
-    } else {
-        s3_content_length.unwrap_or(0)
-    };
+    // Use S3 content-length as source of truth for Content-Length header.
+    // DB compressed_size can diverge from actual S3 object size (e.g. different gzip
+    // encodings across uploads with same content hash).
+    let content_length = s3_content_length.unwrap_or(compressed_size as i64);
+    if compressed_size > 0
+        && let Some(s3_len) = s3_content_length
+        && s3_len != compressed_size as i64
+    {
+        error!(
+            "compressed_size mismatch for hash {}: db={} s3={}",
+            hash, compressed_size, s3_len
+        );
+    }
 
     debug!(
         "GET {} returning Last-Modified: {} (unix: {})",
@@ -208,11 +216,16 @@ async fn serve_file(state: &AppState, path: &str) -> Result<Response<Body>> {
 
     let _ = guard.release().await;
 
-    let content_length = if compressed_size > 0 {
-        compressed_size as i64
-    } else {
-        s3_content_length.unwrap_or(0)
-    };
+    let content_length = s3_content_length.unwrap_or(compressed_size as i64);
+    if compressed_size > 0
+        && let Some(s3_len) = s3_content_length
+        && s3_len != compressed_size as i64
+    {
+        error!(
+            "compressed_size mismatch for hash {}: db={} s3={}",
+            hash, compressed_size, s3_len
+        );
+    }
 
     let body = Body::new(byte_stream.into_inner());
     Ok(build_ft_file_response(
