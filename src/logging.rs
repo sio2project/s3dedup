@@ -1,5 +1,6 @@
 use anyhow::Result;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling::Rotation;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -12,6 +13,28 @@ pub struct LoggingConfig {
     /// logs and the file gets JSON logs (for rsyslog / scraping).
     #[serde(default)]
     pub json_log_path: Option<String>,
+    /// Rotation period for the JSON log file: "daily", "hourly", "minutely", or "never".
+    /// Default: "daily". When rotation is enabled, the configured path becomes a prefix
+    /// and a date suffix is appended (e.g. `s3dedup.json.2026-04-04`).
+    #[serde(default = "default_rotation")]
+    pub json_log_rotation: String,
+}
+
+fn default_rotation() -> String {
+    "daily".to_string()
+}
+
+fn parse_rotation(s: &str) -> Rotation {
+    match s.to_lowercase().as_str() {
+        "daily" => Rotation::DAILY,
+        "hourly" => Rotation::HOURLY,
+        "minutely" => Rotation::MINUTELY,
+        "never" => Rotation::NEVER,
+        other => {
+            eprintln!("Unknown json_log_rotation value '{other}', defaulting to daily");
+            Rotation::DAILY
+        }
+    }
 }
 
 /// Sets up the global tracing subscriber.
@@ -36,7 +59,9 @@ pub fn setup(logging_config: &LoggingConfig) -> Result<Option<WorkerGuard>> {
             .file_name()
             .unwrap_or_else(|| std::ffi::OsStr::new("s3dedup.json"));
 
-        let file_appender = tracing_appender::rolling::never(dir, filename);
+        let rotation = parse_rotation(&logging_config.json_log_rotation);
+        let file_appender =
+            tracing_appender::rolling::RollingFileAppender::new(rotation, dir, filename);
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
         let json_layer = fmt::layer()

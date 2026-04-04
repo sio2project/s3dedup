@@ -90,6 +90,7 @@ pub fn create_test_config(prefix: &str) -> (Config, String) {
             level: "info".to_string(),
             json: false,
             json_log_path: None,
+            json_log_rotation: "never".to_string(),
         },
         kvstorage_type,
         sqlite,
