@@ -87,6 +87,8 @@ impl Config {
                 .parse()
                 .unwrap_or(false),
             json_log_path: std::env::var("JSON_LOG_PATH").ok(),
+            json_log_rotation: std::env::var("JSON_LOG_ROTATION")
+                .unwrap_or_else(|_| "daily".to_string()),
         };
 
         let kvstorage_type_str =

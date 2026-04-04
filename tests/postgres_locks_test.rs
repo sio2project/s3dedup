@@ -30,6 +30,7 @@ mod postgres_locks_tests {
                 level: "info".to_string(),
                 json: false,
                 json_log_path: None,
+                json_log_rotation: "never".to_string(),
             },
             kvstorage_type: KVStorageType::Postgres,
             sqlite: None,

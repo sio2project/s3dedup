@@ -63,6 +63,7 @@ docker run -d \
 | `LOG_LEVEL` | `info` | Logging level (trace, debug, info, warn, error) |
 | `LOG_JSON` | `false` | Enable JSON logging on stdout |
 | `JSON_LOG_PATH` | - | Path for JSON log file (enables dual output: pretty stdout + JSON file) |
+| `JSON_LOG_ROTATION` | `daily` | Log file rotation period: `daily`, `hourly`, `minutely`, or `never`. When enabled, a date suffix is appended to the filename (e.g. `s3dedup.json.2026-04-04`) |
 | `BUCKET_NAME` | `default` | Bucket name identifier |
 | `LISTEN_ADDRESS` | `0.0.0.0` | Server bind address |
 | `LISTEN_PORT` | `8080` | Server port |
