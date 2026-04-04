@@ -220,8 +220,8 @@ impl Metrics {
         let mut metrics = json!({});
 
         for mf in metric_families {
-            let name = mf.get_name();
-            let help = mf.get_help();
+            let name = mf.name();
+            let help = mf.help();
             let metric_type = format!("{:?}", mf.get_field_type());
 
             let mut metric_values = vec![];
@@ -229,20 +229,20 @@ impl Metrics {
             for m in mf.get_metric() {
                 let mut labels = json!({});
                 for label in m.get_label() {
-                    labels[label.get_name()] = json!(label.get_value());
+                    labels[label.name()] = json!(label.value());
                 }
 
-                let value = if m.has_counter() {
+                let value = if m.get_counter().is_some() {
                     json!({
                         "labels": labels,
-                        "value": m.get_counter().get_value(),
+                        "value": m.get_counter().value(),
                     })
-                } else if m.has_gauge() {
+                } else if m.get_gauge().is_some() {
                     json!({
                         "labels": labels,
-                        "value": m.get_gauge().get_value(),
+                        "value": m.get_gauge().value(),
                     })
-                } else if m.has_histogram() {
+                } else if m.get_histogram().is_some() {
                     json!({
                         "labels": labels,
                         "sample_count": m.get_histogram().get_sample_count(),
