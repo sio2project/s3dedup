@@ -546,12 +546,18 @@ async fn ft_put_file_inner(
         None
     };
 
-    // Record blob metadata: logical size, compressed size, and conditionally increment refcount
+    // Record blob metadata: logical size, compressed size, and conditionally increment refcount.
+    // On dedup hit, skip compressed_size update — the existing S3 blob may use a different
+    // gzip encoding (e.g. from migration recompression) with a different byte length.
     let new_refcount = state
         .record_blob_metadata(
             &digest,
             logical_size,
-            Some(compressed_size),
+            if blob_exists {
+                None
+            } else {
+                Some(compressed_size)
+            },
             old_hash.as_deref(),
         )
         .await
@@ -570,13 +576,14 @@ async fn ft_put_file_inner(
     // Release hash lock — done with S3/refcount/ref_file operations for new hash
     let _ = hash_guard.release().await;
 
-    // Build stats delta
+    // Build stats delta — on dedup hit use DB compressed_size (matches actual S3 object)
+    let stats_cs = if blob_exists {
+        state.get_blob_sizes(&digest).await.1
+    } else {
+        compressed_size as i64
+    };
     let mut delta = if let Some(rc) = new_refcount {
-        crate::kvstorage::StatsDelta::for_ref_increment(
-            rc,
-            logical_size as i64,
-            compressed_size as i64,
-        )
+        crate::kvstorage::StatsDelta::for_ref_increment(rc, logical_size as i64, stats_cs)
     } else {
         crate::kvstorage::StatsDelta::default()
     };
