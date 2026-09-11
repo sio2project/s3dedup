@@ -881,6 +881,7 @@ async fn flaky_mock_ft_list(
         .unwrap()
 }
 
+#[allow(deprecated)]
 async fn flaky_mock_ft_get(
     axum::extract::State(state): axum::extract::State<FlakyMockFiletrackerState>,
     axum::extract::Path(path): axum::extract::Path<String>,
