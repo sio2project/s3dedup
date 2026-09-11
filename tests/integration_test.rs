@@ -1292,6 +1292,7 @@ async fn test_list_files_basic() {
     let content1 = b"File 1 content";
     let content2 = b"File 2 content";
     let content3 = b"File 3 content";
+    let content4 = b"File 4 content";
 
     let compressed1 = storage_helpers::compress_gzip(content1).unwrap();
     let sha1 = storage_helpers::compute_sha256(content1);
@@ -1299,6 +1300,8 @@ async fn test_list_files_basic() {
     let sha2 = storage_helpers::compute_sha256(content2);
     let compressed3 = storage_helpers::compress_gzip(content3).unwrap();
     let sha3 = storage_helpers::compute_sha256(content3);
+    let compressed4 = storage_helpers::compress_gzip(content4).unwrap();
+    let sha4 = storage_helpers::compute_sha256(content4);
 
     let timestamp = chrono::Utc::now().to_rfc2822();
     let encoded_timestamp = urlencoding::encode(&timestamp);
@@ -1358,11 +1361,57 @@ async fn test_list_files_basic() {
         .unwrap();
     assert_eq!(put3.status(), StatusCode::OK);
 
+    let put4 = app
+        .call(
+            Request::builder()
+                .uri(format!(
+                    "/ft/files/first/second/file4.txt?last_modified={}",
+                    encoded_timestamp
+                ))
+                .method("PUT")
+                .header("Content-Encoding", "gzip")
+                .header("SHA256-Checksum", &sha4)
+                .header("Logical-Size", content4.len().to_string())
+                .body(Body::from(compressed4))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put4.status(), StatusCode::OK);
+
+    use axum::body::to_bytes;
     // List files under "dir/" - should get 2 files
+    for path in ["dir/", "dir", "dir//", "/dir/"] {
+        let url = format!("/ft/list/{}", path);
+        let list_response = app
+            .call(
+                Request::builder()
+                    .uri(url)
+                    .method("GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_response.status(), StatusCode::OK);
+
+        let body_bytes = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        let files: Vec<&str> = body_str.trim().split('\n').collect();
+        assert_eq!(files.len(), 2);
+        assert!(files.contains(&"file1.txt"));
+        assert!(files.contains(&"file2.txt"));
+    }
+
+    // List files under "di" - should get no files, since we are listing
+    // files under a directory in the unix sense, not simply by prefix.
     let list_response = app
         .call(
             Request::builder()
-                .uri("/ft/list/dir/")
+                .uri("/ft/list/di")
                 .method("GET")
                 .body(Body::empty())
                 .unwrap(),
@@ -1372,15 +1421,11 @@ async fn test_list_files_basic() {
 
     assert_eq!(list_response.status(), StatusCode::OK);
 
-    use axum::body::to_bytes;
     let body_bytes = to_bytes(list_response.into_body(), usize::MAX)
         .await
         .unwrap();
     let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
-    let files: Vec<&str> = body_str.trim().split('\n').collect();
-    assert_eq!(files.len(), 2);
-    assert!(files.contains(&"dir/file1.txt"));
-    assert!(files.contains(&"dir/file2.txt"));
+    assert_eq!(body_str.len(), 0);
 
     // List files under "other/" - should get 1 file
     let list_response2 = app
@@ -1399,27 +1444,108 @@ async fn test_list_files_basic() {
         .await
         .unwrap();
     let body_str2 = String::from_utf8(body_bytes2.to_vec()).unwrap();
-    assert_eq!(body_str2.trim(), "other/file3.txt");
+    assert_eq!(body_str2.trim(), "file3.txt");
+
+    // List files under "first/" - should get one file, with only first/
+    // stripped from the path (as we expect relative paths in responses).
+    for path in ["first/", "first", "first//", "/first/"] {
+        let url = format!("/ft/list/{}", path);
+        let list_response = app
+            .call(
+                Request::builder()
+                    .uri(url)
+                    .method("GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_response.status(), StatusCode::OK);
+
+        let body_bytes = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        assert_eq!(body_str, "second/file4.txt\n");
+    }
+
+    // List files under "first/second" - should get one file, with first/second/
+    // stripped from the path (as we expect relative paths in responses).
+    for path in [
+        "first/second/",
+        "first/second",
+        "first/second//",
+        "/first/second/",
+    ] {
+        let url = format!("/ft/list/{}", path);
+        let list_response = app
+            .call(
+                Request::builder()
+                    .uri(url)
+                    .method("GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_response.status(), StatusCode::OK);
+
+        let body_bytes = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        assert_eq!(body_str, "file4.txt\n");
+    }
+
+    // List files under "first/second/file..." - should get zero files,
+    // as we want to list directories, not files (HEAD could be used for that).
+    // NOTE: This isn't specified in the protocol.
+    for path in ["first/second/file4.txt", "first/second/file"] {
+        let url = format!("/ft/list/{}", path);
+        let list_response = app
+            .call(
+                Request::builder()
+                    .uri(url)
+                    .method("GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(list_response.status(), StatusCode::OK);
+
+        let body_bytes = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        assert_eq!(body_str, "");
+    }
 
     // List all files - should get 3 files
-    let list_response3 = app
-        .call(
-            Request::builder()
-                .uri("/ft/list/")
-                .method("GET")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(list_response3.status(), StatusCode::OK);
+    for path in ["", "/", "//"] {
+        let url = format!("/ft/list/{}", path);
+        let list_response3 = app
+            .call(
+                Request::builder()
+                    .uri(url)
+                    .method("GET")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list_response3.status(), StatusCode::OK);
 
-    let body_bytes3 = to_bytes(list_response3.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body_str3 = String::from_utf8(body_bytes3.to_vec()).unwrap();
-    let all_files: Vec<&str> = body_str3.trim().split('\n').collect();
-    assert_eq!(all_files.len(), 3);
+        let body_bytes3 = to_bytes(list_response3.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str3 = String::from_utf8(body_bytes3.to_vec()).unwrap();
+        let all_files: Vec<&str> = body_str3.trim().split('\n').collect();
+        assert_eq!(all_files.len(), 4);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1504,7 +1630,7 @@ async fn test_list_files_with_timestamp() {
         .await
         .unwrap();
     let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
-    assert_eq!(body_str.trim(), "test/old.txt");
+    assert_eq!(body_str.trim(), "old.txt");
 
     // List files with current timestamp - should get both files
     let current_timestamp = chrono::Utc::now().to_rfc2822();
@@ -1528,8 +1654,8 @@ async fn test_list_files_with_timestamp() {
     let body_str2 = String::from_utf8(body_bytes2.to_vec()).unwrap();
     let files: Vec<&str> = body_str2.trim().split('\n').collect();
     assert_eq!(files.len(), 2);
-    assert!(files.contains(&"test/old.txt"));
-    assert!(files.contains(&"test/new.txt"));
+    assert!(files.contains(&"old.txt"));
+    assert!(files.contains(&"new.txt"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
