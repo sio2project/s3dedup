@@ -26,9 +26,15 @@ pub async fn ft_list_files(
 ) -> impl IntoResponse {
     let record_metrics = MetricsRecorder::new("GET", "/ft/list");
 
-    // Extract path or use empty string for root
+    // Extract path or use empty string for root. Ensure the path ends with a /,
+    // except for empty paths.
     let path_str = path.map(|Path(p)| p).unwrap_or_default();
-    let path = path_str.strip_prefix('/').unwrap_or(&path_str);
+    let path_trimmed = path_str.trim_matches('/');
+    let path_proper = if path_trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", path_trimmed)
+    };
 
     // Parse the timestamp (optional for LIST - defaults to current time if not provided)
     let timestamp = match crate::routes::ft::utils::extract_timestamp(
@@ -44,14 +50,14 @@ pub async fn ft_list_files(
         }
     };
 
-    match ft_list_files_inner(&state, path, timestamp).await {
+    match ft_list_files_inner(&state, &path_proper, timestamp).await {
         Ok(response) => {
             let status = response.status().as_u16().to_string();
             record_metrics.record(&status);
             response
         }
         Err(e) => {
-            error!("LIST {} failed: {}", path, e);
+            error!("LIST {} failed: {}", path_str, e);
             record_metrics.record("500");
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -75,8 +81,16 @@ async fn ft_list_files_inner(
         .await
         .context("Failed to list files")?;
 
-    // Return files as newline-separated list
-    let response_body = files.join("\n");
+    // Return files as newline-separated list,
+    // with the path prefix stripped each file entry.
+    // This works under the assumption that path ends with a /
+    // unless it would just be "/".
+    let response_body = files
+        .iter()
+        .map(|f| f.strip_prefix(path).unwrap_or(f))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     if !response_body.is_empty() {
         Ok(Response::builder()
             .status(StatusCode::OK)

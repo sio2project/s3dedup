@@ -359,7 +359,7 @@ async fn test_list_files_underscore_wildcard_escaped() {
     let ts = make_rfc2822(1700000300);
 
     // Upload files
-    let req = build_put_request("uscore/a_b.txt", b"ab", &ts);
+    let req = build_put_request("usco_e/a_b.txt", b"ab", &ts);
     let r = app.call(req).await.unwrap();
     assert_eq!(r.status(), StatusCode::OK);
 
@@ -367,12 +367,12 @@ async fn test_list_files_underscore_wildcard_escaped() {
     let r = app.call(req).await.unwrap();
     assert_eq!(r.status(), StatusCode::OK);
 
-    // LIST with prefix "uscore/a_b" — underscore should be literal, not wildcard
+    // LIST with prefix "usco_e/" — underscore should be literal, not wildcard
     let encoded_ts = urlencoding::encode(&ts);
     let list_response = app
         .call(
             Request::builder()
-                .uri(format!("/ft/list/uscore/a_b?last_modified={}", encoded_ts))
+                .uri(format!("/ft/list/usco_e/?last_modified={}", encoded_ts))
                 .method("GET")
                 .body(Body::empty())
                 .unwrap(),
@@ -388,7 +388,7 @@ async fn test_list_files_underscore_wildcard_escaped() {
         .unwrap();
     let body_str = String::from_utf8(body.to_vec()).unwrap();
 
-    // Should only match "uscore/a_b.txt", NOT "uscore/axb.txt"
+    // Should only match "usco_e/a_b.txt", NOT "uscore/axb.txt"
     let files: Vec<&str> = body_str
         .trim()
         .split('\n')
