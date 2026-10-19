@@ -23,7 +23,7 @@ serde_json = "1.0.140"
 sqlx = { version = "0.8.3", features = ["postgres", "sqlite", "runtime-tokio"]}
 log = "0.4.26"
 chrono = "0.4.40"
-aws-sdk-s3 = { version = "1.52.0", features = ["behavior-version-latest"] }
+aws-sdk-s3 = { version = "1.52.0", default-features = false, features = ["behavior-version-latest", "sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
 aws-config = { version = "1.5.0", features = ["behavior-version-latest"] }
 sha2 = "0.10.8"
 bytes = "1.5.0"
