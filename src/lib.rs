@@ -6,6 +6,7 @@ use tracing::{debug, warn};
 pub mod cleaner;
 pub mod config;
 pub mod db;
+pub mod files_cli;
 pub mod filetracker_client;
 pub mod kvstorage;
 pub mod locks;
