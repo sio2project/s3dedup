@@ -107,6 +107,60 @@ enum Commands {
         #[arg(short, long, default_value = "10")]
         max_concurrency: usize,
     },
+    /// Browse, download, upload and delete files on a running s3dedup server
+    Files {
+        /// Server URL, e.g. http://s3dedup-sio2:8080 (the /ft suffix is optional)
+        #[arg(short, long, env = "S3DEDUP_URL")]
+        url: String,
+        #[command(subcommand)]
+        command: FilesCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum FilesCommand {
+    /// List files under a path (recursively), one full path per line
+    Ls {
+        /// Path prefix to list (default: everything)
+        #[arg(default_value = "")]
+        path: String,
+        /// Also show logical size and version of each file
+        #[arg(short, long)]
+        long: bool,
+    },
+    /// Show metadata of a file
+    Stat {
+        /// Remote path
+        path: String,
+    },
+    /// Download a file (decompressed)
+    Get {
+        /// Remote path
+        path: String,
+        /// Local destination; "-" or omitted writes to stdout
+        output: Option<String>,
+    },
+    /// Upload a file
+    Put {
+        /// Local file; "-" reads from stdin
+        input: String,
+        /// Remote path
+        path: String,
+        /// File version as Unix timestamp or RFC 2822 date (default: now).
+        /// The server keeps the newer version if it already has one.
+        #[arg(long, value_name = "VERSION")]
+        last_modified: Option<String>,
+    },
+    /// Delete files
+    Rm {
+        /// Remote paths
+        #[arg(required = true)]
+        paths: Vec<String>,
+        /// Delete only if the server version is not newer than this
+        /// (Unix timestamp or RFC 2822 date, default: now)
+        #[arg(long, value_name = "VERSION")]
+        last_modified: Option<String>,
+    },
 }
 
 async fn run_server(addr: SocketAddr, app: Router) -> anyhow::Result<()> {
@@ -517,6 +571,196 @@ async fn run_live_migrate_v1(
     run_server(address, app).await
 }
 
+fn format_version(ts: i64) -> String {
+    chrono::DateTime::from_timestamp(ts, 0)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| ts.to_string())
+}
+
+fn version_or_now(version: Option<&str>) -> anyhow::Result<i64> {
+    match version {
+        Some(v) => s3dedup::files_cli::parse_version(v),
+        None => Ok(chrono::Utc::now().timestamp()),
+    }
+}
+
+/// Resolve the local destination of `files get`: like `cp`, a directory
+/// (existing, or given with a trailing slash) gets the remote file name.
+fn get_destination(remote: &str, output: &str) -> std::path::PathBuf {
+    let output_path = std::path::Path::new(output);
+    if output.ends_with('/') || output_path.is_dir() {
+        let name = remote
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(remote);
+        output_path.join(name)
+    } else {
+        output_path.to_path_buf()
+    }
+}
+
+/// Download `remote` to `output` through a temp file in the same directory,
+/// so a failed download never leaves a truncated file behind.
+async fn download_to_file(
+    client: &s3dedup::files_cli::FilesClient,
+    remote: &str,
+    output: &std::path::Path,
+) -> anyhow::Result<()> {
+    let dir = match output.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => std::path::Path::new("."),
+    };
+    let mut temp = tempfile::NamedTempFile::new_in(dir)
+        .with_context(|| format!("Cannot write to {}", dir.display()))?;
+    client
+        .download(remote, std::io::BufWriter::new(temp.as_file_mut()))
+        .await?
+        .with_context(|| format!("{}: not found", remote))?;
+    // Temp files are created with mode 0600; keep the mode of an existing
+    // destination, otherwise use the usual 0644.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::metadata(output)
+            .map(|m| m.permissions())
+            .unwrap_or_else(|_| std::fs::Permissions::from_mode(0o644));
+        temp.as_file().set_permissions(permissions)?;
+    }
+    temp.persist(output)
+        .map_err(|e| e.error)
+        .with_context(|| format!("Failed to write {}", output.display()))?;
+    Ok(())
+}
+
+async fn run_files(url: &str, command: FilesCommand) -> anyhow::Result<()> {
+    use s3dedup::files_cli::DeleteOutcome;
+    use std::io::Write;
+
+    let client = s3dedup::files_cli::FilesClient::new(url)?;
+    match command {
+        FilesCommand::Ls { path, long } => {
+            let files = client.list(&path).await?;
+            let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+            if long {
+                for info in client.stat_many(&files).await? {
+                    writeln!(
+                        out,
+                        "{:>12}  {}  {}",
+                        info.logical_size,
+                        format_version(info.last_modified),
+                        info.path
+                    )?;
+                }
+            } else {
+                for file in files {
+                    writeln!(out, "{}", file)?;
+                }
+            }
+            out.flush()?;
+        }
+        FilesCommand::Stat { path } => {
+            let info = client
+                .stat(&path)
+                .await?
+                .with_context(|| format!("{}: not found", path))?;
+            let mut out = std::io::stdout().lock();
+            writeln!(out, "path:          {}", info.path)?;
+            writeln!(out, "size:          {}", info.logical_size)?;
+            writeln!(out, "stored size:   {}", info.stored_size)?;
+            writeln!(
+                out,
+                "last modified: {} ({})",
+                format_version(info.last_modified),
+                info.last_modified
+            )?;
+        }
+        FilesCommand::Get { path, output } => match output.as_deref() {
+            None | Some("-") => {
+                // The stdout lock is held across awaits; fine, since this runs
+                // directly in the main task and is never spawned.
+                let stdout = std::io::stdout().lock();
+                client
+                    .download(&path, std::io::BufWriter::new(stdout))
+                    .await?
+                    .with_context(|| format!("{}: not found", path))?;
+            }
+            Some(output) => {
+                download_to_file(&client, &path, &get_destination(&path, output)).await?;
+            }
+        },
+        FilesCommand::Put {
+            input,
+            path,
+            last_modified,
+        } => {
+            let version = version_or_now(last_modified.as_deref())?;
+            let reader: Box<dyn std::io::Read + Send> = if input == "-" {
+                Box::new(std::io::stdin())
+            } else {
+                Box::new(
+                    std::fs::File::open(&input)
+                        .with_context(|| format!("Cannot open {}", input))?,
+                )
+            };
+            let result = client.upload(reader, &path, version).await?;
+            if result.server_version > version {
+                eprintln!(
+                    "warning: server already has a newer version of {} ({}), upload ignored",
+                    path,
+                    format_version(result.server_version)
+                );
+            } else {
+                println!(
+                    "{}  {} bytes ({} compressed)  sha256 {}",
+                    path, result.logical_size, result.compressed_size, result.sha256
+                );
+            }
+        }
+        FilesCommand::Rm {
+            paths,
+            last_modified,
+        } => {
+            let version = version_or_now(last_modified.as_deref())?;
+            let mut failed = 0;
+            for path in &paths {
+                match client.delete(path, version).await {
+                    Ok(DeleteOutcome::Deleted) => {}
+                    Ok(DeleteOutcome::NotFound) => {
+                        eprintln!("{}: not found", path);
+                        failed += 1;
+                    }
+                    Ok(DeleteOutcome::NewerKept(server_version)) => {
+                        eprintln!(
+                            "{}: not deleted, server has a newer version ({})",
+                            path,
+                            format_version(server_version)
+                        );
+                        failed += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("{}: {:#}", path, e);
+                        failed += 1;
+                    }
+                }
+            }
+            if failed > 0 {
+                anyhow::bail!("{} of {} files not deleted", failed, paths.len());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether the error was caused by writing to a closed pipe (e.g. `| head`).
+fn is_broken_pipe(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
+    })
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -573,6 +817,15 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
+        Commands::Files { url, command } => {
+            if let Err(e) = run_files(&url, command).await {
+                if is_broken_pipe(&e) {
+                    std::process::exit(0);
+                }
+                eprintln!("error: {:#}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     Ok(())
@@ -627,5 +880,44 @@ mod tests {
             }
             _ => panic!("Expected LiveMigrate command"),
         }
+    }
+
+    #[test]
+    fn test_files_put_parses() {
+        let cli = Cli::try_parse_from([
+            "s3dedup",
+            "files",
+            "--url",
+            "http://localhost:8080",
+            "put",
+            "local.txt",
+            "remote/path.txt",
+            "--last-modified",
+            "1700000000",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Files {
+                url,
+                command:
+                    FilesCommand::Put {
+                        input,
+                        path,
+                        last_modified,
+                    },
+            } => {
+                assert_eq!(url, "http://localhost:8080");
+                assert_eq!(input, "local.txt");
+                assert_eq!(path, "remote/path.txt");
+                assert_eq!(last_modified.as_deref(), Some("1700000000"));
+            }
+            _ => panic!("Expected Files Put command"),
+        }
+    }
+
+    #[test]
+    fn test_files_rm_requires_path() {
+        let result = Cli::try_parse_from(["s3dedup", "files", "--url", "http://x", "rm"]);
+        assert!(result.is_err());
     }
 }

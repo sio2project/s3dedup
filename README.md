@@ -336,6 +336,33 @@ Operational endpoints:
 - `GET /metrics/json` - Metrics in JSON format
 - `GET /health` - Health check (returns 200/503 with JSON status)
 
+## Command-line Client
+
+`s3dedup files` talks to a running server over the Filetracker API, so it
+needs only the server URL (`--url` or `S3DEDUP_URL`; the `/ft` suffix is optional):
+
+```bash
+export S3DEDUP_URL=http://s3dedup-sio2:8080
+
+s3dedup files ls                       # list all files, one path per line
+s3dedup files ls -l problems/12        # with logical size and version
+s3dedup files stat problems/12/in.zip  # size, stored size, version
+s3dedup files get problems/12/in.zip ./in.zip   # omit target (or use -) for stdout
+s3dedup files put ./in.zip problems/12/in.zip   # "-" reads stdin
+s3dedup files rm problems/12/in.zip problems/12/out.zip
+
+# delete everything under a prefix (one path per line, paths may contain spaces)
+s3dedup files ls problems/12 | xargs -r -d '\n' s3dedup files rm
+```
+
+Uploads are gzip-compressed with `SHA256-Checksum` and `Logical-Size` set, like
+the Filetracker client does, so they take the deduplication fast path. The
+version defaults to the current time; set it with `--last-modified` (Unix
+timestamp or RFC 2822). As in the protocol, a server that already has a newer
+version keeps it (`put` warns about it), and `rm` does not delete files newer
+than the given version (it reports them and exits non-zero). `ls` lists all
+files, including ones with versions in the future.
+
 
 ## Testing
 
