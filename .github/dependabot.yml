@@ -7,3 +7,7 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+    ignore:
+      # Pinned to the SHA of the `stable` branch; Dependabot proposes the
+      # newest commit across branches, which is `nightly` (see #57, #60).
+      - dependency-name: dtolnay/rust-toolchain
